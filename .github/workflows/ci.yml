@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege: this workflow only reads the repo.
+permissions:
+  contents: read
+
+# Supersede stale runs on a PR branch, but never cancel a run on main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  build:
+    name: Build & test
+    runs-on: ubuntu-latest
+    # The default is 360 minutes. A wedged Gradle build should fail fast, not burn six hours.
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          # AGP 9.3 requires JDK 17+; 21 is what the project is built with locally.
+          # Deliberately NOT setting `cache: gradle` here — Gradle's own docs warn it
+          # interferes with the caching setup-gradle does below.
+          java-version: '21'
+
+      - name: Set up Gradle
+        # Replaces the archived gradle/gradle-build-action. Handles dependency +
+        # wrapper-distribution caching AND wrapper-jar validation on its own
+        # (validate-wrappers defaults to true), so neither needs a separate step.
+        # Pinned to a SHA because it's a third-party action: v6.2.0.
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92
+
+      # One invocation, not three: a single configuration phase and one task graph.
+      # lintDebug rather than lint — identical today (no flavors), but it won't quietly
+      # change meaning if a flavor is ever added.
+      - name: Build, lint and unit test
+        run: ./gradlew assembleDebug lintDebug testDebugUnitTest
+
+      # if: failure() — the reports are only interesting when something broke, and that
+      # is exactly when you can't reproduce it from the log alone.
+      - name: Upload lint + test reports
+        if: failure()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: reports
+          path: |
+            app/build/reports/**
+            app/build/test-results/**
+          retention-days: 7
