@@ -102,6 +102,16 @@ class LurkerClient(private val onFrame: (ServerFrame) -> Unit) {
         if (fetchNetworks()) openSocket()
     }
 
+    /**
+     * Reopen the socket after a drop, resuming from [sinceId] so the server ships
+     * only the gap (as `reset`/append backlog slices) rather than the whole world.
+     * Skips the roster re-fetch — names don't change, and the reconnect snapshot
+     * re-sends live network state anyway.
+     */
+    fun reconnect(sinceId: Long) {
+        openSocket(sinceId)
+    }
+
     /** Returns false only when the token was rejected (401); true otherwise, including
      *  transient errors where the socket is still worth trying. */
     private fun fetchNetworks(): Boolean {
@@ -135,9 +145,12 @@ class LurkerClient(private val onFrame: (ServerFrame) -> Unit) {
      * A native client CAN set headers on the WS upgrade, so the session token
      * rides as a bearer where a browser would need a cookie.
      */
-    private fun openSocket() {
+    private fun openSocket(sinceId: Long = 0) {
         val t = token ?: return
-        val wsUrl = baseUrl.replaceFirst("http", "ws") + "/ws"
+        // Replace any prior socket so a reconnect can't leave two live.
+        socket?.close(1000, null)
+        val since = if (sinceId > 0) "?since=$sinceId" else ""
+        val wsUrl = baseUrl.replaceFirst("http", "ws") + "/ws" + since
         val req = Request.Builder().url(wsUrl).header("Authorization", "Bearer $t").build()
         socket = http.newWebSocket(
             req,

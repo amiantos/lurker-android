@@ -194,12 +194,42 @@ class LurkerStoreTest {
     }
 
     @Test
-    fun `socket open and close toggle the connected flag`() {
+    fun `connection status moves connecting to connected to reconnecting`() {
         val store = LurkerStore()
+        assertEquals(SocketStatus.Connecting, store.state.value.connection)
         store.apply(ServerFrame.SocketOpen)
-        assertTrue(store.state.value.connected)
+        assertEquals(SocketStatus.Connected, store.state.value.connection)
+        // A drop after being connected is a reconnect, not a first connect.
         store.apply(ServerFrame.SocketClosed("bye", 1000))
-        assertFalse(store.state.value.connected)
+        assertEquals(SocketStatus.Reconnecting, store.state.value.connection)
+        // Still reconnecting across further failed attempts.
+        store.apply(ServerFrame.SocketClosed("again", null))
+        assertEquals(SocketStatus.Reconnecting, store.state.value.connection)
+    }
+
+    @Test
+    fun `a drop before the first open stays Connecting, not Reconnecting`() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.SocketClosed("refused", null))
+        assertEquals(SocketStatus.Connecting, store.state.value.connection)
+    }
+
+    @Test
+    fun `maxEventId tracks the highest persisted id but ignores the system buffer`() {
+        val store = LurkerStore()
+        store.apply(channelBuffer(hydrated = true, messages = listOf(msg(10, "a"), msg(7, "b"))))
+        assertEquals(10L, store.state.value.maxEventId)
+
+        store.apply(ServerFrame.Live(1, "#lurker", msg(15, "c")))
+        assertEquals(15L, store.state.value.maxEventId)
+
+        // System-buffer ids are a separate space and must not move the resume cursor.
+        store.apply(ServerFrame.Live(null, ":system:", msg(9999, "sys")))
+        assertEquals(15L, store.state.value.maxEventId)
+
+        // An older id doesn't lower the watermark.
+        store.apply(ServerFrame.Live(1, "#lurker", msg(3, "old")))
+        assertEquals(15L, store.state.value.maxEventId)
     }
 
     @Test

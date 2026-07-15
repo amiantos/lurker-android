@@ -5,8 +5,13 @@ package net.amiantos.lurker.ui
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -19,6 +24,7 @@ import net.amiantos.lurker.model.Backend
 import net.amiantos.lurker.model.BufferKey
 import net.amiantos.lurker.store.ChatState
 import net.amiantos.lurker.store.LurkerStore
+import net.amiantos.lurker.store.SocketStatus
 
 /** Where the account stands with the server. */
 sealed interface SessionState {
@@ -32,8 +38,14 @@ sealed interface SessionState {
 /**
  * Owns the client + store for the app's lifetime (survives config changes). The
  * client does I/O and emits frames; the store folds them into [chatState]; the UI
- * observes. Also owns session lifecycle (#4): a persisted token is restored on
- * launch, and a mid-session 401 drops cleanly back to sign-in.
+ * observes.
+ *
+ * Owns two lifecycles:
+ *  - session (#4): restore a persisted token on launch; a mid-session 401 bounces
+ *    cleanly to sign-in.
+ *  - connection (#5): reconnect with backoff when the socket drops, resuming from
+ *    the highest event id seen (`?since=`); and on return-to-foreground, reconnect
+ *    a socket that died while backgrounded.
  */
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val store = LurkerStore()
@@ -49,13 +61,46 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val _status = MutableStateFlow<String?>(null)
     val status: StateFlow<String?> = _status
 
+    private var reconnectJob: Job? = null
+    private var reconnectAttempt = 0
+    private var isForeground = true
+
+    private val processObserver = object : DefaultLifecycleObserver {
+        override fun onStart(owner: LifecycleOwner) {
+            isForeground = true
+            onForeground()
+        }
+
+        override fun onStop(owner: LifecycleOwner) {
+            isForeground = false
+        }
+    }
+
     init {
+        ProcessLifecycleOwner.get().lifecycle.addObserver(processObserver)
         restoreSession()
     }
 
-    /** Route frames: a 401 is session-level and never reaches the store. */
+    /**
+     * Route frames. A 401 is session-level (never reaches the store); socket
+     * open/close additionally drive the reconnect machinery.
+     */
     private fun onFrame(frame: ServerFrame) {
-        if (frame is ServerFrame.Unauthorized) onAuthLost() else store.apply(frame)
+        // Frames arrive on OkHttp/IO threads. store.apply is thread-safe, but the
+        // reconnect bookkeeping (reconnectJob/reconnectAttempt/isForeground) is
+        // confined to the main thread, so hop there for it via viewModelScope.
+        when (frame) {
+            is ServerFrame.Unauthorized -> onAuthLost()
+            is ServerFrame.SocketOpen -> {
+                store.apply(frame)
+                viewModelScope.launch { reconnectAttempt = 0 } // a clean connection resets backoff
+            }
+            is ServerFrame.SocketClosed -> {
+                store.apply(frame)
+                viewModelScope.launch { onSocketDropped() }
+            }
+            else -> store.apply(frame)
+        }
     }
 
     private fun restoreSession() {
@@ -105,6 +150,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Deliberate sign-out: revoke server-side, forget the token, reset state. */
     fun logout() {
+        cancelReconnect()
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 client.logout()
@@ -115,6 +161,49 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // --- Connection lifecycle (#5) ----------------------------------------------
+
+    /** A drop while signed-in + foregrounded schedules a backed-off reconnect. */
+    private fun onSocketDropped() {
+        if (_session.value == SessionState.LoggedIn && isForeground) scheduleReconnect()
+    }
+
+    private fun scheduleReconnect() {
+        if (reconnectJob?.isActive == true) return // one attempt in flight already
+        val wait = backoffMillis(reconnectAttempt++)
+        reconnectJob = viewModelScope.launch {
+            delay(wait)
+            if (_session.value == SessionState.LoggedIn && isForeground) {
+                withContext(Dispatchers.IO) { client.reconnect(store.state.value.maxEventId) }
+            }
+        }
+    }
+
+    /**
+     * Back on screen: a socket that died in the background won't always have fired
+     * onFailure yet, so proactively reconnect if we're signed-in and not connected.
+     * Immediate (backoff reset) since a user is waiting.
+     */
+    private fun onForeground() {
+        if (_session.value != SessionState.LoggedIn) return
+        if (store.state.value.connection == SocketStatus.Connected) return
+        reconnectAttempt = 0
+        reconnectJob?.cancel()
+        reconnectJob = viewModelScope.launch {
+            withContext(Dispatchers.IO) { client.reconnect(store.state.value.maxEventId) }
+        }
+    }
+
+    private fun cancelReconnect() {
+        reconnectJob?.cancel()
+        reconnectJob = null
+        reconnectAttempt = 0
+    }
+
+    /** 1s, 2s, 4s … capped at 30s. */
+    private fun backoffMillis(attempt: Int): Long =
+        minOf(BASE_BACKOFF_MS shl attempt.coerceIn(0, MAX_BACKOFF_SHIFT), MAX_BACKOFF_MS)
+
     /**
      * The token expired or was revoked elsewhere. Drop the (already-dead) session
      * without a revoke round-trip and bounce to sign-in with an explanation.
@@ -124,10 +213,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // first and ignore the rest.
         if (_session.value == SessionState.LoggedOut) return
         // Flip the visible state + message synchronously so the sign-in screen shows
-        // the explanation the instant we bounce; do the teardown in the background.
+        // the explanation the instant we bounce; do the teardown (including the
+        // main-confined reconnect cancel) in the coroutine.
         _status.value = "Your session ended — please sign in again."
         _session.value = SessionState.LoggedOut
         viewModelScope.launch {
+            cancelReconnect()
             withContext(Dispatchers.IO) {
                 client.close()
                 sessions.clear()
@@ -138,7 +229,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         super.onCleared()
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(processObserver)
         // Tear down the socket + OkHttp threads when the ViewModel goes away.
         client.close()
+    }
+
+    private companion object {
+        const val BASE_BACKOFF_MS = 1_000L
+        const val MAX_BACKOFF_MS = 30_000L
+        const val MAX_BACKOFF_SHIFT = 5 // 1s << 5 = 32s, clamped to 30s
     }
 }
