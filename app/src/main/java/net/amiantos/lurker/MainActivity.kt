@@ -68,6 +68,13 @@ class MainActivity : ComponentActivity() {
                 val chat by vm.chatState.collectAsStateWithLifecycle()
                 var openKey by remember { mutableStateOf<BufferKey?>(null) }
 
+                // Drop the open buffer on sign-out so a later sign-in doesn't jump
+                // straight back into a ChatScreen for a buffer the reset store no
+                // longer has.
+                LaunchedEffect(session) {
+                    if (session != SessionState.LoggedIn) openKey = null
+                }
+
                 Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
                     val mod = Modifier.padding(padding).fillMaxSize()
                     if (session != SessionState.LoggedIn) {
@@ -172,7 +179,8 @@ private fun BufferListScreen(
     modifier: Modifier,
     onOpen: (BufferKey) -> Unit,
 ) {
-    // Group under their network, system/server buffers last; stable ordering.
+    // Group under their network in stable target order; the system buffer (null
+    // networkId) sorts last.
     val rows = remember(chat.buffers, chat.networks) {
         chat.buffers.values.sortedWith(
             compareBy({ it.networkId ?: Int.MAX_VALUE }, { it.target }),
@@ -191,7 +199,12 @@ private fun BufferListScreen(
         }
         LazyColumn {
             items(rows, key = { it.key.id }) { buffer ->
-                val networkName = buffer.networkId?.let { chat.networks[it]?.name } ?: "system"
+                // "system" only for the actual system buffer; a channel whose roster
+                // row hasn't loaded yet shows a blank subtitle, not a wrong label.
+                val networkName = when {
+                    buffer.networkId == null -> "system"
+                    else -> chat.networks[buffer.networkId]?.name ?: ""
+                }
                 Column(
                     Modifier
                         .fillMaxWidth()
@@ -249,7 +262,7 @@ private fun ChatScreen(
             ) { _, msg -> MessageRow(msg) }
         }
 
-        // The system buffer (and unjoined server buffers) can't be posted to.
+        // Neither the system buffer (null networkId) nor a :server: buffer accepts messages.
         if (key.networkId != null && buffer?.kind != BufferKind.Server) {
             HorizontalDivider()
             Row(
