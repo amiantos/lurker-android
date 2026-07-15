@@ -70,12 +70,20 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// The two backends a Lurker client can speak to. Self-hosted mints its token at
+// the cell; hosted mints at the control plane and rides the proxy. See
+// LurkerClient.login.
+private const val HOSTED_URL = "https://app.lurker.chat"
+
+// 10.0.2.2 is the emulator's alias for the HOST machine's 127.0.0.1 (plain
+// "localhost" would be the emulator itself). 8010 is the API/WS server — NOT the
+// Vite client dev port, which only serves the web SPA.
+private const val SELF_HOSTED_URL = "http://10.0.2.2:8010"
+
 @Composable
 private fun LoginScreen(client: LurkerClient, modifier: Modifier) {
-    // 10.0.2.2 is the emulator's alias for the HOST machine's 127.0.0.1 (plain
-    // "localhost" would be the emulator itself). 8010 is the API/WS server —
-    // NOT the Vite client dev port, which only serves the web SPA.
-    var server by remember { mutableStateOf("http://10.0.2.2:8010") }
+    var hosted by remember { mutableStateOf(false) }
+    var server by remember { mutableStateOf(SELF_HOSTED_URL) }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -89,6 +97,18 @@ private fun LoginScreen(client: LurkerClient, modifier: Modifier) {
             "Prototype client — signs in with a password and opens the WebSocket with a bearer token.",
             style = MaterialTheme.typography.bodySmall,
         )
+        // Backend picker. Switching resets the server URL to that backend's
+        // default (unless the field has been hand-edited off both defaults).
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BackendChip("Self-hosted", selected = !hosted) {
+                hosted = false
+                if (server == HOSTED_URL) server = SELF_HOSTED_URL
+            }
+            BackendChip("Hosted (lurker.chat)", selected = hosted) {
+                hosted = true
+                if (server == SELF_HOSTED_URL) server = HOSTED_URL
+            }
+        }
         OutlinedTextField(
             value = server,
             onValueChange = { server = it },
@@ -99,7 +119,8 @@ private fun LoginScreen(client: LurkerClient, modifier: Modifier) {
         OutlinedTextField(
             value = username,
             onValueChange = { username = it },
-            label = { Text("Username") },
+            // Hosted authenticates by account email; self-hosted by IRC-side username.
+            label = { Text(if (hosted) "Email" else "Username") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -115,13 +136,22 @@ private fun LoginScreen(client: LurkerClient, modifier: Modifier) {
         Button(
             onClick = {
                 scope.launch {
-                    withContext(Dispatchers.IO) { client.login(server, username, password) }
+                    withContext(Dispatchers.IO) { client.login(server, username, password, hosted) }
                 }
             },
             enabled = username.isNotBlank() && password.isNotBlank(),
         ) { Text("Sign in") }
 
         client.status?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+    }
+}
+
+@Composable
+private fun BackendChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    if (selected) {
+        Button(onClick = onClick) { Text(label) }
+    } else {
+        TextButton(onClick = onClick) { Text(label) }
     }
 }
 

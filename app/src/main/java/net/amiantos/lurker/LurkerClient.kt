@@ -23,9 +23,15 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Prototype client for Lurker's WS + REST contract. Proves the bearer-auth work
- * (lurker#489 / PR #570) end to end from a real Android app: log in with a
- * password, open the WebSocket with `Authorization: Bearer`, list buffers, read
- * a channel, send a message.
+ * end to end from a real Android app against BOTH backends:
+ *   - self-hosted: mint a token at the cell (`POST /api/auth/login/token`,
+ *     lurker#489 / PR #570),
+ *   - hosted lurker.chat: mint at the control plane (`POST /_cp/auth/app/login`,
+ *     CP#58) — the CP verifies the account and hands back the same signed claim,
+ *     which its reverse proxy accepts as a Bearer and routes to the account's
+ *     cell. Everything after login is byte-identical: the same Bearer opens the
+ *     WebSocket and authenticates REST, because the proxy resolves it and injects
+ *     the real cell session transparently.
  *
  * Deliberately NOT the shape a real app should take — no ViewModel, no local
  * store, no reconnect/resume, no `?since=` gap handling. State lives in Compose
@@ -83,22 +89,28 @@ class LurkerClient {
     private val json = "application/json; charset=utf-8".toMediaType()
 
     /**
-     * POST /api/auth/login/token — the mint endpoint added in PR #570. Password in,
-     * session token out, no browser and no cookie jar in the loop.
+     * Mint a session token from a password.
+     *
+     * - hosted=false → `POST /api/auth/login/token` on the cell (PR #570):
+     *   `{username, password}` in, `{token}` out.
+     * - hosted=true → `POST /_cp/auth/app/login` on the control plane (CP#58):
+     *   `{email, password}` in, `{token}` out. The token is a CP claim the proxy
+     *   accepts as a Bearer; from here on the flow is identical to self-hosted.
      *
      * Blocking; call from a background thread.
      */
-    fun login(rawBase: String, username: String, password: String) {
+    fun login(rawBase: String, username: String, password: String, hosted: Boolean = false) {
         val base = rawBase.trim().trimEnd('/')
         baseUrl = base
         post { status = "Signing in…" }
         try {
+            val loginPath = if (hosted) "/_cp/auth/app/login" else "/api/auth/login/token"
             val body = JSONObject()
-                .put("username", username)
+                .put(if (hosted) "email" else "username", username)
                 .put("password", password)
                 .toString()
                 .toRequestBody(json)
-            val req = Request.Builder().url("$base/api/auth/login/token").post(body).build()
+            val req = Request.Builder().url("$base$loginPath").post(body).build()
             http.newCall(req).execute().use { res ->
                 if (!res.isSuccessful) {
                     post { status = "Sign-in failed (HTTP ${res.code})" }
