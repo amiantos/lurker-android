@@ -8,6 +8,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
@@ -68,14 +70,22 @@ class MainActivity : ComponentActivity() {
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
                     val mod = Modifier.padding(padding).fillMaxSize()
-                    when {
-                        session != SessionState.LoggedIn -> LoginScreen(vm, mod)
-                        openKey == null -> BufferListScreen(chat, mod) { key ->
-                            vm.openBuffer(key)
-                            openKey = key
-                        }
-                        else -> ChatScreen(chat, openKey!!, mod, onSend = { vm.send(openKey!!, it) }) {
-                            openKey = null
+                    if (session != SessionState.LoggedIn) {
+                        LoginScreen(vm, mod)
+                    } else {
+                        Column(mod) {
+                            chat.error?.let { ErrorBanner(it, onDismiss = vm::clearError) }
+                            val inner = Modifier.weight(1f).fillMaxWidth()
+                            if (openKey == null) {
+                                BufferListScreen(chat, inner) { key ->
+                                    vm.openBuffer(key)
+                                    openKey = key
+                                }
+                            } else {
+                                ChatScreen(chat, openKey!!, inner, onSend = { vm.send(openKey!!, it) }) {
+                                    openKey = null
+                                }
+                            }
                         }
                     }
                 }
@@ -231,9 +241,12 @@ private fun ChatScreen(
         HorizontalDivider()
 
         LazyColumn(state = listState, modifier = Modifier.weight(1f)) {
-            items(messages.size) { index ->
-                MessageRow(messages[index])
-            }
+            // Key on the persisted id; ephemeral events (id 0) fall back to a
+            // position-stable key so appends don't collide. Revisit for #7 prepend.
+            itemsIndexed(
+                messages,
+                key = { index, msg -> if (msg.id != 0L) msg.id else "e$index" },
+            ) { _, msg -> MessageRow(msg) }
         }
 
         // The system buffer (and unjoined server buffers) can't be posted to.
@@ -279,6 +292,26 @@ private fun MessageRow(msg: Message) {
             color = if (msg.self) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary,
         )
         Text("  ${msg.text.orEmpty()}", style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+/** A dismissible banner for a server error or a failed send. Full error/empty/offline states are #20. */
+@Composable
+private fun ErrorBanner(message: String, onDismiss: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.errorContainer)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            message,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier.weight(1f),
+        )
+        TextButton(onClick = onDismiss) { Text("Dismiss") }
     }
 }
 

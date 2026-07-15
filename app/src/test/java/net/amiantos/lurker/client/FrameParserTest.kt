@@ -91,6 +91,34 @@ class FrameParserTest {
     }
 
     @Test
+    fun `a resume slice with reset false is an append`() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"backlog","networkId":1,"target":"#lurker","reset":false,"hasMoreOlder":false,
+               "events":[{"id":5,"type":"message","nick":"a","text":"x"}]}""",
+        ) as ServerFrame.Backlog
+        assertTrue(frame.hydrated)
+        assertTrue("reset:false gap → append", frame.append)
+    }
+
+    @Test
+    fun `a resume slice with reset true replaces`() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"backlog","networkId":1,"target":"#lurker","reset":true,"hasMoreOlder":false,
+               "events":[{"id":5,"type":"message","nick":"a","text":"x"}]}""",
+        ) as ServerFrame.Backlog
+        assertFalse("reset:true → replace", frame.append)
+    }
+
+    @Test
+    fun `a full backlog with no reset field replaces`() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"backlog","networkId":1,"target":"#lurker","hasMoreOlder":false,
+               "events":[{"id":5,"type":"message","nick":"a","text":"x"}]}""",
+        ) as ServerFrame.Backlog
+        assertFalse("absent reset → replace, not append", frame.append)
+    }
+
+    @Test
     fun `send-result carries clientId, ok, and error`() {
         val frame = FrameParser.parseWs("""{"kind":"send-result","clientId":"c1","ok":false,"error":"unknown-network"}""")
         frame as ServerFrame.SendResult

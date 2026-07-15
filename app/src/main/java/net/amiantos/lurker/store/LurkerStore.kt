@@ -37,6 +37,8 @@ class LurkerStore {
         _state.value = ChatState()
     }
 
+    fun clearError() = _state.update { it.copy(error = null) }
+
     fun apply(frame: ServerFrame) {
         when (frame) {
             is ServerFrame.Networks -> applyNetworks(frame)
@@ -45,7 +47,9 @@ class LurkerStore {
             is ServerFrame.Live -> applyLive(frame)
             is ServerFrame.ServerError -> _state.update { it.copy(error = frame.text) }
             is ServerFrame.SendResult ->
-                _state.update { if (frame.ok) it else it.copy(error = frame.error ?: "Send failed") }
+                _state.update {
+                    if (frame.ok) it.copy(error = null) else it.copy(error = frame.error ?: "Send failed")
+                }
             ServerFrame.SocketOpen -> _state.update { it.copy(connected = true, error = null) }
             is ServerFrame.SocketClosed -> _state.update { it.copy(connected = false) }
             ServerFrame.Ignored -> Unit
@@ -83,9 +87,15 @@ class LurkerStore {
         val alreadyHydrated = s.buffers[key]?.hydrated == true
         val buffer = frame.buffer.copy(hydrated = frame.hydrated || alreadyHydrated)
         val messages = when {
-            frame.hydrated -> s.messages + (key to frame.messages) // hydrated frame replaces
-            s.messages.containsKey(key) -> s.messages // shell: keep what we have
-            else -> s.messages + (key to emptyList())
+            !frame.hydrated ->
+                // Shell: register the buffer but keep any messages we already hold.
+                if (s.messages.containsKey(key)) s.messages else s.messages + (key to emptyList())
+            frame.append ->
+                // Resume gap slice: append past the tail, de-duping by persisted id.
+                s.messages + (key to appendMerged(s.messages[key] ?: emptyList(), frame.messages))
+            else ->
+                // Full / latest / reset backlog: replace wholesale.
+                s.messages + (key to frame.messages)
         }
         s.copy(buffers = s.buffers + (key to buffer), messages = messages)
     }
@@ -96,6 +106,21 @@ class LurkerStore {
         // De-dupe against backlog/live overlap by persisted id; id 0 is ephemeral
         // and always appended.
         if (frame.message.id != 0L && existing.any { it.id == frame.message.id }) return@update s
-        s.copy(messages = s.messages + (key to existing + frame.message))
+        // A live event can be the first sign of a buffer (a new incoming DM), so
+        // materialize a row for it — otherwise the conversation never appears in the
+        // list. Unhydrated, so tapping it fetches history.
+        val buffers = if (s.buffers.containsKey(key)) {
+            s.buffers
+        } else {
+            val buffer = Buffer(frame.networkId, frame.target, BufferKind.of(frame.networkId, frame.target))
+            s.buffers + (key to buffer)
+        }
+        s.copy(buffers = buffers, messages = s.messages + (key to existing + frame.message))
+    }
+
+    /** Append [incoming] onto [existing], dropping any persisted id already present. */
+    private fun appendMerged(existing: List<Message>, incoming: List<Message>): List<Message> {
+        val seen = existing.mapNotNullTo(HashSet()) { if (it.id != 0L) it.id else null }
+        return existing + incoming.filter { it.id == 0L || it.id !in seen }
     }
 }

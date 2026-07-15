@@ -95,6 +95,59 @@ class LurkerStoreTest {
     }
 
     @Test
+    fun `a live event for an unknown target materializes a buffer row`() {
+        val store = LurkerStore()
+        // A DM from bob arrives with no prior buffer (no snapshot, no backlog).
+        store.apply(ServerFrame.Live(1, "bob", msg(7, "hey")))
+
+        val s = store.state.value
+        val key = "1::bob"
+        assertTrue("the new DM must appear in the buffer list", s.buffers.containsKey(key))
+        assertEquals(BufferKind.Dm, s.buffers[key]!!.kind)
+        assertFalse("unhydrated so tapping fetches history", s.buffers[key]!!.hydrated)
+        assertEquals(listOf("hey"), s.messages[key]!!.map { it.text })
+    }
+
+    @Test
+    fun `differently-cased targets fold to the same buffer`() {
+        val store = LurkerStore()
+        store.apply(channelBuffer(hydrated = true, messages = listOf(msg(1, "hi")))) // "#lurker"
+        store.apply(ServerFrame.Live(1, "#LURKER", msg(2, "yo"))) // upper-cased target
+
+        val s = store.state.value
+        assertEquals("must not split into a second buffer", 1, s.buffers.size)
+        assertEquals(listOf("hi", "yo"), s.messages[chanKey]!!.map { it.text })
+    }
+
+    @Test
+    fun `a resume gap slice appends and de-dupes, a reset replaces`() {
+        val store = LurkerStore()
+        store.apply(channelBuffer(hydrated = true, messages = listOf(msg(1, "a"), msg(2, "b"))))
+
+        // reset:false gap — id 2 overlaps (drop), id 3 is new (append).
+        store.apply(
+            ServerFrame.Backlog(
+                Buffer(1, "#lurker", BufferKind.Channel, hydrated = true),
+                messages = listOf(msg(2, "b"), msg(3, "c")),
+                hydrated = true,
+                append = true,
+            ),
+        )
+        assertEquals(listOf("a", "b", "c"), store.state.value.messages[chanKey]!!.map { it.text })
+
+        // reset (oversized gap) replaces wholesale.
+        store.apply(
+            ServerFrame.Backlog(
+                Buffer(1, "#lurker", BufferKind.Channel, hydrated = true),
+                messages = listOf(msg(9, "z")),
+                hydrated = true,
+                append = false,
+            ),
+        )
+        assertEquals(listOf("z"), store.state.value.messages[chanKey]!!.map { it.text })
+    }
+
+    @Test
     fun `snapshot seeds channel buffers, members, and network live state`() {
         val store = LurkerStore()
         store.apply(

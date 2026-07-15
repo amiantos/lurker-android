@@ -64,11 +64,19 @@ class ChatViewModel : ViewModel() {
 
     fun send(key: BufferKey, text: String) = client.sendMessage(key.networkId, key.target, text)
 
+    fun clearError() = store.clearError()
+
     fun logout() {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { client.logout() }
             store.reset()
             _session.value = SessionState.LoggedOut
         }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        // Tear down the socket + OkHttp threads when the ViewModel goes away.
+        client.close()
     }
 }

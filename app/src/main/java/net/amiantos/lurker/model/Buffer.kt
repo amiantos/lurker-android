@@ -31,9 +31,16 @@ data class Buffer(
     val key: BufferKey get() = BufferKey(networkId, target)
 }
 
-/** Stable identity for a buffer, plus its string form for use as a map key. */
+/**
+ * Stable identity for a buffer, plus its string form for use as a map key.
+ *
+ * IRC targets are case-insensitive and servers send them inconsistently cased
+ * (`#Chan` on join vs. `#chan` in a snapshot; DM nick-case drift). So identity
+ * folds case — house style is ASCII lowercase — while [target] keeps the original
+ * casing for display and for echoing back to the server on send.
+ */
 data class BufferKey(val networkId: Int?, val target: String) {
-    val id: String get() = "${networkId ?: "sys"}::$target"
+    val id: String get() = "${networkId ?: "sys"}::${target.lowercase()}"
 }
 
 enum class BufferKind {

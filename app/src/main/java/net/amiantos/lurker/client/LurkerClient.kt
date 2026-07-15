@@ -147,6 +147,15 @@ class LurkerClient(private val onFrame: (ServerFrame) -> Unit) {
     }
 
     /**
+     * Drop the socket without revoking server-side. For teardown (e.g. the owning
+     * ViewModel being cleared) — [logout] is the deliberate sign-out.
+     */
+    fun close() {
+        socket?.close(1000, null)
+        socket = null
+    }
+
+    /**
      * Revoke server-side, then drop the socket. Blocking. On hosted the token is a
      * stateless CP claim, so this revokes the cell session but not the claim itself
      * (a CP#58 tradeoff) — full sign-out semantics are #4.

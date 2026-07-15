@@ -23,13 +23,19 @@ sealed interface ServerFrame {
 
     /**
      * WS `backlog`: a buffer, plus its history when [hydrated]. A shell arrives
-     * unhydrated with no events (the "fetch on open" marker); a hydrated frame
-     * replaces the buffer's messages wholesale.
+     * unhydrated with no events (the "fetch on open" marker).
+     *
+     * [append] distinguishes a `?since=` resume slice that carries only the gap
+     * (`reset:false` → append it) from a full/latest backlog or an oversized-gap
+     * reset (`reset:true` or no `reset` field → replace wholesale). Getting this
+     * wrong silently wipes pre-gap history the moment resume (#5) starts sending
+     * `?since`.
      */
     data class Backlog(
         val buffer: Buffer,
         val messages: List<Message>,
         val hydrated: Boolean,
+        val append: Boolean = false,
     ) : ServerFrame
 
     /** WS `irc`: one live event, its fields spread flat on the frame. */

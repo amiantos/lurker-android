@@ -86,6 +86,10 @@ object FrameParser {
         // open" marker. Any real events, or a frame that isn't claiming more older,
         // means we have this buffer's history.
         val hydrated = events.length() > 0 || !obj.optBoolean("hasMoreOlder", false)
+        // Only a resume slice carries a `reset` field. reset:false means "these are
+        // just the events past ?since" → append; reset:true (oversized gap) and a
+        // plain full/latest backlog (no field) → replace.
+        val append = obj.has("reset") && !obj.optBoolean("reset")
         val buffer = Buffer(
             networkId = networkId,
             target = target,
@@ -96,7 +100,7 @@ object FrameParser {
             joined = obj.optBoolean("joined", false),
             hydrated = hydrated,
         )
-        return ServerFrame.Backlog(buffer, events.objects().mapNotNull(::parseEvent), hydrated)
+        return ServerFrame.Backlog(buffer, events.objects().mapNotNull(::parseEvent), hydrated, append)
     }
 
     private fun parseLive(obj: JSONObject): ServerFrame {
