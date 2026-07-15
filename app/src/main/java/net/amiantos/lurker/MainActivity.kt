@@ -55,6 +55,7 @@ import net.amiantos.lurker.model.BufferKind
 import net.amiantos.lurker.model.EventType
 import net.amiantos.lurker.model.Message
 import net.amiantos.lurker.store.ChatState
+import net.amiantos.lurker.store.SocketStatus
 import net.amiantos.lurker.ui.ChatViewModel
 import net.amiantos.lurker.ui.SessionState
 import net.amiantos.lurker.ui.theme.LurkerTheme
@@ -202,8 +203,13 @@ private fun BufferListScreen(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            val connectionLabel = when (chat.connection) {
+                SocketStatus.Connected -> "Connected"
+                SocketStatus.Connecting -> "Connecting…"
+                SocketStatus.Reconnecting -> "Reconnecting…"
+            }
             Text(
-                if (chat.connected) "Connected" else "Connecting…",
+                connectionLabel,
                 style = MaterialTheme.typography.labelMedium,
                 modifier = Modifier.weight(1f).padding(vertical = 16.dp),
             )

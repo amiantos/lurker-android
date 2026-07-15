@@ -14,9 +14,18 @@ import net.amiantos.lurker.model.Member
 import net.amiantos.lurker.model.Message
 import net.amiantos.lurker.model.Network
 
+/** How the live socket stands, for a connection state the user can actually see. */
+enum class SocketStatus { Connecting, Connected, Reconnecting }
+
 /** Immutable snapshot of everything the chat UI renders. Maps are keyed by [BufferKey.id]. */
 data class ChatState(
-    val connected: Boolean = false,
+    val connection: SocketStatus = SocketStatus.Connecting,
+    /**
+     * Highest persisted message id seen (excluding the system buffer, which has its
+     * own id space) — replayed as `?since=` on reconnect so the server ships only
+     * the gap. See [applyLive]/[applyBacklog].
+     */
+    val maxEventId: Long = 0,
     val networks: Map<Int, Network> = emptyMap(),
     val buffers: Map<String, Buffer> = emptyMap(),
     val messages: Map<String, List<Message>> = emptyMap(),
@@ -50,8 +59,16 @@ class LurkerStore {
                 _state.update {
                     if (frame.ok) it.copy(error = null) else it.copy(error = frame.error ?: "Send failed")
                 }
-            ServerFrame.SocketOpen -> _state.update { it.copy(connected = true, error = null) }
-            is ServerFrame.SocketClosed -> _state.update { it.copy(connected = false) }
+            ServerFrame.SocketOpen -> _state.update { it.copy(connection = SocketStatus.Connected, error = null) }
+            is ServerFrame.SocketClosed -> _state.update {
+                // Once we've been connected, a drop is a reconnect; a drop before the
+                // first open is still the initial connect.
+                val next = when (it.connection) {
+                    SocketStatus.Connected, SocketStatus.Reconnecting -> SocketStatus.Reconnecting
+                    SocketStatus.Connecting -> SocketStatus.Connecting
+                }
+                it.copy(connection = next)
+            }
             // Session-level; the ViewModel intercepts it before the store sees it.
             ServerFrame.Unauthorized -> Unit
             ServerFrame.Ignored -> Unit
@@ -99,7 +116,11 @@ class LurkerStore {
                 // Full / latest / reset backlog: replace wholesale.
                 s.messages + (key to frame.messages)
         }
-        s.copy(buffers = s.buffers + (key to buffer), messages = messages)
+        s.copy(
+            buffers = s.buffers + (key to buffer),
+            messages = messages,
+            maxEventId = maxEventId(s.maxEventId, frame.buffer.networkId, frame.messages),
+        )
     }
 
     private fun applyLive(frame: ServerFrame.Live) = _state.update { s ->
@@ -117,12 +138,25 @@ class LurkerStore {
             val buffer = Buffer(frame.networkId, frame.target, BufferKind.of(frame.networkId, frame.target))
             s.buffers + (key to buffer)
         }
-        s.copy(buffers = buffers, messages = s.messages + (key to existing + frame.message))
+        s.copy(
+            buffers = buffers,
+            messages = s.messages + (key to existing + frame.message),
+            maxEventId = maxEventId(s.maxEventId, frame.networkId, listOf(frame.message)),
+        )
     }
 
     /** Append [incoming] onto [existing], dropping any persisted id already present. */
     private fun appendMerged(existing: List<Message>, incoming: List<Message>): List<Message> {
         val seen = existing.mapNotNullTo(HashSet()) { if (it.id != 0L) it.id else null }
         return existing + incoming.filter { it.id == 0L || it.id !in seen }
+    }
+
+    /**
+     * The `?since=` watermark. The system buffer (null networkId) is skipped — it
+     * has a separate id space, so its ids must not pollute the resume cursor.
+     */
+    private fun maxEventId(current: Long, networkId: Int?, messages: List<Message>): Long {
+        if (networkId == null) return current
+        return maxOf(current, messages.maxOfOrNull { it.id } ?: 0)
     }
 }
