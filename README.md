@@ -40,9 +40,13 @@ or link URLs · handle `/commands` · render joins, parts, quits, modes, or topi
 The architecture is throwaway on purpose: no ViewModel, no local store, no repository layer. All the
 wire handling is in one file, [`LurkerClient.kt`](app/src/main/java/net/amiantos/lurker/LurkerClient.kt),
 and the three screens are in [`MainActivity.kt`](app/src/main/java/net/amiantos/lurker/MainActivity.kt).
-The real app ([lurker#492](https://github.com/amiantos/lurker/issues/492)) is meant to be built around
-one internal model with a transport-adapter seam, so the UI never knows whether it's talking to a
-self-hosted Lurker, the hosted service, or IRC directly. None of that is here.
+
+The real app is scoped in the **1.0 — Daily driver** milestone. It gets one client with a
+configurable base URL + auth strategy, behind a proper internal model (`Network` / `Buffer` /
+`Message` / `Member` + an event enum). Note there is deliberately **no transport-adapter seam**: the
+original plan called for one, but it was justified almost entirely by a direct-IRC mode that has
+since been **dropped permanently**. Self-hosted and hosted are the same client differing only in base
+URL and auth, so the seam would abstract over a second transport that will never exist.
 
 ## Running it
 
