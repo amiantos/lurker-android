@@ -55,6 +55,12 @@ sealed interface ServerFrame {
     /** WS `error`. */
     data class ServerError(val text: String) : ServerFrame
 
+    /**
+     * A 401 mid-session (REST or the WS upgrade): the token expired or was revoked
+     * from another device. The owner drops to sign-in rather than a dead-end.
+     */
+    data object Unauthorized : ServerFrame
+
     /** Socket opened. Reconnect/resume is #5. */
     data object SocketOpen : ServerFrame
 
