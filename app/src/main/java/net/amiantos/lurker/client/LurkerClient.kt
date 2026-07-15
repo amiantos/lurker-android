@@ -97,24 +97,37 @@ class LurkerClient(private val onFrame: (ServerFrame) -> Unit) {
 
     /** After login/restore: fetch the network roster, then open the socket. Blocking. */
     fun start() {
-        fetchNetworks()
-        openSocket()
+        // If the roster fetch already saw a 401, the token is dead — don't bother
+        // attempting the WS upgrade with it (it would just 401 again).
+        if (fetchNetworks()) openSocket()
     }
 
-    private fun fetchNetworks() {
-        val t = token ?: return
+    /** Returns false only when the token was rejected (401); true otherwise, including
+     *  transient errors where the socket is still worth trying. */
+    private fun fetchNetworks(): Boolean {
+        val t = token ?: return true
         val req = Request.Builder()
             .url("$baseUrl/api/networks")
             .header("Authorization", "Bearer $t")
             .build()
-        runCatching {
+        return try {
             http.newCall(req).execute().use { res ->
                 when {
                     // A revoked/expired token trips here first (before the WS upgrade).
-                    res.code == 401 -> onFrame(ServerFrame.Unauthorized)
-                    res.isSuccessful -> onFrame(FrameParser.parseNetworks(res.body?.string().orEmpty()))
+                    res.code == 401 -> {
+                        onFrame(ServerFrame.Unauthorized)
+                        false
+                    }
+                    else -> {
+                        if (res.isSuccessful) {
+                            onFrame(FrameParser.parseNetworks(res.body?.string().orEmpty()))
+                        }
+                        true
+                    }
                 }
             }
+        } catch (_: Exception) {
+            true // a network hiccup, not an auth failure — let the socket try
         }
     }
 

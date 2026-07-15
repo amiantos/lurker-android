@@ -24,9 +24,9 @@ data class PersistedSession(
 
 /**
  * Persists the session token at rest, encrypted with an AES-256-GCM key held in
- * the Android Keystore (the key never leaves the secure hardware; only ciphertext
- * lands in SharedPreferences). Rolled directly on the Keystore rather than the
- * deprecated `security-crypto` library.
+ * the Android Keystore: the key is non-exportable (hardware-backed where the
+ * device supports it), and only ciphertext lands in SharedPreferences. Rolled
+ * directly on the Keystore rather than the deprecated `security-crypto` library.
  *
  * The token is a bearer credential, so losing the key (e.g. the user clears
  * credentials / resets biometrics, which invalidates Keystore keys) simply means

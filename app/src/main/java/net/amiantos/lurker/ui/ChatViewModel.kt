@@ -123,6 +123,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         // A 401 can arrive from both the REST call and the WS upgrade; handle the
         // first and ignore the rest.
         if (_session.value == SessionState.LoggedOut) return
+        // Flip the visible state + message synchronously so the sign-in screen shows
+        // the explanation the instant we bounce; do the teardown in the background.
+        _status.value = "Your session ended — please sign in again."
         _session.value = SessionState.LoggedOut
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
@@ -130,7 +133,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 sessions.clear()
             }
             store.reset()
-            _status.value = "Your session ended — please sign in again."
         }
     }
 
