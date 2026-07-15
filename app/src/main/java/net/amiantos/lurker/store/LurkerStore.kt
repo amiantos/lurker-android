@@ -52,6 +52,8 @@ class LurkerStore {
                 }
             ServerFrame.SocketOpen -> _state.update { it.copy(connected = true, error = null) }
             is ServerFrame.SocketClosed -> _state.update { it.copy(connected = false) }
+            // Session-level; the ViewModel intercepts it before the store sees it.
+            ServerFrame.Unauthorized -> Unit
             ServerFrame.Ignored -> Unit
         }
     }

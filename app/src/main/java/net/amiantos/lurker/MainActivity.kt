@@ -11,6 +11,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,6 +24,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -77,14 +79,13 @@ class MainActivity : ComponentActivity() {
 
                 Scaffold(modifier = Modifier.fillMaxSize()) { padding ->
                     val mod = Modifier.padding(padding).fillMaxSize()
-                    if (session != SessionState.LoggedIn) {
-                        LoginScreen(vm, mod)
-                    } else {
-                        Column(mod) {
+                    when (session) {
+                        SessionState.Restoring -> LoadingScreen(mod)
+                        SessionState.LoggedIn -> Column(mod) {
                             chat.error?.let { ErrorBanner(it, onDismiss = vm::clearError) }
                             val inner = Modifier.weight(1f).fillMaxWidth()
                             if (openKey == null) {
-                                BufferListScreen(chat, inner) { key ->
+                                BufferListScreen(chat, inner, onSignOut = vm::logout) { key ->
                                     vm.openBuffer(key)
                                     openKey = key
                                 }
@@ -94,6 +95,7 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         }
+                        else -> LoginScreen(vm, mod) // LoggedOut, LoggingIn
                     }
                 }
             }
@@ -174,9 +176,17 @@ private fun LoginScreen(vm: ChatViewModel, modifier: Modifier) {
 }
 
 @Composable
+private fun LoadingScreen(modifier: Modifier) {
+    Box(modifier, contentAlignment = Alignment.Center) {
+        CircularProgressIndicator()
+    }
+}
+
+@Composable
 private fun BufferListScreen(
     chat: ChatState,
     modifier: Modifier,
+    onSignOut: () -> Unit,
     onOpen: (BufferKey) -> Unit,
 ) {
     // Group under their network in stable target order; the system buffer (null
@@ -188,11 +198,17 @@ private fun BufferListScreen(
     }
 
     Column(modifier) {
-        Text(
-            if (chat.connected) "Connected" else "Connecting…",
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(16.dp),
-        )
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                if (chat.connected) "Connected" else "Connecting…",
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.weight(1f).padding(vertical = 16.dp),
+            )
+            TextButton(onClick = onSignOut) { Text("Sign out") }
+        }
         HorizontalDivider()
         if (rows.isEmpty()) {
             Text("No buffers yet.", modifier = Modifier.padding(16.dp))

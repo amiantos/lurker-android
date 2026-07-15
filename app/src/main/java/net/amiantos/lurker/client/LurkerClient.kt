@@ -41,7 +41,7 @@ class LurkerClient(private val onFrame: (ServerFrame) -> Unit) {
     private var socket: WebSocket? = null
 
     sealed interface LoginResult {
-        data object Success : LoginResult
+        data class Success(val token: String) : LoginResult
         data class Failure(val message: String) : LoginResult
     }
 
@@ -59,15 +59,25 @@ class LurkerClient(private val onFrame: (ServerFrame) -> Unit) {
         val req = Request.Builder().url("$baseUrl${backend.loginPath}").post(body).build()
         return try {
             http.newCall(req).execute().use { res ->
-                if (!res.isSuccessful) {
-                    // A 401 here means bad credentials — or a passkey-only account,
-                    // since the mint endpoint is password-only. #4 surfaces that
-                    // distinction; the prototype-level message is fine for now.
-                    LoginResult.Failure("Sign-in failed (HTTP ${res.code})")
-                } else {
-                    token = JSONObject(res.body?.string().orEmpty()).optString("token").ifEmpty { null }
-                    if (token == null) LoginResult.Failure("Sign-in failed: no token in response")
-                    else LoginResult.Success
+                when {
+                    res.code == 401 ->
+                        // Bad credentials — OR a passkey-only account, since the mint
+                        // endpoint is password-only and can't tell the two apart. Name
+                        // the caveat rather than flatly claiming "wrong password".
+                        LoginResult.Failure(
+                            "Sign-in failed — check your password. Passkey-only accounts " +
+                                "can't sign in from the app yet (login is password-only).",
+                        )
+                    !res.isSuccessful -> LoginResult.Failure("Sign-in failed (HTTP ${res.code})")
+                    else -> {
+                        val minted = JSONObject(res.body?.string().orEmpty()).optString("token").ifEmpty { null }
+                        if (minted == null) {
+                            LoginResult.Failure("Sign-in failed: no token in response")
+                        } else {
+                            token = minted
+                            LoginResult.Success(minted)
+                        }
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -75,22 +85,49 @@ class LurkerClient(private val onFrame: (ServerFrame) -> Unit) {
         }
     }
 
-    /** After a successful login: fetch the network roster, then open the socket. Blocking. */
-    fun start() {
-        fetchNetworks()
-        openSocket()
+    /**
+     * Re-arm from a persisted session (no password round-trip). Follow with [start].
+     * If the token is stale, [start]'s first authenticated call surfaces a 401 as
+     * [ServerFrame.Unauthorized].
+     */
+    fun restore(server: String, sessionToken: String) {
+        baseUrl = server.trim().trimEnd('/')
+        token = sessionToken
     }
 
-    private fun fetchNetworks() {
-        val t = token ?: return
+    /** After login/restore: fetch the network roster, then open the socket. Blocking. */
+    fun start() {
+        // If the roster fetch already saw a 401, the token is dead — don't bother
+        // attempting the WS upgrade with it (it would just 401 again).
+        if (fetchNetworks()) openSocket()
+    }
+
+    /** Returns false only when the token was rejected (401); true otherwise, including
+     *  transient errors where the socket is still worth trying. */
+    private fun fetchNetworks(): Boolean {
+        val t = token ?: return true
         val req = Request.Builder()
             .url("$baseUrl/api/networks")
             .header("Authorization", "Bearer $t")
             .build()
-        runCatching {
+        return try {
             http.newCall(req).execute().use { res ->
-                if (res.isSuccessful) onFrame(FrameParser.parseNetworks(res.body?.string().orEmpty()))
+                when {
+                    // A revoked/expired token trips here first (before the WS upgrade).
+                    res.code == 401 -> {
+                        onFrame(ServerFrame.Unauthorized)
+                        false
+                    }
+                    else -> {
+                        if (res.isSuccessful) {
+                            onFrame(FrameParser.parseNetworks(res.body?.string().orEmpty()))
+                        }
+                        true
+                    }
+                }
             }
+        } catch (_: Exception) {
+            true // a network hiccup, not an auth failure — let the socket try
         }
     }
 
@@ -112,7 +149,13 @@ class LurkerClient(private val onFrame: (ServerFrame) -> Unit) {
                     onFrame(FrameParser.parseWs(text))
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) =
-                    onFrame(ServerFrame.SocketClosed(t.message, response?.code))
+                    // A refused upgrade with 401 means the bearer never resolved — the
+                    // session is gone, not merely a dropped connection.
+                    if (response?.code == 401) {
+                        onFrame(ServerFrame.Unauthorized)
+                    } else {
+                        onFrame(ServerFrame.SocketClosed(t.message, response?.code))
+                    }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) =
                     onFrame(ServerFrame.SocketClosed(reason, code))
@@ -147,12 +190,14 @@ class LurkerClient(private val onFrame: (ServerFrame) -> Unit) {
     }
 
     /**
-     * Drop the socket without revoking server-side. For teardown (e.g. the owning
-     * ViewModel being cleared) — [logout] is the deliberate sign-out.
+     * Drop the socket and forget the token without revoking server-side. For
+     * teardown (ViewModel cleared) or a dead token (expired/revoked) — [logout] is
+     * the deliberate sign-out that also revokes.
      */
     fun close() {
         socket?.close(1000, null)
         socket = null
+        token = null
     }
 
     /**
