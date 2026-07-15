@@ -64,6 +64,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private var reconnectJob: Job? = null
     private var reconnectAttempt = 0
     private var isForeground = true
+    private var backgroundedAt = 0L
 
     private val processObserver = object : DefaultLifecycleObserver {
         override fun onStart(owner: LifecycleOwner) {
@@ -73,6 +74,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
         override fun onStop(owner: LifecycleOwner) {
             isForeground = false
+            backgroundedAt = System.currentTimeMillis()
         }
     }
 
@@ -173,25 +175,36 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val wait = backoffMillis(reconnectAttempt++)
         reconnectJob = viewModelScope.launch {
             delay(wait)
-            if (_session.value == SessionState.LoggedIn && isForeground) {
-                withContext(Dispatchers.IO) { client.reconnect(store.state.value.maxEventId) }
-            }
+            doReconnect(force = false)
         }
     }
 
     /**
-     * Back on screen: a socket that died in the background won't always have fired
-     * onFailure yet, so proactively reconnect if we're signed-in and not connected.
-     * Immediate (backoff reset) since a user is waiting.
+     * Back on screen: a socket that died in the background often hasn't fired
+     * onFailure yet (pings are suspended while backgrounded), so the status can
+     * still read Connected over a dead connection. Reconnect immediately if we're
+     * disconnected OR we were backgrounded long enough that the socket may be
+     * stale; a brief app-switch leaves a healthy socket alone.
      */
     private fun onForeground() {
         if (_session.value != SessionState.LoggedIn) return
-        if (store.state.value.connection == SocketStatus.Connected) return
+        val stale = System.currentTimeMillis() - backgroundedAt > STALE_AFTER_MS
+        if (store.state.value.connection == SocketStatus.Connected && !stale) return
         reconnectAttempt = 0
         reconnectJob?.cancel()
-        reconnectJob = viewModelScope.launch {
-            withContext(Dispatchers.IO) { client.reconnect(store.state.value.maxEventId) }
-        }
+        reconnectJob = viewModelScope.launch { doReconnect(force = true) }
+    }
+
+    /**
+     * The single reconnect path. [force] reconnects even when the status reads
+     * Connected (the stale-socket case); otherwise a scheduled attempt bails if the
+     * connection was re-established meanwhile, so a pending backoff timer can't tear
+     * down a good socket.
+     */
+    private suspend fun doReconnect(force: Boolean) {
+        if (_session.value != SessionState.LoggedIn || !isForeground) return
+        if (!force && store.state.value.connection == SocketStatus.Connected) return
+        withContext(Dispatchers.IO) { client.reconnect(store.state.value.maxEventId) }
     }
 
     private fun cancelReconnect() {
@@ -238,5 +251,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         const val BASE_BACKOFF_MS = 1_000L
         const val MAX_BACKOFF_MS = 30_000L
         const val MAX_BACKOFF_SHIFT = 5 // 1s << 5 = 32s, clamped to 30s
+        // Backgrounded longer than this → assume the socket may be dead and
+        // reconnect on return, even if the status still reads Connected.
+        const val STALE_AFTER_MS = 30_000L
     }
 }
