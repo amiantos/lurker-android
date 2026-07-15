@@ -65,11 +65,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 _session.value = SessionState.LoggedOut
                 return@launch
             }
+            // Go LoggedIn BEFORE connecting so that if the token is stale, the
+            // Unauthorized fired during start() lands afterwards and deterministically
+            // wins the bounce to sign-in (rather than racing a later LoggedIn).
+            _session.value = SessionState.LoggedIn
             withContext(Dispatchers.IO) {
                 client.restore(saved.server, saved.token)
                 client.start()
             }
-            _session.value = SessionState.LoggedIn
         }
     }
 
@@ -117,6 +120,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
      * without a revoke round-trip and bounce to sign-in with an explanation.
      */
     private fun onAuthLost() {
+        // A 401 can arrive from both the REST call and the WS upgrade; handle the
+        // first and ignore the rest.
+        if (_session.value == SessionState.LoggedOut) return
+        _session.value = SessionState.LoggedOut
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
                 client.close()
@@ -124,7 +131,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
             store.reset()
             _status.value = "Your session ended — please sign in again."
-            _session.value = SessionState.LoggedOut
         }
     }
 

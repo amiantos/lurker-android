@@ -177,12 +177,14 @@ class LurkerClient(private val onFrame: (ServerFrame) -> Unit) {
     }
 
     /**
-     * Drop the socket without revoking server-side. For teardown (e.g. the owning
-     * ViewModel being cleared) — [logout] is the deliberate sign-out.
+     * Drop the socket and forget the token without revoking server-side. For
+     * teardown (ViewModel cleared) or a dead token (expired/revoked) — [logout] is
+     * the deliberate sign-out that also revokes.
      */
     fun close() {
         socket?.close(1000, null)
         socket = null
+        token = null
     }
 
     /**

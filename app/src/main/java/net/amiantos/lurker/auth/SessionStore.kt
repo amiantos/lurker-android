@@ -35,8 +35,14 @@ data class PersistedSession(
 class SessionStore(context: Context) {
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    /**
+     * Best-effort: a Keystore failure means we simply won't remember this session
+     * (the user re-signs-in next launch) — it must never crash the sign-in flow.
+     */
     fun save(session: PersistedSession) {
-        prefs.edit().putString(KEY_SESSION, encrypt(encodeSession(session))).apply()
+        runCatching {
+            prefs.edit().putString(KEY_SESSION, encrypt(encodeSession(session))).apply()
+        }
     }
 
     fun load(): PersistedSession? {
