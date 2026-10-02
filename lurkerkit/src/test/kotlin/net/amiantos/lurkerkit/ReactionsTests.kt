@@ -3,6 +3,9 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.commands.CommandEffect
+import net.amiantos.lurkerkit.commands.CommandParser
+import net.amiantos.lurkerkit.commands.ParsedInput
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageActionContext
@@ -18,6 +21,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /** IRCv3 reactions (lurker-ios#183): the wire, the side map, and the gates. */
 class ReactionsTests {
@@ -164,6 +168,23 @@ class ReactionsTests {
 /** `/react` (lurker-ios#183). */
 class ReactCommandTests {
 
+    // Port note: `CommandParser.parse` takes the expiry's formatter here (see
+    // `IgnoreRule.summary`); no `/react` line uses it.
+    private fun effects(input: String): List<CommandEffect> {
+        val parsed = CommandParser.parse(input, networkId = 1, target = "#c", formatted = { it.toString() })
+        return (parsed as? ParsedInput.Command)?.effects ?: emptyList()
+    }
+
+    @Test
+    fun testParses() {
+        assertEquals(listOf<CommandEffect>(CommandEffect.React(value = "👍")), effects("/react 👍"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.React(value = "nice one")), effects("/react  nice one "))
+        if (effects("/react").firstOrNull() !is CommandEffect.Info) fail("usage expected")
+        if (effects("/react " + "x".repeat(65)).firstOrNull() !is CommandEffect.Info) {
+            fail("too long should be refused before it reaches the wire")
+        }
+    }
+
     private fun line(
         id: Long,
         type: EventType = EventType.Message,
@@ -203,8 +224,6 @@ class ReactCommandTests {
             Reactions.commandTarget(listOf(line(3, isSelf = true))),
         )
     }
-
-    // Waiting on CommandParser, CommandEffect (and the private `effects` helper): testParses
 }
 
 // Waiting on LurkerStore, ServerFrame: the whole `ReactionRenameTests` suite —

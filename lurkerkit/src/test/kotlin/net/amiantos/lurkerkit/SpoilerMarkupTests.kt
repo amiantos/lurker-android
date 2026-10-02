@@ -3,12 +3,16 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.commands.CommandEffect
+import net.amiantos.lurkerkit.commands.CommandParser
+import net.amiantos.lurkerkit.commands.ParsedInput
 import net.amiantos.lurkerkit.commands.SpoilerMarkup
 import net.amiantos.lurkerkit.rendering.FormattingRun
 import net.amiantos.lurkerkit.rendering.IRCColor
 import net.amiantos.lurkerkit.rendering.IRCFormatting
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -107,9 +111,84 @@ class SpoilerMarkupTests {
     }
 }
 
-// Waiting on CommandParser — the whole `SpoilerCommandCoverageTests` class:
-// testRewritesUserAuthoredChatBodies, testLeavesServiceAndRawVerbsUntouched,
-// testDoesNotRewriteGeneratedBodies
+/**
+ * Which commands rewrite `||` and which must not. The exclusions are the point: `/ns` and `/cs`
+ * carry `identify <password>`, and a password containing `||` that arrives at NickServ as
+ * control codes fails a login for reasons nobody will diagnose. The web left this to a comment
+ * and a convention; here it's asserted.
+ */
+class SpoilerCommandCoverageTests {
+    private val open = "\u000314,14"
+
+    // Port note: `CommandParser.parse` takes the expiry's formatter here (see
+    // `IgnoreRule.summary`); nothing in this class reaches a line that uses it.
+    private fun parse(input: String): ParsedInput =
+        CommandParser.parse(input, networkId = 1, target = "#chan", formatted = { it.toString() })
+
+    /** Text bodies the user authored: these DO get rewritten. */
+    @Test
+    fun testRewritesUserAuthoredChatBodies() {
+        val plain = (parse("say ||secret||") as? ParsedInput.Message)?.text
+            ?: fail("plain text should be a message")
+        assertTrue(plain.contains(open), "plain send")
+
+        val escaped = (parse("//not a command ||secret||") as? ParsedInput.Message)?.text
+            ?: fail("//-escaped should be a message")
+        assertTrue(escaped.contains(open), "//-escaped send")
+
+        val me = (parse("/me hides ||something||") as? ParsedInput.Command)?.effects
+        val meText = (me?.firstOrNull() as? CommandEffect.Action)?.text
+            ?: fail("/me should produce an action")
+        assertTrue(meText.contains(open), "/me")
+
+        val msg = (parse("/msg bob ||secret||") as? ParsedInput.Command)?.effects
+        val msgText = (msg?.firstOrNull() as? CommandEffect.Send)?.text
+            ?: fail("/msg should produce a send")
+        assertTrue(msgText.contains(open), "/msg")
+
+        val notice = (parse("/notice bob ||secret||") as? ParsedInput.Command)?.effects
+        val noticeText = (notice?.firstOrNull() as? CommandEffect.Notice)?.text
+            ?: fail("/notice should produce a notice")
+        assertTrue(noticeText.contains(open), "/notice")
+    }
+
+    /**
+     * ⚠⚠ Service and raw verbs must reach the wire byte-for-byte as typed. A password is the
+     * realistic case, and `||` is a plausible character in one.
+     *
+     * ⚠ Every fixture holds a MATCHED pair. An earlier version used `hunter||2` — a single
+     * unmatched `||`, which `SpoilerMarkup` leaves alone regardless — so the test passed with
+     * the exclusion deliberately broken. Verified by mutation: routing `/ns` through `chatBody`
+     * now fails this, and did not before.
+     */
+    @Test
+    fun testLeavesServiceAndRawVerbsUntouched() {
+        for (input in listOf(
+            "/ns identify ||hunter2||",
+            "/cs identify #chan ||hunter2||",
+            "/raw PRIVMSG bob :||literal||",
+            "/quote PRIVMSG bob :||literal||",
+        )) {
+            val effects = (parse(input) as? ParsedInput.Command)?.effects
+            val line = (effects?.firstOrNull() as? CommandEffect.Raw)?.line
+                ?: fail("$input should produce a raw line")
+            assertTrue(line.contains("||"), "$input must keep its literal pipes")
+            assertFalse(line.contains("\u0003"), "$input must carry no colour codes")
+        }
+    }
+
+    /**
+     * `/slap`'s body is generated rather than typed, so there is nothing in it to spoiler — and
+     * a nick is not a place a `||` should be interpreted.
+     */
+    @Test
+    fun testDoesNotRewriteGeneratedBodies() {
+        val effects = (parse("/slap bo||b") as? ParsedInput.Command)?.effects
+        val text = (effects?.firstOrNull() as? CommandEffect.Action)?.text
+            ?: fail("/slap should produce an action")
+        assertFalse(text.contains("\u0003"))
+    }
+}
 
 /**
  * The half that matters at runtime: what we emit has to come back through our own parser as a

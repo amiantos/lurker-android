@@ -3,6 +3,9 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.commands.CommandEffect
+import net.amiantos.lurkerkit.commands.CommandParser
+import net.amiantos.lurkerkit.commands.ParsedInput
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageGrouping
@@ -14,6 +17,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * Relay-bot marks end to end (lurker#277): the wire in, the set they build, what they do to a
@@ -289,6 +293,147 @@ class RelayBotsTests {
 
     // MARK: - /relay
 
+    // Port note: `CommandParser.parse` takes the expiry's formatter here (see
+    // `IgnoreRule.summary`); no `/relay` line uses it.
+    private fun effects(input: String, relayBots: RelayBotSet? = RelayBotSet.empty): List<CommandEffect> {
+        val parsed = CommandParser.parse(
+            input, networkId = 1, target = "#chan", relayBots = relayBots, formatted = { it.toString() },
+        )
+        if (parsed !is ParsedInput.Command) fail("expected a command for $input")
+        return parsed.effects
+    }
+
+    @Test
+    fun testRelayAddAndRemoveAskTheServer() {
+        assertEquals(
+            listOf<CommandEffect>(
+                CommandEffect.SetRelayBot(
+                    networkId = 1, nick = "bridge", marked = true, pattern = "",
+                    receipt = "marked bridge as a relay bot.",
+                ),
+            ),
+            effects("/relay add bridge"),
+        )
+        assertEquals(
+            listOf<CommandEffect>(
+                CommandEffect.SetRelayBot(
+                    networkId = 1, nick = "bridge", marked = false, pattern = "",
+                    receipt = "unmarked bridge as a relay bot.",
+                ),
+            ),
+            effects("/relay remove bridge"),
+        )
+    }
+
+    /**
+     * ⚠ The pattern is the raw remainder of the line, spaces and all — running it through a
+     * tokenizer would hand the server a template that no longer matches anything.
+     */
+    @Test
+    fun testACustomPatternSurvivesWithItsSpacing() {
+        assertEquals(
+            listOf<CommandEffect>(
+                CommandEffect.SetRelayBot(
+                    networkId = 1, nick = "bridge", marked = true,
+                    pattern = "<{nick}>  [{source}] {message}",
+                    receipt = "marked bridge as a relay bot (pattern: <{nick}>  [{source}] {message}).",
+                ),
+            ),
+            effects("/relay add bridge <{nick}>  [{source}] {message}"),
+        )
+        // Quoting isn't required, but one surrounding pair is peeled if it's there.
+        val pattern = (effects("/relay add b \"{nick}: {message}\"").firstOrNull() as? CommandEffect.SetRelayBot)?.pattern
+            ?: fail("expected a mark")
+        assertEquals("{nick}: {message}", pattern)
+    }
+
+    @Test
+    fun testRelayListsTheMarksOnThisNetwork() {
+        val set = RelayBotSet(
+            byNetwork = mapOf(
+                1 to listOf(RelayBot(nick = "zbot"), RelayBot(nick = "abot", pattern = "{nick}: {message}")),
+                2 to listOf(RelayBot(nick = "elsewhere")),
+            ),
+        )
+        val text = (effects("/relay", relayBots = set).firstOrNull() as? CommandEffect.Info)?.text
+            ?: fail("expected a listing")
+        assertEquals(
+            "relay bots (2):\n" +
+                "  abot  — {nick}: {message}\n" +
+                "  zbot",
+            text,
+        )
+    }
+
+    /**
+     * An empty listing has to carry the way out of it: someone typing `/relay` into a channel a
+     * bridge is talking in is asking how to fix what they're looking at.
+     */
+    @Test
+    fun testAnEmptyListingSaysHowToMarkOne() {
+        val text = (effects("/relay").firstOrNull() as? CommandEffect.Info)?.text ?: fail("expected a listing")
+        assertTrue(text.contains("/relay add <nick>"), text)
+    }
+
+    /**
+     * A listing built before the connect burst finished would be a confident "none" for an
+     * account that has several — the same trap `/ignore` avoids the same way.
+     */
+    @Test
+    fun testAListingIsWithheldUntilTheMarksHaveArrived() {
+        val text = (effects("/relay", relayBots = null).firstOrNull() as? CommandEffect.Info)?.text
+            ?: fail("expected a note")
+        assertTrue(text.contains("haven't arrived yet"), text)
+        // Marking is NOT gated on the same thing: the mark is fine, it's only our ability to
+        // describe the list that's missing.
+        assertEquals(1, effects("/relay add bridge", relayBots = null).size)
+    }
+
+    /**
+     * ⚠ A pattern that can't compile marks the bot and then re-attributes nothing, forever —
+     * `templates` deliberately won't fall back to the built-ins for one. Nothing downstream
+     * reports that, and `/relay list` shows the mark as if it were working, so the refusal has to
+     * happen at the only moment anyone is looking.
+     */
+    @Test
+    fun testAPatternThatCannotCompileIsRefusedRatherThanMarked() {
+        // The realistic way to get one: forgetting the braces.
+        val text = (effects("/relay add bot [Discord] <nick> message").firstOrNull() as? CommandEffect.Info)?.text
+            ?: fail("expected a refusal")
+        assertTrue(text.contains("{nick} and {message}"), text)
+        assertEquals(1, effects("/relay add bot [Discord] <nick> message").size, "nothing may reach the wire")
+        // A pattern that DOES compile still goes through, and so does no pattern at all.
+        assertEquals(1, effects("/relay add bot <{nick}> {message}").size)
+        if (effects("/relay add bot <{nick}> {message}").firstOrNull() is CommandEffect.Info) {
+            fail("a valid pattern must not be refused")
+        }
+    }
+
+    @Test
+    fun testUnusableRelayInputNeverReachesTheWire() {
+        for (input in listOf("/relay add", "/relay remove", "/relay wat")) {
+            val text = (effects(input).firstOrNull() as? CommandEffect.Info)?.text
+                ?: fail("expected a note for $input")
+            assertTrue(text.startsWith("/relay:"), text)
+        }
+    }
+
+    /**
+     * One surrounding pair of quotes is peeled; a pair that isn't one is left alone. Peeling it
+     * would produce a template that still compiles — so it would be stored and marked with a
+     * confident receipt — while matching something the user never wrote.
+     */
+    @Test
+    fun testUnquoteOnlyPeelsAnActualQuotedRun() {
+        fun pattern(input: String): String? =
+            (effects(input).firstOrNull() as? CommandEffect.SetRelayBot)?.pattern
+        assertEquals("{nick}: {message}", pattern("/relay add b \"{nick}: {message}\""))
+        assertEquals(
+            "\"{nick}\" said \"{message}\"",
+            pattern("/relay add b \"{nick}\" said \"{message}\""),
+        )
+    }
+
     // MARK: - A bridged speaker is not the local one with the same name
 
     /**
@@ -321,17 +466,23 @@ class RelayBotsTests {
         assertFalse(MessageGrouping.continuesRun(rows[2], previous = rows[1]))
     }
 
+    /**
+     * A mark is per-(network, nick), so there is no answer to `/relay` in the system buffer — and
+     * the generic network gate is what has to say so, rather than the command writing a mark on
+     * some network it picked.
+     */
+    @Test
+    fun testRelayNeedsANetwork() {
+        val parsed = CommandParser.parse("/relay", networkId = null, target = "", formatted = { it.toString() })
+        val text = ((parsed as? ParsedInput.Command)?.effects?.firstOrNull() as? CommandEffect.Info)?.text
+            ?: fail("expected a note")
+        assertTrue(text.contains("needs an active network"), text)
+    }
+
     // Waiting on LurkerStore, ServerFrame, NetworkSnapshot: testTheSnapshotSeedsMarksAndReplacesThemWholesale,
     // testTheUpdateFramePatchesOneNick
     //
     // Waiting on FrameParser, ServerFrame: testParsesTheSnapshotAndUpdateFrames
-    //
-    // Waiting on CommandParser, CommandEffect (and the private `effects` helper):
-    // testRelayAddAndRemoveAskTheServer, testACustomPatternSurvivesWithItsSpacing,
-    // testRelayListsTheMarksOnThisNetwork, testAnEmptyListingSaysHowToMarkOne,
-    // testAListingIsWithheldUntilTheMarksHaveArrived,
-    // testAPatternThatCannotCompileIsRefusedRatherThanMarked, testUnusableRelayInputNeverReachesTheWire,
-    // testUnquoteOnlyPeelsAnActualQuotedRun, testRelayNeedsANetwork
 
     // Port-only: equality. LurkerKit's `RelayBotSet` is a reference type compared by identity;
     // here it sits in published state and compares every mark it holds (see its port note).

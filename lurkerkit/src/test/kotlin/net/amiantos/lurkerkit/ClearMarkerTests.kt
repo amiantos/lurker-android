@@ -3,6 +3,9 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.commands.CommandEffect
+import net.amiantos.lurkerkit.commands.CommandParser
+import net.amiantos.lurkerkit.commands.ParsedInput
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.EventType
@@ -209,6 +212,39 @@ class ClearMarkerTests {
 
     // MARK: - The command
 
+    // Port note: `CommandParser.parse` takes the expiry's formatter here (see
+    // `IgnoreRule.summary`); no `/clear` line uses it.
+    private fun parse(line: String): List<CommandEffect> {
+        val parsed = CommandParser.parse(line, networkId = 1, target = "#lurker", formatted = { it.toString() })
+        return (parsed as? ParsedInput.Command)?.effects ?: emptyList()
+    }
+
+    // "/clear hides, /clear off and /clear undo bring it back"
+    @Test
+    fun theCommandParses() {
+        assertEquals(listOf<CommandEffect>(CommandEffect.Clear(target = "#lurker", undo = false)), parse("/clear"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.Clear(target = "#lurker", undo = true)), parse("/clear off"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.Clear(target = "#lurker", undo = true)), parse("/clear undo"))
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Clear(target = "#lurker", undo = true)),
+            parse("/clear OFF"),
+            "case-insensitive",
+        )
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Clear(target = "#lurker", undo = true)),
+            parse("/clear  off  "),
+            "spacing",
+        )
+    }
+
+    // "an unrecognised argument clears rather than refusing"
+    @Test
+    fun anUnknownArgumentStillClears() {
+        // `/clear all` is what someone reaching for "clear everything" types; refusing it
+        // would decline the thing they asked for on the grounds that they were too specific.
+        assertEquals(listOf<CommandEffect>(CommandEffect.Clear(target = "#lurker", undo = false)), parse("/clear all"))
+    }
+
     // Waiting on FrameParser, ServerFrame: backlogCarriesTheMarker, backlogWithoutAMarker,
     // bufferClearedParses, undoParses, aHalfStatedMarkerIsDiscarded
     //
@@ -216,7 +252,4 @@ class ClearMarkerTests {
     // fanOutMovesTheMarker, undoDropsBothHalves, aClearForAnUnknownBufferIsIgnored,
     // aBacklogRetractsTheMarker, aClearDropsLocalLines, anUndoKeepsLocalLines,
     // aRevealNeverTouchesTheMarker
-    //
-    // Waiting on CommandParser, CommandEffect (and the private `parse` helper): theCommandParses,
-    // anUnknownArgumentStillClears
 }

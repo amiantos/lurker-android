@@ -3,6 +3,12 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.commands.ArgKind
+import net.amiantos.lurkerkit.commands.CommandCompletion
+import net.amiantos.lurkerkit.commands.CommandEffect
+import net.amiantos.lurkerkit.commands.CommandParser
+import net.amiantos.lurkerkit.commands.CommandRegistry
+import net.amiantos.lurkerkit.commands.ParsedInput
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
@@ -19,6 +25,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * DCC CHAT (lurker#270): a `=nick` buffer is its own kind, the `/dcc` chat verbs follow irssi
@@ -81,9 +88,154 @@ class DccChatTests {
 
     // MARK: - /dcc (the web's dcc.test.ts, chat half)
 
+    // Port note: `CommandParser.parse` takes the expiry's formatter here (see
+    // `IgnoreRule.summary`); no `/dcc` line uses it.
+    private fun effects(input: String, networkId: Int? = 1, target: String = "#chan"): List<CommandEffect> {
+        val parsed = CommandParser.parse(input, networkId = networkId, target = target, formatted = { it.toString() })
+        if (parsed !is ParsedInput.Command) fail("expected a command from $input")
+        return parsed.effects
+    }
+
+    /** The info line a command answered with, or null if it did something else. */
+    private fun info(input: String, target: String = "#chan"): String? =
+        (effects(input, target = target).firstOrNull() as? CommandEffect.Info)?.text
+
+    @Test
+    fun testDccChatOffersToANick() {
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.DccChat(nick = "alice", passive = false)),
+            effects("/dcc chat alice"),
+        )
+        assertEquals(listOf<CommandEffect>(CommandEffect.DccChat(nick = "Bob", passive = false)), effects("/DCC CHAT Bob"))
+        assertNotNull(info("/dcc chat"))
+    }
+
+    /**
+     * Opt-in, never a fallback: WeeChat and HexDroid turn a passive offer into a silent dial to
+     * port 0, so it has to be asked for by name.
+     */
+    @Test
+    fun testPassiveIsAFlagInEitherPosition() {
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.DccChat(nick = "alice", passive = true)),
+            effects("/dcc chat -passive alice"),
+        )
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.DccChat(nick = "alice", passive = true)),
+            effects("/dcc chat alice -passive"),
+        )
+    }
+
+    @Test
+    fun testAnUnknownOptionIsRefusedRatherThanReadAsANick() {
+        assertEquals(true, info("/dcc chat -active alice")?.contains("-active"))
+    }
+
+    /** Read literally, `/dcc chat close bob` would OFFER a chat to a peer named "close". */
+    @Test
+    fun testChatCloseIsCaughtAndPointedAtTheRealSpelling() {
+        assertEquals(true, info("/dcc chat close alice")?.contains("/dcc close chat <nick>"))
+        // …but someone genuinely nicked "close" is still reachable.
+        assertEquals(listOf<CommandEffect>(CommandEffect.DccChat(nick = "close", passive = false)), effects("/dcc chat close"))
+    }
+
+    /**
+     * ⚠⚠ The web's QA finding: a `/dcc close <nick>` shorthand read irssi's `/dcc close chat bob`
+     * as closing a chat with a peer called "chat", and left the real one open.
+     */
+    @Test
+    fun testCloseIsIrssisTypeFirstForm() {
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.DccCloseChat(nick = "ami|shellter")),
+            effects("/dcc close chat ami|shellter"),
+        )
+        assertEquals(listOf<CommandEffect>(CommandEffect.DccCloseChat(nick = "bob")), effects("/dcc close CHAT bob"))
+        assertNotNull(info("/dcc close bob"), "the non-irssi shorthand is gone")
+        assertNotNull(info("/dcc close"))
+        assertNotNull(info("/dcc close chat"), "asks for a nick rather than closing a peer named chat")
+        assertEquals(listOf<CommandEffect>(CommandEffect.DccCloseChat(nick = "chat")), effects("/dcc close chat chat"))
+        assertNotNull(info("/dcc close chat bob extra"))
+    }
+
+    /**
+     * `=bob` is the BUFFER; `/dcc chat =bob` would offer to someone literally named "=bob". And a
+     * channel would broadcast the offer to everyone in it — all four sigils.
+     */
+    @Test
+    fun testABufferNameOrAChannelIsNotAPeer() {
+        for (input in listOf(
+            "/dcc chat =bob", "/dcc chat #room", "/dcc chat &local", "/dcc chat +modeless",
+            "/dcc chat !safe", "/dcc close chat =bob", "/dcc close chat #room",
+        )) {
+            assertNotNull(info(input), input)
+        }
+    }
+
+    @Test
+    fun testFileTransfersSayTheyAreNotHereRatherThanGoingRaw() {
+        for (input in listOf(
+            "/dcc list", "/dcc accept 3", "/dcc cancel 3", "/dcc close send bob",
+            "/dcc send bob file.txt", "/dcc resume bob file.txt",
+        )) {
+            assertEquals("DCC file transfers aren't in the app yet.", info(input), input)
+        }
+        // And nothing falls through to the raw default, which put `DCC chat bob` on the IRC wire.
+        for (input in listOf("/dcc", "/dcc frobnicate", "/dcc chat")) {
+            assertNotNull(info(input), input)
+        }
+    }
+
+    @Test
+    fun testDccNeedsANetwork() {
+        val effects = effects("/dcc chat bob", networkId = null, target = Buffer.systemTarget)
+        if (effects.firstOrNull() !is CommandEffect.Info) fail("expected the network gate")
+        assertEquals(1, effects.size)
+    }
+
     // MARK: - /dcc help and completion
 
+    /**
+     * Both come from the spec, and one positional list could only describe `/dcc` as a shape
+     * neither form has (`/dcc <chat|close chat> <nick>`, no `-passive`).
+     */
+    @Test
+    fun testTheHelpShowsBothFormsAsTheyAreTyped() {
+        assertEquals(
+            "/dcc chat [-passive] <nick> · /dcc close chat <nick>",
+            CommandRegistry.spec("dcc")?.usage,
+        )
+    }
+
+    private fun completes(text: String): ArgKind? =
+        (CommandCompletion.context(text, caret = text.length) as? CommandCompletion.Context.Argument)?.kind
+
+    @Test
+    fun testCompletionFindsTheNickInEitherForm() {
+        assertEquals(ArgKind.Nick, completes("/dcc chat b"))
+        assertEquals(ArgKind.Nick, completes("/dcc chat "), "the optional flag is skipped")
+        assertEquals(ArgKind.Nick, completes("/dcc chat -passive b"))
+        assertEquals(ArgKind.Nick, completes("/dcc close chat b"))
+        assertNull(completes("/dcc close b"), "the word after close is `chat`, not a nick")
+        assertNull(completes("/dcc chat -pa"), "a flag is typed, not completed")
+        assertNull(completes("/dcc ch"))
+        assertNull(completes("/dcc chat bob b"), "nothing after the nick")
+    }
+
     // MARK: - Bare /whois and /ping in a chat
+
+    /**
+     * ⚠⚠ Both put their argument on the IRC wire, and `/ping` as a CTCP no server guard covers —
+     * so a bare one in `=bob` must mean bob.
+     */
+    @Test
+    fun testABareWhoisOrPingInAChatMeansThePeer() {
+        assertEquals(listOf<CommandEffect>(CommandEffect.ShowProfile(nick = "bob")), effects("/whois", target = "=bob"))
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Ctcp(target = "bob", type = "PING", args = "")),
+            effects("/ping", target = "=bob"),
+        )
+        assertNotNull(info("/ping", target = "="), "a bare `=` has no peer to ping")
+    }
 
     // MARK: - Status light
 
@@ -237,18 +389,6 @@ class DccChatTests {
         assertNull(opens.waiting)
     }
 
-    // Waiting on CommandParser, CommandEffect (and the private `effects`/`info` helpers):
-    // testDccChatOffersToANick, testPassiveIsAFlagInEitherPosition,
-    // testAnUnknownOptionIsRefusedRatherThanReadAsANick,
-    // testChatCloseIsCaughtAndPointedAtTheRealSpelling, testCloseIsIrssisTypeFirstForm,
-    // testABufferNameOrAChannelIsNotAPeer, testFileTransfersSayTheyAreNotHereRatherThanGoingRaw,
-    // testDccNeedsANetwork, testABareWhoisOrPingInAChatMeansThePeer
-    //
-    // Waiting on CommandRegistry: testTheHelpShowsBothFormsAsTheyAreTyped
-    //
-    // Waiting on CommandCompletion, ArgKind (and the private `completes` helper):
-    // testCompletionFindsTheNickInEitherForm
-    //
     // Waiting on StatusLight: testTheLightFollowsTheSessionNotTheNetwork
     //
     // Waiting on FrameParser, ServerFrame: testTheSnapshotCarriesLiveChatsAndWaitingOffers,
