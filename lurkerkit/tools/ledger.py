@@ -33,6 +33,25 @@ def git(ios, *args):
     ).stdout
 
 
+def swift_test_names(source):
+    """XCTest methods (`func testFoo()`) and Swift Testing cases (`@Test(...) func foo()`)."""
+    names = re.findall(r"func (test\w+)\s*\(", source)
+    # By line rather than one regex over the file: a display name is a string literal that may
+    # hold anything, and a stray quote in a comment derails any attempt to skip over them.
+    lines = source.splitlines()
+    for index, line in enumerate(lines):
+        if not re.search(r"@Test\b", line):
+            continue
+        for candidate in lines[index:index + 6]:
+            # The declaration, not a "func" inside the display name: nothing but modifiers before it.
+            found = re.match(r"\s*(?:@Test\b(?:\(.*\))?\s*)?(?:\w+\s+)*func\s+(\w+)\s*\(", candidate)
+            if found:
+                if found.group(1) not in names:
+                    names.append(found.group(1))
+                break
+    return names
+
+
 def kotlin_path(swift):
     if swift in KOTLIN_NAMES:
         return KOTLIN_NAMES[swift]
@@ -110,27 +129,34 @@ def main():
         out.append("")
 
     out.append("## Tests\n")
-    out.append("Matched by method name. *Waiting* tests are named in `ledger.json` with the reason.\n")
-    out.append("| Swift test file | Tests | Ported | Waiting | Notes |\n|---|---:|---:|---:|---|")
+    out.append(
+        "Matched by method name. *Waiting* tests need a type that is not ported yet; *dropped* ones"
+        " have no meaning on this platform. Both are named, with the reason, in `ledger.json`.\n"
+    )
+    out.append("| Swift test file | Tests | Ported | Waiting | Dropped | Notes |\n|---|---:|---:|---:|---:|---|")
     swift_total = kotlin_total = 0
     for test in tests:
-        swift_names = re.findall(r"func (test\w+)\s*\(", git(args.ios, "show", f"{pin}:{TESTS}{test}"))
+        swift_names = swift_test_names(git(args.ios, "show", f"{pin}:{TESTS}{test}"))
         twin = test_dir / (test[:-len(".swift")] + ".kt")
-        kotlin_names = set(re.findall(r"fun (test\w+)\s*\(", twin.read_text())) if twin.exists() else set()
+        kotlin_names = set(re.findall(r"fun (\w+)\s*\(", twin.read_text())) if twin.exists() else set()
         entry = test_notes.get(test, {})
         waiting = set(entry.get("waiting", []))
+        dropped = set(entry.get("dropped", []))
         have = [n for n in swift_names if n in kotlin_names]
         swift_total += len(swift_names)
         kotlin_total += len(have)
         if twin.exists():
-            unexplained = [n for n in swift_names if n not in kotlin_names and n not in waiting]
+            unexplained = [n for n in swift_names if n not in kotlin_names and n not in waiting | dropped]
             if unexplained:
                 problems.append(f"{test}: not ported and not accounted for: {', '.join(unexplained)}")
+            stale = sorted((waiting | dropped) & kotlin_names) + sorted((waiting | dropped) - set(swift_names))
+            if stale:
+                problems.append(f"{test}: listed as waiting/dropped but ported or gone: {', '.join(stale)}")
             if TESTS + test in drifted:
                 problems.append(f"{test} changed on lurker-ios main since the pin")
         out.append(
             f"| `{test}` | {len(swift_names)} | {len(have) if twin.exists() else '—'} "
-            f"| {len(waiting) or ''} | {entry.get('note', '')} |"
+            f"| {len(waiting) or ''} | {len(dropped) or ''} | {entry.get('note', '')} |"
         )
     out.append("")
     out.insert(4, f"Tests: **{kotlin_total:,} of {swift_total:,}** ported.\n")

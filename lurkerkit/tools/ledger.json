@@ -147,7 +147,209 @@
     "Client/OAuth.swift": "Leaf, but builds `URLRequest`s — waits for the client's request conventions.",
     "Session/SessionStore.swift": "Keychain → interface here, Keystore in `:app`.",
     "Session/OAuthClients.swift": "`UserDefaults` → interface here.",
-    "Store/SettingsCache.swift": "`UserDefaults` → interface here."
+    "Store/SettingsCache.swift": "`UserDefaults` → interface here.",
+    "Client/Uploads.swift": "All but `UploadProgressDelegate` (a `URLSessionTaskDelegate`), which becomes a counting OkHttp `RequestBody` in T6.",
+    "Model/Typing.swift": "`OutgoingTyping` is a mutable class (PORTING.md, structs that mutate, case 3). No Kotlin test until `TypingTests` can run against the store.",
+    "Session/NewestAnswer.swift": "A mutable class (case 3).",
+    "Model/UploadContentTypes.swift": "`[UTType]` → MIME patterns. Adds `application/json`, which `text/*` cannot reach and `.text` does by conformance.",
+    "Model/ServerAddress.swift": "Parses by hand to match `URLComponents`; edges pinned by a port-only test.",
+    "Model/NetworkAbbreviation.swift": "Grows by code point where Swift grows by grapheme cluster; differs only for names with combining marks.",
+    "Commands/SpoilerMarkup.swift": "Checked against the Swift over a corpus; differs only when a combining mark follows a `|`.",
+    "Rendering/NickColor.swift": "`lowercase()` applies final-sigma like the web; Swift does not, so a nick ending in `Σ` colours differently on iOS.",
+    "Rendering/NickHighlighter.swift": "Case-insensitive matching of non-ASCII nicks is engine-dependent; verify on a device.",
+    "Rendering/URLMatcher.swift": "A word boundary beside a combining mark is engine-dependent; verify on a device.",
+    "Rendering/IRCFormatting.swift": "`rawIndex` is tested from `RelayEnvelopeTests` (T3); checked against the Swift meanwhile.",
+    "Client/NotificationTap.swift": "Input is a `Map<String, Any?>`; FCM's all-strings data map is the shape Android will hand it.",
+    "Model/Settings.swift": "`SettingValue.Int` is 32-bit; a wire number past that is skipped rather than wrapped."
   },
-  "testNotes": {}
+  "testNotes": {
+    "BufferListPlaceholderTests.swift": {
+      "waiting": [
+        "testASnapshotAloneDoesNotMeanTheRosterLanded",
+        "testBacklogCompleteLatchesTheRoster",
+        "testBacklogCompleteSurvivesAReconnect",
+        "testResetClearsBacklogComplete",
+        "testTheTerminalFrameParses"
+      ],
+      "note": "Waiting on LurkerStore, ServerFrame, FrameParser."
+    },
+    "ClientCertificateTests.swift": {
+      "waiting": [
+        "testACertificateReadsItsExpiry",
+        "testAnUnreadableCertificateIsNotNoCertificate",
+        "testNullAndAbsentBothMeanNoCertificate",
+        "testAGeneratedCertificateRidesTheCreate",
+        "testAnImportedPairRidesTheCreate",
+        "testAnEditNeverCarriesACertificate",
+        "testNoCertificateSendsNoCertificateKeys",
+        "testACertificateNeedsTLS"
+      ],
+      "note": "Waiting on FrameParser, NetworkConfig, NetworkDraft."
+    },
+    "LinkPreviewStoreTests.swift": {
+      "waiting": [
+        "resolves",
+        "coalesces",
+        "dedupes",
+        "failureIsRetryable",
+        "unavailableWithoutExpiryIsAVerdict",
+        "splitsLargeBatch",
+        "resetClears",
+        "omittedUrlRecovers",
+        "transientIsReasked",
+        "verdictIsNotReasked",
+        "expiredVerdictIsReopenedByPriming",
+        "resetDuringFlushIsNotRepopulated",
+        "flushesDoNotOverlap",
+        "repaintsPerBatch",
+        "reportsTheUrlsThatMoved",
+        "repeatFailureIsSilent",
+        "reaskIsSilent",
+        "reportsOmittedUrlsToo",
+        "batchesFollowPrimingOrder",
+        "lapsedExpiryIsAVerdict",
+        "unansweredRetriesAreBounded",
+        "neverAskedIsSettled",
+        "awaitingReaskIsSettled",
+        "reaskInFlightIsSettled",
+        "ladderPersistsAcrossReasks",
+        "inFlightIsPending"
+      ],
+      "note": "Only the `PreviewReaskTests` suite is ported; the rest waits on LinkPreviewStore."
+    },
+    "NotificationTapTests.swift": {
+      "dropped": [
+        "testParsesAPayloadDecodedFromRealJSON"
+      ],
+      "note": "Pins what `JSONSerialization` makes of an APNs payload; a push reaches Android as FCM's string map, which the port-only tests cover."
+    },
+    "ProtocolVersionTests.swift": {
+      "waiting": [
+        "testTheConfigCarriesTheServersVersions",
+        "testAConfigThatRaisedItsMinimumRefusesThisBuild",
+        "testAConfigWithoutVersionsStatesNone",
+        "testEverySocketAnnouncesTheVersion",
+        "testARefusedUpgradeWith426MeansThisBuildIsTooOld",
+        "testOtherEndingsKeepTheirMeaning"
+      ],
+      "note": "Waiting on LurkerClient (`parseConfig`, `socketURL`, `closeFrame`)."
+    },
+    "SettingsTests.swift": {
+      "waiting": [
+        "testBootstrapParsesRegistryAndValues",
+        "testUnusableRegistryEntriesAreSkipped",
+        "testSettingsChangeFrameParses",
+        "testEmptyChangeFrameIsANoOp",
+        "testStoredValueWins",
+        "testUnsetKeyFallsThroughToTheRegistryDefault",
+        "testCallerFallbackAppliesBeforeBootstrap",
+        "testUnknownKeyFallsBackToTheCaller",
+        "testTypeMismatchFallsBackRatherThanCoercing",
+        "testChangeFramePatchesOneKeyAndLeavesTheRest",
+        "testChangeFrameCanSetAPreviouslyUnsetKey",
+        "testBootstrapReplacesRatherThanMerges",
+        "testRestValuesRemoveAKeyThatIsNoLongerStored",
+        "testEchoAfterReplaceIsIdempotent",
+        "testReplaceLeavesTheRegistryAlone",
+        "testUnrepresentableValuesAreSkippedNotGuessed",
+        "testCacheRoundTripsEveryValueKind",
+        "testCacheStartsEmptyAndClears",
+        "testCacheSaveReplacesRatherThanMerges",
+        "testCachedValueOverridesTheFallbackWithNoRegistry",
+        "testSeedingFromCacheLeavesLoadedFalse",
+        "testParsesChoiceLabelsAndFallsBackToTheRawValue",
+        "testParsesDependsOnFromTheRegistry",
+        "testSettingsWithoutDependenciesAreAlwaysActive",
+        "testClausesAreOred",
+        "testResolutionIsTransitive"
+      ],
+      "note": "Waiting on FrameParser, LurkerStore/ChatState, SettingsCache."
+    },
+    "SpoilerMarkupTests.swift": {
+      "waiting": [
+        "testRewritesUserAuthoredChatBodies",
+        "testLeavesServiceAndRawVerbsUntouched",
+        "testDoesNotRewriteGeneratedBodies"
+      ],
+      "note": "`SpoilerCommandCoverageTests` waits on CommandParser."
+    },
+    "UploadCapTests.swift": {
+      "waiting": [
+        "snapshotCarriesTheCap",
+        "anOldSnapshotSaysNothing",
+        "nonsenseIsNotAnAnswer",
+        "settingsFrameCarriesTheCap",
+        "anUnrelatedSettingsFrameCarriesNoCap",
+        "snapshotSeedsTheStore",
+        "aSnapshotWithoutACapClearsIt",
+        "aSettingsFrameRaisesTheCap",
+        "anUnrelatedSettingsFrameLeavesTheCapAlone",
+        "aFreshStateHasNoCap"
+      ],
+      "note": "Waiting on FrameParser/ServerFrame and LurkerStore/ChatState."
+    },
+    "UploadContentTypesTests.swift": {
+      "dropped": [
+        "dialectsDeriveTheRightMime",
+        "muchOfferedTextHasNoMime"
+      ],
+      "note": "Extension→MIME lookups are `MimeTypeMap` on Android, invisible to a JVM module; they belong in an instrumented `:app` test. Two more are ported in part: UTI-conformance assertions have no MIME equivalent."
+    },
+    "UploadHistoryTests.swift": {
+      "waiting": [
+        "parsesALiveRow",
+        "parsesATombstone",
+        "pastedRowHasNoFilename",
+        "garbageIsEmpty"
+      ],
+      "note": "Only the `UploadKind` cases are ported; the rest waits on FrameParser, UploadItem."
+    },
+    "UploadProgressTests.swift": {
+      "waiting": [
+        "testProcessingFrameParses",
+        "testSendingFrameCarriesItsPercent",
+        "testAbsentPercentIsNilRatherThanZero",
+        "testFrameWithoutATokenIsIgnored",
+        "testUnknownPhaseIsIgnored",
+        "testDestinationIsOptional"
+      ],
+      "note": "Frame-parsing cases wait on FrameParser/ServerFrame."
+    },
+    "WhoisTests.swift": {
+      "waiting": [
+        "testParsesTheFullReplyUsingIrcFrameworksFieldNames",
+        "testIdleAndSignonArriveAsStringsBecauseIrcParametersAreText",
+        "testIdleAndSignonAlsoAcceptRealJsonNumbers",
+        "testAnAbsentSignonIsNilRatherThanTheEpoch",
+        "testTheNotFoundMissIsAnOrdinaryReplyCarryingAnError",
+        "testHostmaskFillsAMissingHalfWithAStarAndIsNilWithNeither",
+        "testChannelsIsOneSpaceSeparatedStringNotAnArray",
+        "testAGreedySigilPeelWouldEatTheChannelSigil",
+        "testAnUnprefixedChannelKeepsItsOwnSigil",
+        "testSplitPrefersTheLargestPeelThatStillLeavesAChannel",
+        "testASigilOnlyTokenIsDroppedRatherThanBecomingATappableBlank",
+        "testATokenOnAnUnknownChannelTypeIsKeptUnpeeledRatherThanDropped",
+        "testAnAbsentChannelsLineIsNoChannels",
+        "testWhoisResultSurvivesCarryingNoTarget",
+        "testAReplyWeCannotAddressIsRefused",
+        "testAReplyIsCachedUnderTheServersCasingAndFoundUnderAnyOther",
+        "testAReplyFreesTheInFlightSlot",
+        "testANotFoundFreesTheSlotToo",
+        "testAReplyForOneNickLeavesAnotherLookupPending",
+        "testTheSameNickOnTwoNetworksIsTwoLookups",
+        "testDroppingANetworkForgetsItsRepliesNotesAndPendingLookups",
+        "testRequestingAWhoisWithNoSocketClaimsNothing",
+        "testRequestingAWhoisForNobodyDoesNothing",
+        "testAPaddedNickIsKeyedTheWayTheServerWillAnswerIt",
+        "testASocketDropFreesEveryLookupThatWasOutOverIt",
+        "testParsesTheNoteUpdateFrame",
+        "testANoteAboutNobodyIsRefused",
+        "testAFrameWithNoReadableNoteIsRefusedRatherThanTreatedAsAClear",
+        "testTheNoteUpdateFramePatchesOneNick",
+        "testTheSnapshotSeedsNotesAndDropsUnusableRows",
+        "testTheSnapshotReplacesNotesWholesale"
+      ],
+      "note": "Only the nick-note cases are ported; the rest waits on WhoisResult, FrameParser, LurkerStore, ChatViewModel."
+    }
+  }
 }

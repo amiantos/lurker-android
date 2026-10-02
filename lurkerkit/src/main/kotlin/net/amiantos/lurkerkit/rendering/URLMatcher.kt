@@ -1,0 +1,227 @@
+// Copyright (c) 2026 Brad Root
+// SPDX-License-Identifier: MPL-2.0
+
+package net.amiantos.lurkerkit.rendering
+
+import net.amiantos.lurkerkit.support.TextRange
+import net.amiantos.lurkerkit.support.substring
+import net.amiantos.lurkerkit.support.unicodeRegex
+import java.util.regex.PatternSyntaxException
+
+/**
+ * URL auto-linking, ported from the lurker repo's `shared/urlPattern.ts` (a directly
+ * portable regex) plus its trailing-punctuation trim and scheme inference.
+ */
+object URLMatcher {
+
+    /** The exact `shared/urlPattern.ts` source, applied case-insensitively. */
+    const val pattern =
+        """(?:(?:https?|ftps?)://|mailto:|www\.)[^\s<>`]+|\b[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9][A-Za-z0-9.-]*\.[A-Za-z]{2,}\b"""
+
+    private val regex: Regex? = try {
+        unicodeRegex(pattern, ignoreCase = true)
+    } catch (_: PatternSyntaxException) {
+        null
+    }
+
+    /**
+     * One URL in a message, as [matches] reports it.
+     *
+     * Port note: the Swift returns a named tuple, `(range:href:delimiters:)`.
+     */
+    data class Match(val range: TextRange, val href: String, val delimiters: TextRange?)
+
+    /**
+     * Every URL-ish span in `text`, UNTRIMMED and in order.
+     *
+     * The one place the pattern is run, so that everything asking "where are the URLs in this
+     * message" gets the same answer. ⚠⚠ `PreviewSelection` used to carry its own copy of the
+     * pattern AND its own trimmer, and the trimmer differed: it dropped a closing bracket
+     * unconditionally where `trimTrailingPunctuation` counts them. So
+     * `…/wiki/Rust_(programming_language)` was resolved one character short of the URL the
+     * reader actually taps — the card silently never appeared, and the 404 was cached for an
+     * hour under a string appearing nowhere in the message. Two parsers disagreeing about where
+     * a URL ends is the bug; one parser is the fix.
+     *
+     * Untrimmed because the trim is not always wanted: inside angle brackets the author has
+     * stated where the address ends, and `isBracketedUrl` has to measure against what was
+     * actually matched.
+     */
+    internal fun rawRanges(text: String): List<TextRange> {
+        val regex = regex ?: return emptyList()
+        return regex.findAll(text).map { TextRange(it.range.first, it.range.last + 1) }.toList()
+    }
+
+    /**
+     * Whether a match is wrapped in angle brackets — `<https://example.com>`.
+     *
+     * RFC 3986 Appendix C's convention: brackets delimit a URL so a reader (and a parser)
+     * doesn't have to guess where it ends inside prose. Discord borrowed it as "link, but no
+     * unfurl", and that is the meaning here — `PreviewSelection` refuses to resolve what they
+     * wrap. It is the only per-link control a poster has over an unfurl, which is why there is
+     * no other one.
+     *
+     * ⚠⚠ Measured against the UNTRIMMED match, and this is the whole subtlety.
+     * `trimTrailingPunctuation` eats the `.` off `<https://example.com/a.>`, so measuring from
+     * the trimmed length looks one character short of the `>` — and the brackets stop being
+     * recognised on exactly the URLs whose ends are ambiguous, which is the case the convention
+     * exists for.
+     *
+     * ⚠ No scheme test, deliberately: `<www.example.com>` is the same convention, and callers
+     * apply their own scheme rules afterwards.
+     */
+    internal fun isBracketedUrl(text: String, range: TextRange): Boolean {
+        if (range.start <= 0 || range.end >= text.length) return false
+        return text[range.start - 1] == '<' && text[range.end] == '>'
+    }
+
+    /**
+     * URL ranges (into `text`) paired with their resolved hrefs.
+     *
+     * `delimiters` is the range of the `<…>` wrapping the URL, when it has them — the caller
+     * deletes it so the brackets don't render, exactly as the web client does. Null otherwise.
+     *
+     * ⚠⚠ Inside brackets the whole match is the URL, with NO trailing-punctuation trim. That is
+     * the entire point of the convention: the author has stated where the address ends, so
+     * `<https://en.wikipedia.org/wiki/Foo.>` keeps its full stop instead of having it guessed
+     * away. Trimming there would also break `isBracketedUrl`, which measures the untrimmed
+     * match — see its note.
+     *
+     * ⚠⚠ `range` is the ONLY span of the address on offer, and the untrimmed match is
+     * deliberately not handed back beside it. It used to be, for the preview-hiding deletion,
+     * and having both within reach is what let that deletion take a closing delimiter whose
+     * partner sat in the prose — `look at this (…a.png)` rendering as `look at this (`
+     * (lurker-ios#126). Anything that needs to reach past the address for punctuation asks
+     * `PreviewText.absorbing`, which knows which characters are safe to take.
+     */
+    fun matches(text: String): List<Match> =
+        rawRanges(text).mapNotNull { range ->
+            val matched = text.substring(range)
+            if (isBracketedUrl(text, range) && carriesAScheme(matched)) {
+                return@mapNotNull Match(
+                    range, href(matched),
+                    TextRange.of(location = range.start - 1, length = range.length + 2),
+                )
+            }
+            val trimmed = trimTrailingPunctuation(matched)
+            if (trimmed.isEmpty()) return@mapNotNull null
+            Match(
+                TextRange.of(location = range.start, length = trimmed.length),
+                href(trimmed),
+                null,
+            )
+        }
+
+    /**
+     * Whether a match is a URI as WRITTEN, rather than a bare address the matcher inferred a
+     * scheme for.
+     *
+     * ⚠⚠ This is what keeps the `<…>` convention off email. `isBracketedUrl` deliberately applies
+     * no scheme test — `<www.example.com>` is the same convention — and the renderer took that
+     * permissive answer as licence to DELETE the brackets, so
+     * `Co-Authored-By: Claude <noreply@anthropic.com>` rendered as
+     * `Co-Authored-By: Claude noreply@anthropic.com`. RFC 5322 angle-addr is ordinary traffic on
+     * IRC — git trailers, quoted mail, "mail me at <foo@bar.com>" — and this fires in the
+     * app-wide linkifier, so it hit every message for every user with both preview settings off.
+     *
+     * RFC 3986 Appendix C is about delimiting a URI. A bare `foo@bar.com` is not one; we merely
+     * guess `mailto:` for it, and a guess is not grounds for rewriting what somebody typed.
+     */
+    private fun carriesAScheme(matched: String): Boolean {
+        val lower = matched.lowercase()
+        return lower.startsWith("http://") || lower.startsWith("https://") ||
+            lower.startsWith("ftp://") || lower.startsWith("ftps://") ||
+            lower.startsWith("mailto:") || lower.startsWith("www.")
+    }
+
+    /**
+     * `text` with every URL replaced by a single space — what a content pattern is matched
+     * against, so a word that appears only inside a link doesn't trigger it (a nick in
+     * `https://example.com/nick`, say). The web's `stripUrls`.
+     *
+     * A space rather than nothing: removing the URL outright would fuse the words on either
+     * side of it into one that was never written.
+     *
+     * Deliberately the raw pattern, *not* `matches` — that one trims trailing
+     * punctuation so a link can be tapped without swallowing the sentence's full stop, which
+     * is a rendering concern. Here the whole match goes, exactly as the shared matcher does
+     * it, so the two clients agree on what "the text" is.
+     */
+    fun blanked(text: String): String {
+        val regex = regex ?: return text
+        return regex.replace(text, " ")
+    }
+
+    /**
+     * Strip trailing sentence punctuation and unbalanced closing brackets, so
+     * `(see https://x.com)` and `end of https://x.com.` don't swallow the delimiter.
+     *
+     * ⚠⚠ One backward walk, and the two kinds INTERLEAVE within it. Two separate passes — a
+     * sentence pass, then a bracket pass — cannot see each other: `(https://e.test/a.png.)`
+     * stopped the sentence pass dead on the `)`, and the bracket pass then exposed a `.` nothing
+     * looked at again. The address kept a full stop nobody typed, the tappable link 404'd, and
+     * `PreviewSelection` asked the resolver about a string appearing nowhere in the message —
+     * which is negative-cached for an hour, the exact failure `rawRanges` warns about.
+     *
+     * ⚠⚠ Balance is carried in `surplus` — closers minus openers, tallied ONCE up front and
+     * decremented as closers come off — rather than recounted per character. Recounting is what
+     * makes this quadratic, and the web's copy of this function carries a note that it cost
+     * ~0.5ms per render on a line of a hundred `)`. This runs in the app-wide linkifier, on every
+     * message, so it stays linear. Counting only as characters leave the END is what makes the
+     * running tally exact: the remaining text is always a prefix of what was counted.
+     *
+     * A character with no entry has surplus 0, so ordinary text ends the walk without a special
+     * case, and a BALANCED pair is kept — `…/wiki/Rust_(programming_language)` is the whole
+     * reason this counts rather than stripping closers outright.
+     *
+     * ⚠ `…` counts as sentence punctuation. macOS substitutes it for `...` while you type, so it
+     * is ordinary in pasted text, and without it the ellipsis rode into the href. It has to be in
+     * `PreviewText.absorbable` too — this decides where the address ENDS, that decides what the
+     * address may TAKE WITH IT when its preview stands in for it, and a character this one drops
+     * that one has to be willing to delete or the punctuation is orphaned on screen.
+     *
+     * Port note: a `StringBuilder` shortened in place where the Swift drops from a `Substring`,
+     * because each is the constant-time way to take one character off the end — `dropLast` on
+     * a Kotlin `String` copies, which would make the walk quadratic again.
+     *
+     * Port note: the Swift walks grapheme clusters and this walks UTF-16 units. Every character
+     * it acts on is a single unit, so the two agree unless one of them carries a combining mark:
+     * to Swift `)` + U+0301 is one cluster that is neither a bracket nor punctuation, where here
+     * the `)` is still tallied as a closer.
+     */
+    internal fun trimTrailingPunctuation(url: String): String {
+        val result = StringBuilder(url)
+        val trailing: Set<Char> = setOf('.', ',', ';', ':', '!', '?', '\'', '"', '…')
+        val surplus = mutableMapOf<Char, Int>()
+        for (ch in result) {
+            when (ch) {
+                '(' -> surplus[')'] = surplus.getOrDefault(')', 0) - 1
+                ')' -> surplus[')'] = surplus.getOrDefault(')', 0) + 1
+                '[' -> surplus[']'] = surplus.getOrDefault(']', 0) - 1
+                ']' -> surplus[']'] = surplus.getOrDefault(']', 0) + 1
+                '{' -> surplus['}'] = surplus.getOrDefault('}', 0) - 1
+                '}' -> surplus['}'] = surplus.getOrDefault('}', 0) + 1
+                else -> {}
+            }
+        }
+        while (true) {
+            val last = result.lastOrNull() ?: break
+            if (last in trailing) {
+                result.setLength(result.length - 1)
+                continue
+            }
+            if (surplus.getOrDefault(last, 0) <= 0) break
+            surplus[last] = surplus.getValue(last) - 1
+            result.setLength(result.length - 1)
+        }
+        return result.toString()
+    }
+
+    /** `www.` → `http://`, a bare `name@host.tld` → `mailto:`, otherwise as-is. */
+    internal fun href(url: String): String {
+        val lower = url.lowercase()
+        if (lower.startsWith("www.")) return "http://$url"
+        if (!lower.contains("://") && !lower.startsWith("mailto:") && url.contains("@")) return "mailto:$url"
+        return url
+    }
+}

@@ -55,10 +55,11 @@ is an interface here and an implementation in `:app`:
 | computed property | `val x: T get() = …` |
 | `T?` | `T?` |
 | `Int` | `Int` — **except** message/event ids, byte counts and epoch milliseconds, which are `Long` |
+| `UInt32`, `UInt8` | `UInt`, `UByte` where the Swift relies on unsigned wraparound; otherwise `Int` |
 | `Date` | `java.time.Instant` |
 | `TimeInterval` | `java.time.Duration` |
 | `Data` | `okio.ByteString` in a stored property (value equality); `ByteArray` only in passing |
-| `URL` | `okhttp3.HttpUrl` for http(s); `String` where it is only carried. Never `java.net.URL` |
+| `URL` | `okhttp3.HttpUrl` for http(s); `String` where it is only carried; `java.io.File` for a file URL. Never `java.net.URL` |
 | `NSRange` | `support.TextRange` |
 | `[T]`, `[K: V]`, `Set<T>` | `List<T>`, `Map<K, V>`, `Set<T>` (the read-only interfaces) |
 | `CaseIterable.allCases` | `entries` |
@@ -77,6 +78,9 @@ adding a case breaks the build here exactly as it does in Swift.
 only ever carried as a value stays a plain `enum class` / `sealed interface`.
 
 **Named tuples** in a signature become a small `data class`.
+
+**A case named like a builtin** (`SettingValue.string`) keeps its name (`SettingValue.String`);
+inside that type the builtin is written `kotlin.String`.
 
 ### Structs that mutate
 
@@ -105,8 +109,12 @@ This is where a faithful-looking translation goes wrong.
 - `lowercased()` / `uppercased()` → `lowercase()` / `uppercase()`. Never a `Locale`-taking
   overload with the default locale. Where the Swift folds ASCII only (IRC targets), so does
   the Kotlin.
-- `trimmingCharacters(in: .whitespacesAndNewlines)` → `trim()`.
-  `.whitespaces` (no newlines) → `trim { it.isWhitespace() && it != '\n' && it != '\r' }`.
+- `trimmingCharacters(in: .whitespacesAndNewlines)` → `trim()`. (The two sets differ only at
+  U+0085 and U+001C–001F.)
+  `.whitespaces` (no newlines) → `trim { it.isInWhitespaces() }`, from `support/`.
+- Swift compares strings by canonical equivalence (`é` equals `e` + U+0301); Kotlin compares
+  code units. Nothing here normalises, so the two differ only on differently-normalised input.
+  Leave it, and do not add normalisation the Swift does not have.
 - ⚠ `split(separator:)` **omits empty pieces** by default; Kotlin's `split` keeps them. Port it
   as `split(…).filter { it.isNotEmpty() }` unless the Swift passes
   `omittingEmptySubsequences: false`. `components(separatedBy:)` keeps them, like Kotlin.
@@ -135,6 +143,8 @@ The comments are the lore, and they are ported with the code.
 - Reword only what is no longer true of the Kotlin: Apple API names, Swift language mechanics.
   Where a comment recounts a bug that happened on iOS, keep it and say "on iOS".
 - A bare `#123` in the Swift is a lurker-ios issue: write `lurker-ios#123`. `lurker#123` stays.
+  Where the bare number is plainly the server's (a number lurker-ios has never reached, or a
+  comment about server behaviour), write `lurker#123`.
 - Do not invent warnings. Where the Kotlin deliberately differs from the Swift, say so in a
   comment that starts `Port note:`.
 
@@ -157,9 +167,29 @@ The comments are the lore, and they are ported with the code.
   and comes back with that type.
 - Tests this port adds (usually to pin something Swift gets for free) go at the bottom of the
   class under a `// Port-only:` comment.
+- A Swift Testing case (`@Test("display name") func name()`) keeps its function name; the
+  display name becomes a comment above it.
+- A Swift test file that is only partly portable is ported partly: the methods that need only
+  ported types now, the rest named in a `// Waiting on <Type>: …` comment at the bottom of the
+  class and in `tools/ledger.json`.
 - ⚠ The host tests run OpenJDK. Regex and `java.time` behaviour on the device is the same API
   over a different implementation; a file that leans on either is a candidate for the
   instrumented suite when one exists.
+
+## Checking against the Swift
+
+The Swift compiles on its own. For a file whose behaviour lives in string handling, the
+strongest check is to run both implementations over the same inputs:
+
+1. Write a corpus of edge cases as JSON: empty, non-ASCII, astral, combining marks, the
+   boundaries the comments warn about.
+2. `swiftc` the real LurkerKit source files with a small `main.swift` that reads the corpus
+   and writes each result.
+3. Run the Kotlin over the same corpus from a throwaway test, and diff.
+
+Where they differ, either the Kotlin is wrong, or the difference is one of the Unicode edges
+above — in which case it gets a `Port note:` saying so. Answers taken from the Swift this way
+are good material for a `// Port-only:` test (see `ServerAddressTests`).
 
 ## What not to do
 
