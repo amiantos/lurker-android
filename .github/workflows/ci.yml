@@ -48,7 +48,7 @@ jobs:
       # lintDebug rather than lint — identical today (no flavors), but it won't quietly
       # change meaning if a flavor is ever added.
       - name: Build, lint and unit test
-        run: ./gradlew assembleDebug lintDebug testDebugUnitTest
+        run: ./gradlew assembleDebug lintDebug testDebugUnitTest :lurkerkit:test
 
       # if: failure() — the reports are only interesting when something broke, and that
       # is exactly when you can't reproduce it from the log alone.
@@ -60,4 +60,6 @@ jobs:
           path: |
             app/build/reports/**
             app/build/test-results/**
+            lurkerkit/build/reports/**
+            lurkerkit/build/test-results/**
           retention-days: 7

@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Lurker"
 include(":app")
+include(":lurkerkit")

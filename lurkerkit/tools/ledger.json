@@ -1,0 +1,153 @@
+{
+  "pin": "b14202ef57ad0be65c9f514abedd37cc81060e12",
+  "tranches": [
+    {
+      "id": "T1",
+      "title": "Leaves",
+      "about": "Files with no dependency on any other LurkerKit type.",
+      "files": [
+        "Client/JSON.swift",
+        "Client/NotificationTap.swift",
+        "Client/ProtocolVersion.swift",
+        "Client/Uploads.swift",
+        "Commands/RelayArgs.swift",
+        "Commands/SpoilerMarkup.swift",
+        "Model/BufferListPlaceholder.swift",
+        "Model/BufferPlaceholder.swift",
+        "Model/ChannelName.swift",
+        "Model/ClientCertificate.swift",
+        "Model/FavoriteOrder.swift",
+        "Model/ISOTime.swift",
+        "Model/LocalNetworking.swift",
+        "Model/Member.swift",
+        "Model/NetworkAbbreviation.swift",
+        "Model/NickNoteSet.swift",
+        "Model/Presence.swift",
+        "Model/PreviewReask.swift",
+        "Model/ServerAddress.swift",
+        "Model/Settings.swift",
+        "Model/Speakers.swift",
+        "Model/Typing.swift",
+        "Model/UploadContentTypes.swift",
+        "Model/UploadKind.swift",
+        "Rendering/IRCFormatting.swift",
+        "Rendering/NickColor.swift",
+        "Rendering/NickHighlighter.swift",
+        "Rendering/URLMatcher.swift",
+        "Session/NewestAnswer.swift"
+      ]
+    },
+    {
+      "id": "T2",
+      "title": "Core entities",
+      "about": "Buffers, messages, networks and what hangs directly off them.",
+      "files": [
+        "Model/Buffer.swift",
+        "Model/Message.swift",
+        "Model/DccChat.swift",
+        "Model/Reactions.swift",
+        "Model/Replies.swift",
+        "Model/Favorite.swift",
+        "Model/Network.swift",
+        "Model/MemberPrefix.swift",
+        "Model/WhoisResult.swift",
+        "Model/ProfileStatus.swift",
+        "Model/PendingJoins.swift",
+        "Model/PendingDccOpen.swift",
+        "Model/BufferOrder.swift",
+        "Model/UnsentCorrelator.swift",
+        "Model/Highlight.swift",
+        "Model/HighlightGrouping.swift",
+        "Model/MessageGrouping.swift",
+        "Model/Modes.swift",
+        "Model/ModeNarration.swift",
+        "Model/MessageActions.swift",
+        "Model/UploadItem.swift",
+        "Model/UploadsRequest.swift",
+        "Model/SearchQuery.swift",
+        "Model/SearchRequest.swift",
+        "Model/NetworkConfig.swift",
+        "Model/NetworkProxy.swift",
+        "Model/NetworkPreset.swift",
+        "Model/LinkPreview.swift"
+      ]
+    },
+    {
+      "id": "T3",
+      "title": "Ignores, commands, message rows",
+      "about": "The pure logic layered on the entities: what is hidden, what a slash command means, what the message list draws.",
+      "files": [
+        "Model/IgnoreRule.swift",
+        "Model/IgnoreMatch.swift",
+        "Model/IgnoreSet.swift",
+        "Commands/IgnoreArgs.swift",
+        "Model/RelayEnvelope.swift",
+        "Model/RelayBotSet.swift",
+        "Commands/Command.swift",
+        "Commands/CommandCompletion.swift",
+        "Commands/CommandParser.swift",
+        "Model/Consolidation.swift",
+        "Model/EventFilter.swift",
+        "Model/HistoryCountBy.swift",
+        "Model/MessageRows.swift",
+        "Model/NickCompletion.swift",
+        "Model/Drafts.swift",
+        "Model/PreviewText.swift",
+        "Model/PreviewHiding.swift",
+        "Model/PreviewSelection.swift"
+      ]
+    },
+    {
+      "id": "T4",
+      "title": "Wire",
+      "about": "Frames and the parser that produces them.",
+      "files": [
+        "Client/ServerFrame.swift",
+        "Client/FrameParser.swift"
+      ]
+    },
+    {
+      "id": "T5",
+      "title": "Store",
+      "about": "`ChatState`, the reducer, and what reads straight off it. Replaces `:app`'s prototype store.",
+      "files": [
+        "Store/LurkerStore.swift",
+        "Store/SettingsCache.swift",
+        "Model/ConnectionBannerState.swift",
+        "Model/StatusLight.swift",
+        "Model/NetworkRow.swift",
+        "Session/AppBadge.swift"
+      ]
+    },
+    {
+      "id": "T6",
+      "title": "Client",
+      "about": "REST + WebSocket over OkHttp. Replaces `:app`'s prototype client.",
+      "files": [
+        "Client/LurkerClient.swift",
+        "Client/LinkPreviews.swift",
+        "Client/InstanceConfig.swift",
+        "Client/OAuth.swift"
+      ]
+    },
+    {
+      "id": "T7",
+      "title": "Session",
+      "about": "The view model the UI talks to, and what it persists.",
+      "files": [
+        "Session/ChatViewModel.swift",
+        "Session/SessionStore.swift",
+        "Session/OAuthClients.swift"
+      ]
+    }
+  ],
+  "notes": {
+    "Client/JSON.swift": "→ `client/Json.kt`. `FailableDecodable` is `Json.decodeEach`.",
+    "Model/ISOTime.swift": "One ISO parser covers both of LurkerKit's; no lock.",
+    "Client/OAuth.swift": "Leaf, but builds `URLRequest`s — waits for the client's request conventions.",
+    "Session/SessionStore.swift": "Keychain → interface here, Keystore in `:app`.",
+    "Session/OAuthClients.swift": "`UserDefaults` → interface here.",
+    "Store/SettingsCache.swift": "`UserDefaults` → interface here."
+  },
+  "testNotes": {}
+}
