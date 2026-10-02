@@ -5,6 +5,10 @@ package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.MessageActionContext
+import net.amiantos.lurkerkit.model.MessageActionKey
+import net.amiantos.lurkerkit.model.MessageActionScope
+import net.amiantos.lurkerkit.model.MessageActions
 import net.amiantos.lurkerkit.model.MessageReaction
 import net.amiantos.lurkerkit.model.ReactionGroup
 import net.amiantos.lurkerkit.model.Reactions
@@ -12,6 +16,7 @@ import net.amiantos.lurkerkit.support.Result
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** IRCv3 reactions (lurker-ios#183): the wire, the side map, and the gates. */
@@ -82,6 +87,35 @@ class ReactionsTests {
         assertFalse(Reactions.canSend(ok, target = "=bob", networkCanReact = true), "DCC chat")
     }
 
+    @Test
+    fun testReactActionFollowsTheSendGate() {
+        val keys = { message: Message, canReact: Boolean ->
+            MessageActions.build(
+                message,
+                scope = MessageActionScope(networkId = 1, isBookmarked = false, target = "#lurker", canReact = canReact),
+            ).map { it.key }
+        }
+        assertTrue(keys(line(1), true).contains(MessageActionKey.React))
+        assertTrue(keys(line(1, isSelf = true), true).contains(MessageActionKey.React), "you can react to your own line")
+        assertFalse(keys(line(1), false).contains(MessageActionKey.React))
+        assertFalse(keys(line(1, type = EventType.Notice), true).contains(MessageActionKey.React))
+
+        var reacted: Message? = null
+        val context = MessageActionContext(
+            reply = { _ -> }, copy = { _ -> }, setBookmark = { _, _ -> }, showProfile = { _ -> },
+            react = { reacted = it },
+        )
+        val scope = MessageActionScope(networkId = 1, isBookmarked = false, target = "#lurker", canReact = false)
+        MessageActions.run(MessageActionKey.React, line(1), scope = scope, context = context)
+        assertNull(reacted, "not offered, so not run")
+        MessageActions.run(
+            MessageActionKey.React, line(1),
+            scope = MessageActionScope(networkId = 1, isBookmarked = false, target = "#lurker", canReact = true),
+            context = context,
+        )
+        assertEquals(1L, reacted?.id)
+    }
+
     // Port-only:
 
     /**
@@ -121,11 +155,9 @@ class ReactionsTests {
     // testCanReactNeedsTheFlagAndALiveLink, testCanReactNeedsOurOwnSocket,
     // testANickCollisionNeverFoldsIntoOurReaction, testAReactionToALineNobodyLoadedIsDropped,
     // testARevisionIsPerBuffer, testDroppingTheSystemBufferLeavesNetworkReactionsAlone
-    //
-    // Waiting on MessageActions: testReactActionFollowsTheSendGate
 }
 
-// Waiting on FrameParser (`parseActivity`), FeedReaction, FeedCursor: the whole
+// Waiting on FrameParser (`parseActivity`): the whole
 // `ActivityFeedParsingTests` suite — testHighlightAndReactionRowsAndThePairedCursor,
 // testOneSidedCursorStillPagesAndNullEnds, testAReactionRowWithoutAValueIsDropped
 

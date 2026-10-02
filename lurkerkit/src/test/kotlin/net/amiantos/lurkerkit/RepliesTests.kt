@@ -5,11 +5,15 @@ package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.MessageActionKey
+import net.amiantos.lurkerkit.model.MessageActionScope
+import net.amiantos.lurkerkit.model.MessageActions
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.ReplyContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** IRCv3 replies (lurker-ios#184): the wire, the display rules, the Reply gate, the send. */
@@ -53,6 +57,33 @@ class RepliesTests {
 
     // MARK: - Reply gate
 
+    private fun replyTitle(message: Message, target: String, canReact: Boolean): String? =
+        MessageActions.build(
+            message,
+            scope = MessageActionScope(networkId = 1, isBookmarked = false, target = target, canReact = canReact),
+        ).firstOrNull { it.key == MessageActionKey.Reply }?.title
+
+    @Test
+    fun testChannelReplyIsAlwaysOffered() {
+        assertEquals("Reply to bob", replyTitle(line(), target = "#c", canReact = false))
+        assertEquals("Reply to bob", replyTitle(line(msgid = null), target = "#c", canReact = false), "it still addresses them")
+    }
+
+    @Test
+    fun testYourOwnLineIsTagOnly() {
+        assertEquals("Reply to yourself", replyTitle(line(isSelf = true), target = "#c", canReact = true))
+        assertNull(replyTitle(line(isSelf = true), target = "#c", canReact = false))
+        assertNull(replyTitle(line(isSelf = true, msgid = null), target = "#c", canReact = true))
+    }
+
+    @Test
+    fun testADmIsTagOnly() {
+        assertEquals("Reply to bob", replyTitle(line(), target = "bob", canReact = true))
+        assertNull(replyTitle(line(), target = "bob", canReact = false))
+        assertNull(replyTitle(line(e2e = true), target = "bob", canReact = true))
+        assertNull(replyTitle(line(), target = "=bob", canReact = true), "a DCC chat carries no tags")
+    }
+
     @Test
     fun testReplyableNeedsAStampedConversationLine() {
         assertTrue(Replies.replyable(line(type = EventType.Notice), target = "#c"))
@@ -75,10 +106,7 @@ class RepliesTests {
     // testNoQuoteKeepsTheAddressItIsTheOnlySignOfWhoItsTo, testAnActionKeepsItsText,
     // testIgnoredSinceHidesTheQuoteButNotYourOwnLine, testARelayedParentQuotesThePersonInside
     //
-    // Waiting on MessageActions, MessageActionScope (and the private `replyTitle` helper):
-    // testChannelReplyIsAlwaysOffered, testYourOwnLineIsTagOnly, testADmIsTagOnly
-    //
-    // Waiting on UnsentCorrelator, UnsentLine, LurkerStore: testARefusedLineComesHomeWithItsReply
+    // Waiting on UnsentLine, LurkerStore: testARefusedLineComesHomeWithItsReply
 }
 
 // Waiting on IgnoreSet, RelayBotSet, NickCompletion (`Replies.presenting`): the whole
@@ -88,6 +116,6 @@ class RepliesTests {
 // testTakesBackTheAddressAndNothingElse, testLeavesADraftThatNoLongerOpensWithIt,
 // testIsAddressedStillAgrees
 //
-// Waiting on NickCompletion, IgnoreSet, RelayBotSet, MessageActions: the whole
+// Waiting on NickCompletion, IgnoreSet, RelayBotSet: the whole
 // `ReplyReviewTests` suite — testCopyKeepsTheAddressTheQuoteHides, testNicksFoldAsciiOnly,
 // testStripAddressTakesEverySpaceAfterTheMark

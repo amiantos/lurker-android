@@ -1,0 +1,384 @@
+// Copyright (c) 2026 Brad Root
+// SPDX-License-Identifier: MPL-2.0
+
+package net.amiantos.lurkerkit.model
+
+/**
+ * Which per-message action a descriptor stands for. The key is the identity; the descriptor
+ * beside it is only how the action presents itself.
+ */
+enum class MessageActionKey(val rawValue: String) {
+    Reply("reply"),
+
+    /** Open the reaction sheet on the line (lurker-ios#183). */
+    React("react"),
+    Copy("copy"),
+    Bookmark("bookmark"),
+
+    /**
+     * Open the profile of the person the line is *from* (lurker-ios#12) — which on a
+     * re-attributed relay line is the bridge, not the speaker. See `profileSubject`.
+     */
+    Profile("profile"),
+
+    // A long press that lands on a link is about the link, not the line it's in — see
+    // `MessageActions.build(url)`.
+    OpenLink("openLink"),
+    CopyLink("copyLink"),
+    ShareLink("shareLink");
+
+    companion object {
+        fun fromRawValue(raw: String): MessageActionKey? = entries.firstOrNull { it.rawValue == raw }
+    }
+}
+
+/**
+ * The two facts a message's menu needs that aren't on the message itself.
+ *
+ * `Message` is what a buffer's log holds, so it carries no idea which buffer that is, and
+ * bookmark state is account-wide rather than per-line. Both are the caller's to supply, and
+ * bundling them keeps `build` and `run` from growing a parameter each.
+ */
+data class MessageActionScope(
+    /**
+     * The network of the buffer the line is in. **Null means the app-scoped system buffer**,
+     * which is what makes a line unbookmarkable — see the gate in `build`.
+     */
+    val networkId: Int?,
+    /** Whether this line is currently saved, from `ChatState.isBookmarked(_:)`. */
+    val isBookmarked: Boolean,
+    /** The buffer's target — whether it's a conversation a tag can ride to (`Reactions.isConversation`). */
+    val target: String = "",
+    /** `ChatState.canReact(networkId:)` at the press: the network is up and takes the tags. */
+    val canReact: Boolean = false,
+)
+
+/**
+ * One entry in a message's action menu.
+ *
+ * A plain value with no closure in it, deliberately: the menu is rebuilt for whichever row the
+ * finger landed on, and a descriptor that captured its own side effect would have to capture the
+ * screen too. Side effects are dispatched through `MessageActions.run` with a context the caller
+ * supplies instead — see `MessageActionContext`.
+ *
+ * Port note: built inside the kit only, as in LurkerKit, where the struct has no public
+ * `init` — so the constructor and `copy` are internal.
+ */
+@ConsistentCopyVisibility
+data class MessageAction internal constructor(
+    val key: MessageActionKey,
+    /** The menu row's title, already interpolated ("Reply to alice"). */
+    val title: String,
+    /**
+     * An SF Symbol name for the row's glyph.
+     *
+     * Port note: carried as LurkerKit names it — there are no SF Symbols on Android, so the
+     * app maps the name (or, better, `key`) to an icon of its own.
+     */
+    val symbol: String,
+)
+
+/**
+ * Where a message action's effects go. The two the caller owns are the two that touch the
+ * platform: the composer, and the clipboard.
+ *
+ * This is what keeps the builder testable without a screen, and it's why `run` lives
+ * here rather than in the screen: a second message-list style gets the same menu, with the same
+ * behaviour, by supplying its own context — neither style owns the actions.
+ *
+ * Port note: a plain class, not a `data class` — it is a bundle of callbacks, and LurkerKit's
+ * struct is not `Equatable` either.
+ */
+class MessageActionContext(
+    /**
+     * Reply to this line (lurker-ios#184): the screen starts a pending reply when the line can
+     * carry one, and addresses its author in a channel. Only called for a line `build` offered
+     * Reply on.
+     */
+    val reply: (Message) -> Unit,
+    /** Put this text on the clipboard. The message's *raw* text, not the rendered form. */
+    val copy: (String) -> Unit,
+    /**
+     * Set this message id's saved state. The DIRECTION is passed, not a toggle: it comes
+     * from the same `MessageActionScope` that produced the menu's label, so what fires is
+     * always what the row the user tapped said it would do.
+     */
+    val setBookmark: (Long, Boolean) -> Unit,
+    /**
+     * Open a profile for this nick. Only called with a nick that has an IRC presence — see
+     * `profileSubject`.
+     */
+    val showProfile: (String) -> Unit,
+    /** Open the reaction sheet for this line. */
+    val react: (Message) -> Unit = { _ -> },
+)
+
+/**
+ * Where a link action's effects go — all three are the platform's, none of them this package's.
+ *
+ * Port note: the link is a `String` — the `href` a `URLMatcher.Match` resolved — where
+ * LurkerKit hands over a `URL`. It is only carried here (PORTING.md, Types).
+ */
+class LinkActionContext(
+    val open: (String) -> Unit,
+    val copy: (String) -> Unit,
+    val share: (String) -> Unit,
+)
+
+/**
+ * The per-message actions a message list offers, and their effects (lurker-ios#60).
+ *
+ * Mirrors the web client's `useMessageActions`, which splits the same problem the same way: a
+ * pure builder returning descriptors, and a `run` that dispatches through a caller-supplied
+ * context. Both clients therefore agree on *which* actions a given line offers.
+ *
+ * Ignore is the web's fourth and is deliberately absent: it needs rule authoring, which belongs
+ * with the screen that applies rules.
+ *
+ * One row still ends up with no menu and no selection: a consolidated summary, which stands for
+ * a run of events rather than one message (`MessageRow.message` is null for it). Its text is
+ * synthesized at render time, so there is no raw string to copy — the same reason activity lines
+ * get no Copy below.
+ */
+object MessageActions {
+
+    /**
+     * The actions for `message`, in menu order — empty when the line offers none.
+     *
+     * Gated per action rather than by one eligibility test, which is a deliberate divergence
+     * from the web's `eligibleForActions` (speech + a non-null id, for all of its actions).
+     * Two reasons the web's gate doesn't transfer:
+     *
+     *  - **The id gate is Bookmark's alone.** Neither Reply nor Copy needs the server to have
+     *    heard of the line: one addresses a nick, the other reads a string.
+     *  - **On iOS the menu is the only way to copy at all.** The row menu takes the long press
+     *    away from the text-selection loupe (see `MessageTextView`), so a line with no menu is a
+     *    line whose text can't be copied — the web always has drag-select as a floor. Gating
+     *    Copy on speech would silently strand every MOTD, system and error line in the server
+     *    buffer, which is exactly the text people reach for.
+     */
+    fun build(message: Message, scope: MessageActionScope): List<MessageAction> {
+        val actions = mutableListOf<MessageAction>()
+
+        // Reply stays speech-only: narration names its actor inside the sentence rather than
+        // speaking, and a line with no nick has nobody to answer.
+        //
+        // To someone else in a channel it always does something — at the least it addresses them,
+        // and the address is what a line without its reply tag still says. On your own line ("to
+        // clarify what I said above", lurker#997) or in a DM (lurker#1015) there's no address, so
+        // the reply TAG is all it is, and it's offered only where one would go out: a line the
+        // server stamped, on a network that takes the tags right now. The web's rule.
+        val nick = message.nick
+        if (message.type.isSpeech && nick != null && nick.isNotEmpty()) {
+            val unaddressed = message.isSelf || Replies.isPrivate(scope.target)
+            if (!unaddressed) {
+                actions.add(
+                    MessageAction(key = MessageActionKey.Reply, title = "Reply to $nick", symbol = "arrowshape.turn.up.left")
+                )
+            } else if (scope.canReact && Replies.replyable(message, target = scope.target)) {
+                actions.add(
+                    MessageAction(
+                        key = MessageActionKey.Reply,
+                        title = if (message.isSelf) "Reply to yourself" else "Reply to $nick",
+                        symbol = "arrowshape.turn.up.left",
+                    )
+                )
+            }
+        }
+
+        // React (lurker-ios#183): a reaction names the line's msgid, so it needs a line the
+        // server stamped, in a conversation, not encrypted, on a network that takes the tags
+        // right now. Not a notice — the server refuses those (`reactionSendTarget`). It re-checks
+        // all of it and refuses in silence, which is exactly why the row isn't offered where it
+        // could only do nothing.
+        if (Reactions.canSend(message, target = scope.target, networkCanReact = scope.canReact)) {
+            actions.add(MessageAction(key = MessageActionKey.React, title = "React", symbol = "face.smiling"))
+        }
+
+        // Copy wants lines whose `text` IS their content. That's everything that isn't activity
+        // narration — speech and all the server's own output. An activity line synthesizes what
+        // you see from structured fields and keeps only a fragment in `text` (a part reason, a
+        // topic), so "Copy Text" on `alice left (brb)` would put `brb` on the clipboard. Better
+        // to offer nothing than to copy something other than the line you pressed.
+        val text = message.copyText
+        if (!message.type.isActivity && text != null && text.isNotEmpty()) {
+            actions.add(MessageAction(key = MessageActionKey.Copy, title = "Copy Text", symbol = "doc.on.doc"))
+        }
+
+        // Bookmarking needs speech, a persisted line, and an owning network.
+        //
+        // **Speech is where this client stops diverging from the web.** The web gates its
+        // entire action surface on `eligibleForActions` — message/action/notice — so MOTD,
+        // system and error lines offer nothing there at all. Copy above deliberately breaks
+        // that gate, and has a reason to: on iOS this menu is the only way to copy anything,
+        // and the server buffer's text is exactly what people reach for. Bookmark has no such
+        // excuse. The feed is for things people said; a saved MOTD or connection error is a
+        // slice of log with no conversation in it. So it follows the web's rule instead.
+        //
+        // (Speech also excludes activity narration, which would otherwise surface in the feed
+        // as a lone "alice joined" with nothing around it to say why it was kept.)
+        //
+        // The id gate is the ordinary one: `id == 0` is an ephemeral event the server has no
+        // row for, so there's nothing to point a bookmark at.
+        //
+        // The network gate is less obvious and not cosmetic. Saving is ownership-checked
+        // server-side by joining the message to its network, so a system-buffer line — which
+        // is app-scoped and has none — can never be saved: the insert writes nothing and no
+        // `bookmark-updated` comes back. Offering it there would be a row that does nothing,
+        // every time, with no way to tell. It also keeps us from ever asking about a system
+        // line's id, which matters because those come from a separate sequence that overlaps
+        // the message ids the bookmark set is keyed by.
+        if (message.type.isSpeech && message.id != 0L && scope.networkId != null) {
+            actions.add(
+                MessageAction(
+                    key = MessageActionKey.Bookmark,
+                    title = if (scope.isBookmarked) "Remove Bookmark" else "Save Message",
+                    symbol = if (scope.isBookmarked) "bookmark.fill" else "bookmark",
+                )
+            )
+        }
+
+        // Profile — whois, their note, and the way to DM them.
+        //
+        // ⚠⚠ The subject is `profileSubject`, NOT `message.nick`. On a relay-re-attributed
+        // line those differ, and the nick on screen is a person on Discord or Matrix with no
+        // IRC presence at all: a whois for them answers "not_found" every time. The action
+        // sheet's header already draws this distinction ("alice via relaybot") on the grounds
+        // that the bot is the only thing there with an IRC presence, and this follows it.
+        //
+        // The title names whoever that turns out to be, so a relayed line offers "Profile of
+        // relaybot" under a header reading "alice via relaybot" — which is the honest offer,
+        // and legible next to it.
+        //
+        // ⚠ Speech OR activity, which is a narrower gate than "has a nick" and has to be.
+        // Server text carries a nick-shaped field that is not a person — a MOTD's is the
+        // server itself — so a bare nick check offers "Profile of irc.example.org", a whois
+        // for a hostname. The two categories here are exactly the lines whose nick is a USER.
+        //
+        // Activity is deliberately included, unlike Reply/Copy/Bookmark above. Each of those
+        // has its own reason to skip narration — you can't address a sentence, its `text` is a
+        // fragment, churn isn't content — and none of them is a reason to refuse "who is that",
+        // which is a perfectly ordinary thing to ask about a nick you just watched join.
+        //
+        // Not gated on self: your own whois is how you check your host and modes. The network
+        // gate is real though — a system-buffer line has no connection to ask on.
+        if (scope.networkId != null && (message.type.isSpeech || message.type.isActivity)) {
+            val subject = profileSubject(message)
+            if (subject != null) {
+                actions.add(
+                    MessageAction(
+                        key = MessageActionKey.Profile,
+                        title = "Profile of $subject",
+                        symbol = "person.crop.circle",
+                    )
+                )
+            }
+        }
+
+        return actions
+    }
+
+    /**
+     * The nick on a line that actually has an IRC presence, or null when there is none.
+     *
+     * A relay bot's re-attributed line shows the embedded speaker as its author, but that
+     * person exists on the far side of a bridge — the bot is the IRC entity. Anything that
+     * addresses the *network* about a line therefore has to ask about the bot.
+     */
+    fun profileSubject(message: Message): String? {
+        val bot = message.relayBot
+        if (bot != null && bot.isNotEmpty()) return bot
+        // ⚠⚠ A nick-change line's `nick` is the OLD name — it is what the sentence is about,
+        // not who is there now. Asking the network about it answers `not_found` every time,
+        // so the profile would say "bob isn't on this network" about somebody standing right
+        // there under a new name. The person is the same person; only the handle moved.
+        val renamed = message.newNick
+        if (message.type == EventType.Nick && renamed != null && renamed.isNotEmpty()) {
+            return renamed
+        }
+        val nick = message.nick
+        if (nick == null || nick.isEmpty()) return null
+        return nick
+    }
+
+    /**
+     * The actions for a link, when the press landed on one rather than on the line around it.
+     *
+     * A fixed list — a URL is a URL, there's nothing to gate on. It's here beside the message
+     * actions rather than in the sheet that draws it for the same reason as the rest: the second
+     * message-list style should offer the same three things without either style deciding.
+     */
+    fun build(url: String): List<MessageAction> =
+        listOf(
+            MessageAction(key = MessageActionKey.OpenLink, title = "Open Link", symbol = "safari"),
+            MessageAction(key = MessageActionKey.CopyLink, title = "Copy Link", symbol = "doc.on.doc"),
+            MessageAction(key = MessageActionKey.ShareLink, title = "Share Link", symbol = "square.and.arrow.up"),
+        )
+
+    /**
+     * Perform `key` against `url`. Keys that aren't a link's are ignored rather than trapped —
+     * the two menus are rendered by one screen, and a mismatch there is a bug in the caller, not
+     * something worth crashing a chat client over.
+     */
+    fun run(key: MessageActionKey, url: String, context: LinkActionContext) {
+        when (key) {
+            MessageActionKey.OpenLink -> context.open(url)
+            MessageActionKey.CopyLink -> context.copy(url)
+            MessageActionKey.ShareLink -> context.share(url)
+            MessageActionKey.Reply, MessageActionKey.React, MessageActionKey.Copy,
+            MessageActionKey.Bookmark, MessageActionKey.Profile -> Unit
+        }
+    }
+
+    /**
+     * Perform `key` against `message`. A no-op unless `message` actually offers that action, so a
+     * menu built from a stale row can't fire an action the line doesn't have.
+     *
+     * The gate is `build`'s own answer rather than a restatement of its conditions. Restating them
+     * is how the two drift: Reply here used to require only a nick, so it would have addressed a
+     * *self* message or a server line — cases `build` rules out — and Copy would have pasted the
+     * fragment in an activity line's `text` ("brb" from `alice left (brb)`). Neither was reachable
+     * through the sheet, which offers only what `build` returned, but "unavailable actions are
+     * no-ops" is the guarantee this function documents, and it wasn't true.
+     */
+    fun run(
+        key: MessageActionKey,
+        message: Message,
+        scope: MessageActionScope,
+        context: MessageActionContext,
+    ) {
+        if (!build(message, scope = scope).any { it.key == key }) return
+        when (key) {
+            MessageActionKey.Reply ->
+                context.reply(message)
+            MessageActionKey.React ->
+                context.react(message)
+            MessageActionKey.Copy -> {
+                // The raw text, not the rendered form: what gets pasted should be what
+                // was typed — mIRC color codes and all — not this client's rendering of it.
+                // `copyText`: a reply's row shows its text without the `alice: ` the quote makes
+                // redundant, but the line that was sent had it.
+                val text = message.copyText
+                if (text == null || text.isEmpty()) return
+                context.copy(text)
+            }
+            MessageActionKey.Bookmark ->
+                // The direction comes from `scope`, which is also what titled the row — so a
+                // sheet built before a `bookmark-updated` echo landed still does the thing it
+                // offered. Re-reading the store here instead would invert the button under the
+                // user: the row says "Save Message" and an unsave goes out.
+                context.setBookmark(message.id, !scope.isBookmarked)
+            MessageActionKey.Profile -> {
+                // `build` already refused a line with no IRC subject, and this re-derives from the
+                // same function rather than restating its rule — the drift `run`'s own gate exists
+                // to prevent.
+                val subject = profileSubject(message) ?: return
+                context.showProfile(subject)
+            }
+            MessageActionKey.OpenLink, MessageActionKey.CopyLink, MessageActionKey.ShareLink ->
+                // A link's keys, dispatched by the link overload. Ignored rather than trapped: one
+                // screen renders both menus, and a mismatch is a caller bug, not a reason to crash.
+                Unit
+        }
+    }
+}

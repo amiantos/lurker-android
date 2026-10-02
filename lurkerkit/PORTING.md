@@ -58,6 +58,7 @@ is an interface here and an implementation in `:app`:
 | `UInt32`, `UInt8` | `UInt`, `UByte` where the Swift relies on unsigned wraparound; otherwise `Int` |
 | `Date` | `java.time.Instant` |
 | `TimeInterval` | `java.time.Duration` |
+| `Calendar` (asked where a day starts) | `java.time.ZoneId`, the parameter named `zone` |
 | `Data` | `okio.ByteString` in a stored property (value equality); `ByteArray` only in passing |
 | `URL` | `okhttp3.HttpUrl` for http(s); `String` where it is only carried; `java.io.File` for a file URL. Never `java.net.URL` |
 | `NSRange` | `support.TextRange` |

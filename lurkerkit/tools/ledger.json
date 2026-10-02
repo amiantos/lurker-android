@@ -162,7 +162,21 @@
     "Rendering/IRCFormatting.swift": "`rawIndex` is tested from `RelayEnvelopeTests` (T3); checked against the Swift meanwhile.",
     "Client/NotificationTap.swift": "Input is a `Map<String, Any?>`; FCM's all-strings data map is the shape Android will hand it.",
     "Model/Settings.swift": "`SettingValue.Int` is 32-bit; a wire number past that is skipped rather than wrapped.",
-    "Model/ChannelModes.swift": "All but the `extension ChatState` at the end, which arrives with the store (T5)."
+    "Model/ChannelModes.swift": "All but the `extension ChatState` at the end, which arrives with the store (T5). `topicSetterLine` formats the date in the device locale; the wording differs slightly from iOS.",
+    "Model/Replies.swift": "All but `stripAddress`, `shown`, `presenting` and `continues`, which need NickCompletion, IgnoreSet and RelayBotSet (T3).",
+    "Model/Reactions.swift": "Grapheme counting through `BreakIterator`: matches Swift on JDK 21 for emoji sequences, not for Indic conjuncts; verify on a device.",
+    "Model/Buffer.swift": "`BufferKey.id` folds with `lowercase()`, which applies final sigma where Swift does not.",
+    "Model/BufferOrder.swift": "`localizedCaseInsensitiveCompare` → `java.text.Collator`. The host JDK orders punctuation differently from ICU; verify on a device.",
+    "Model/SearchRequest.swift": "Percent-encodes by hand to `URLComponents`' rule, since a test pins a literal `!`.",
+    "Model/LinkPreview.swift": "`isViewable` parses with `HttpUrl`, which can read a different host than Foundation when a backslash sits in the authority: the player must be handed `HttpUrl.toString()`, never the raw string (T6). Numeric fields decode slightly more strictly than `JSONDecoder`.",
+    "Model/NetworkPreset.swift": "The catalogue is a byte-for-byte copy of LurkerKit's, itself a copy of the web's.",
+    "Model/PendingJoins.swift": "A mutable class (case 3).",
+    "Model/PendingDccOpen.swift": "`DccOpens` is a mutable class (case 3); `PendingDccOpen` itself is immutable.",
+    "Model/UnsentCorrelator.swift": "A mutable class (case 3). Mints `android-N` client ids where LurkerKit mints `ios-N`.",
+    "Model/HighlightGrouping.swift": "\"The day before\" is ported from ICU's wall-time rule, not `minusDays`. Depends on time-zone data; verify on a device.",
+    "Model/MessageActions.swift": "`MessageAction.symbol` keeps the SF Symbol names; the app maps them to its own icons.",
+    "Model/WhoisResult.swift": "A plain value; the string-or-number reading is FrameParser's (T4).",
+    "Model/Modes.swift": "No Swift test of its own; checked against the Swift over a corpus."
   },
   "testNotes": {
     "BufferListPlaceholderTests.swift": {
@@ -179,14 +193,9 @@
       "waiting": [
         "testACertificateReadsItsExpiry",
         "testAnUnreadableCertificateIsNotNoCertificate",
-        "testNullAndAbsentBothMeanNoCertificate",
-        "testAGeneratedCertificateRidesTheCreate",
-        "testAnImportedPairRidesTheCreate",
-        "testAnEditNeverCarriesACertificate",
-        "testNoCertificateSendsNoCertificateKeys",
-        "testACertificateNeedsTLS"
+        "testNullAndAbsentBothMeanNoCertificate"
       ],
-      "note": "Waiting on FrameParser, NetworkConfig, NetworkDraft."
+      "note": "Waiting on FrameParser."
     },
     "LinkPreviewStoreTests.swift": {
       "waiting": [
@@ -304,7 +313,7 @@
         "pastedRowHasNoFilename",
         "garbageIsEmpty"
       ],
-      "note": "Only the `UploadKind` cases are ported; the rest waits on FrameParser, UploadItem."
+      "note": "Waiting on FrameParser."
     },
     "UploadProgressTests.swift": {
       "waiting": [
@@ -324,14 +333,6 @@
         "testIdleAndSignonAlsoAcceptRealJsonNumbers",
         "testAnAbsentSignonIsNilRatherThanTheEpoch",
         "testTheNotFoundMissIsAnOrdinaryReplyCarryingAnError",
-        "testHostmaskFillsAMissingHalfWithAStarAndIsNilWithNeither",
-        "testChannelsIsOneSpaceSeparatedStringNotAnArray",
-        "testAGreedySigilPeelWouldEatTheChannelSigil",
-        "testAnUnprefixedChannelKeepsItsOwnSigil",
-        "testSplitPrefersTheLargestPeelThatStillLeavesAChannel",
-        "testASigilOnlyTokenIsDroppedRatherThanBecomingATappableBlank",
-        "testATokenOnAnUnknownChannelTypeIsKeptUnpeeledRatherThanDropped",
-        "testAnAbsentChannelsLineIsNoChannels",
         "testWhoisResultSurvivesCarryingNoTarget",
         "testAReplyWeCannotAddressIsRefused",
         "testAReplyIsCachedUnderTheServersCasingAndFoundUnderAnyOther",
@@ -351,7 +352,245 @@
         "testTheSnapshotSeedsNotesAndDropsUnusableRows",
         "testTheSnapshotReplacesNotesWholesale"
       ],
-      "note": "Only the nick-note cases are ported; the rest waits on WhoisResult, FrameParser, LurkerStore, ChatViewModel."
+      "note": "Waiting on FrameParser, LurkerStore, ChatViewModel."
+    },
+    "BufferOrderTests.swift": {
+      "waiting": [
+        "testTheSnapshotSeedsPinsAndReplacesThemWholesale",
+        "testPinsChangedReplacesOneNetworksList",
+        "testPinsChangedParsesItsOrderedList",
+        "testDeletingANetworkTakesItsPinsWithIt",
+        "testTheRosterMergeCarriesThePositionOntoAnExistingNetwork",
+        "testTheRosterCarriesThePosition",
+        "testAnOlderServerWithNoPositionSortsLast"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "ChannelModesTests.swift": {
+      "waiting": [
+        "testSnapshotCarriesTheSpecAndEachChannelsModeState",
+        "testANullSpecIsUnknown",
+        "testModeSpecFrame",
+        "testChannelModesFrameNeverBecomesALine",
+        "testChannelTopicMetaFollowsKeyPresence",
+        "testVerbReplyCarriesItsData",
+        "testVerbErrorsAreWorded",
+        "testNetworkConfigReadsChannelKeys",
+        "testLiveLinesAndResyncsReachChannelEvents",
+        "testSnapshotSeedsSpecAndChannelState",
+        "testChannelModesFrameReplacesModesButKeepsTheTopicSetter",
+        "testATopicLineNamesItsSetter",
+        "testChannelTopicMetaReplacesOnlyWhenStated",
+        "testSpecIsForgottenWhenTheLinkDropsAndRestatedByTheFrame",
+        "testSpecIsForgottenWhenOurSocketDrops",
+        "testChannelStateFollowsARenameAndGoesWithAClose",
+        "testAnOpEditsEverything",
+        "testPlusTGatesTheTopicOnHalfopAndAVoiceEditsNoModes",
+        "testAnUnknownSpecOpensNoRankGate",
+        "testNothingIsEditableOutOfTheChannel",
+        "testASaveFailureSaysWhetherAnythingCanHaveGoneOut"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "ClearMarkerTests.swift": {
+      "waiting": [
+        "backlogCarriesTheMarker",
+        "backlogWithoutAMarker",
+        "bufferClearedParses",
+        "undoParses",
+        "fanOutMovesTheMarker",
+        "undoDropsBothHalves",
+        "aClearForAnUnknownBufferIsIgnored",
+        "aBacklogRetractsTheMarker",
+        "theBoundaryHides",
+        "theDividerIsFirst",
+        "anEmptyVisibleRegionKeepsTheUndo",
+        "anUnclearedBufferIsUntouched",
+        "detachedIgnoresTheMarker",
+        "startOfHistoryIsSuppressed",
+        "localLinesAreNeverHidden",
+        "aHalfStatedMarkerIsDiscarded",
+        "theRowBuilderRefusesAHalfMarker",
+        "aClearDropsLocalLines",
+        "anUndoKeepsLocalLines",
+        "revealingShowsAHiddenAnchor",
+        "aRevealNeverTouchesTheMarker",
+        "theCommandParses",
+        "anUnknownArgumentStillClears"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "DccChatTests.swift": {
+      "waiting": [
+        "testDccChatOffersToANick",
+        "testPassiveIsAFlagInEitherPosition",
+        "testAnUnknownOptionIsRefusedRatherThanReadAsANick",
+        "testChatCloseIsCaughtAndPointedAtTheRealSpelling",
+        "testCloseIsIrssisTypeFirstForm",
+        "testABufferNameOrAChannelIsNotAPeer",
+        "testFileTransfersSayTheyAreNotHereRatherThanGoingRaw",
+        "testDccNeedsANetwork",
+        "testTheHelpShowsBothFormsAsTheyAreTyped",
+        "testCompletionFindsTheNickInEitherForm",
+        "testABareWhoisOrPingInAChatMeansThePeer",
+        "testTheLightFollowsTheSessionNotTheNetwork",
+        "testTheSnapshotCarriesLiveChatsAndWaitingOffers",
+        "testTheThreeEventsNameThePeerInTheFromField",
+        "testAChatIsLiveWhateverTheNetworkIsDoing",
+        "testLiveStateFollowsTheEvents",
+        "testTheSnapshotReplacesLiveChatsWholesale",
+        "testAnOfferWaitsUntilTheServerClosesIt",
+        "testAnOfferMadeAgainReplacesTheOldOneWithANewId",
+        "testASnapshotKeepsAnOfferWeAlreadyHold",
+        "testASnapshotSurfacesAnOfferWeMissed",
+        "testASnapshotRetiresAnOfferItNoLongerLists",
+        "testASessionIsUnknownUntilThisSocketsSnapshot",
+        "testDroppingANetworkForgetsItsChatsAndOffers",
+        "testSignOutForgetsOffersAndChats"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "NetworkConfigTests.swift": {
+      "waiting": [
+        "testAStateEventCarriesTheConnectionAndItsNick",
+        "testAStateEventWithoutANickSaysNothingAboutIt",
+        "testAStateEventCarriesNoTargetAndIsParsedAnyway",
+        "testTheStoreAppliesTheStateAndTheNick",
+        "testADisconnectKeepsTheNick",
+        "testTheRosterNameSurvivesAStateEvent",
+        "testASnapshotForAnUnknownNetworkLeavesItNameless",
+        "testTheRosterFillsInANamelessNetwork",
+        "testARosterRowWithNoNameParsesAsNameless",
+        "testAStateEventMaterializesANetworkCreatedSinceWeConnected",
+        "testTheRosterRemovesANetworkItNoLongerNames",
+        "testRemovingANetworkTakesItsBuffersWithIt",
+        "testAnUnreadableRosterDoesNotWipeTheNetworks",
+        "testAnEmptyRosterIsStillAnAnswer",
+        "testAConfigRowReadsEveryFieldTheFormEdits",
+        "testAnAbsentBlockedFlagReadsAsNotBlocked",
+        "testAMissingPortFallsBackToTheServersDefault",
+        "testAnUnreadableBodyIsNotAnEmptyRoster",
+        "testAnEmptyListIsStillAnAnswer",
+        "testACreateReplyCarriesTheSavedRow",
+        "testAnAbsentVerifyFlagReadsAsVerifying",
+        "testTurningVerificationOffRoundTripsThroughTheForm",
+        "testEditingADraftStartsBothSecretsUnchanged"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "NetworkPresetTests.swift": {
+      "waiting": [
+        "testPresetsParseWithTheirChannelsAndPolicy",
+        "testAnOlderServerIsNotTreatedAsLockedDown"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "NetworkProxyTests.swift": {
+      "waiting": [
+        "testASavedProxyReadsEveryPart",
+        "testNullAndAbsentBothMeanNoProxy",
+        "testASwitchedOffProxyIsStillASavedOne",
+        "testAnImpossiblePortReadsAsTheTypesDefault",
+        "testEditingStartsFromTheSavedProxyButNotItsPassword",
+        "testAnOrdinaryNetworkSendsNoProxyKeys",
+        "testSwitchingASavedProxyOffSendsOnlyTheSwitch",
+        "testAnUntouchedProxyIsNotSent",
+        "testAnUntouchedProxyIsNotValidated",
+        "testEditingASavedProxySendsTheWholeSetAsShown",
+        "testTurningAProxyOffAndOnAgainIsNoChange",
+        "testTheProxyPasswordFollowsSecretEdit"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "PreviewDecodeTests.swift": {
+      "waiting": [
+        "unknownKindDoesNotDiscardTheBatch",
+        "unknownStatusDoesNotDiscardTheBatch",
+        "happyPathIsUnchanged",
+        "failureIsNotAVerdict",
+        "absentFeaturesIsAVerdict",
+        "configRequestIsAuthenticated",
+        "configRequestWithoutATokenIsStillValid",
+        "flagIsRead"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "ReactionsTests.swift": {
+      "waiting": [
+        "testRowsCarryMsgidE2eAndReactions",
+        "testReactionFrameParses",
+        "testReactionFrameThatAddressesNothingIsIgnored",
+        "testReactionsSyncParses",
+        "testReactSupportAndSnapshotCanReactParse",
+        "testARowIsAuthoritativeForItselfInBothDirections",
+        "testSilenceAboutALineIsNotARemoval",
+        "testSystemRowsNeverTouchTheMap",
+        "testLiveReactionsAddDedupeAndRemove",
+        "testOurUnreactMatchesSelfNotNick",
+        "testAReactionWeAlreadyHoldChangesNothing",
+        "testSyncIsAuthoritativeForEveryIdItNames",
+        "testClosingABufferDropsItsLinesReactions",
+        "testSyncIdsAreTheNewestOfEachNetworkBuffer",
+        "testCanReactNeedsTheFlagAndALiveLink",
+        "testCanReactNeedsOurOwnSocket",
+        "testANickCollisionNeverFoldsIntoOurReaction",
+        "testAReactionToALineNobodyLoadedIsDropped",
+        "testARevisionIsPerBuffer",
+        "testDroppingTheSystemBufferLeavesNetworkReactionsAlone",
+        "testHighlightAndReactionRowsAndThePairedCursor",
+        "testOneSidedCursorStillPagesAndNullEnds",
+        "testAReactionRowWithoutAValueIsDropped",
+        "testParses",
+        "testARenameCarriesTheRevision"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "RepliesTests.swift": {
+      "waiting": [
+        "testRowsCarryReplyToAndTheStamp",
+        "testStripAddressNeedsPunctuationAfterTheNick",
+        "testQuoteAndStrippedText",
+        "testNoQuoteKeepsTheAddressItIsTheOnlySignOfWhoItsTo",
+        "testAnActionKeepsItsText",
+        "testIgnoredSinceHidesTheQuoteButNotYourOwnLine",
+        "testARelayedParentQuotesThePersonInside",
+        "testASplitReplyIsQuotedOnce",
+        "testARefusedLineComesHomeWithItsReply",
+        "testPresentingSetsTheQuoteAndTextAndPassesOthersThrough",
+        "testTakesBackTheAddressAndNothingElse",
+        "testLeavesADraftThatNoLongerOpensWithIt",
+        "testIsAddressedStillAgrees",
+        "testCopyKeepsTheAddressTheQuoteHides",
+        "testNicksFoldAsciiOnly",
+        "testStripAddressTakesEverySpaceAfterTheMark"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "SystemBufferTests.swift": {
+      "waiting": [
+        "testAnErrorSystemLineIsStillTypeSystem",
+        "testSystemLineDefaultsToInfoWhenLevelIsAbsentOrJunk",
+        "testLevelIsOnlySetForSystemLines",
+        "testSeverityAndOriginAreBothSystemOnlyEvenIfTheWireSaysOtherwise",
+        "testSystemLineCarriesTheNetworkItIsAbout",
+        "testTypesTheServerSendsThatTheClientDidNotModel",
+        "testAGenuinelyUnknownTypeStillFoldsToOther",
+        "testTheSystemBacklogReplacesEvenThoughItSaysResetFalse",
+        "testANetworkResumeSliceStillAppends",
+        "testAnOversizedNetworkGapStillReplaces",
+        "testALiveSystemLineBeatingTheBacklogDoesNotShoveHistoryBelowIt",
+        "testTheSyntheticSystemBufferMatchesTheServersOwn"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "UnsentSendTests.swift": {
+      "waiting": [
+        "takeIsReadAndClear",
+        "holdsQueueRatherThanClobber",
+        "renameMovesTheHold",
+        "sendResultIsSilent"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
     }
   }
 }
