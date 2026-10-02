@@ -125,20 +125,18 @@ object Reactions {
      * `❤` and `❤️` are two chips on both.
      */
     fun groups(list: List<MessageReaction>): List<ReactionGroup> {
-        val groups = mutableListOf<ReactionGroup>()
-        for (reaction in list) {
-            val index = groups.indexOfFirst { it.value == reaction.value }
-            if (index >= 0) {
-                val group = groups[index]
-                groups[index] = group.copy(
-                    nicks = group.nicks + reaction.nick,
-                    mine = group.mine || reaction.isSelf,
-                )
-            } else {
-                groups.add(ReactionGroup(value = reaction.value, nicks = listOf(reaction.nick), mine = reaction.isSelf))
-            }
+        // Port note: gathered by value in first-seen order and frozen once; LurkerKit appends to
+        // the group in place, where a copy per reaction here would be quadratic.
+        class Gathering(var mine: Boolean) {
+            val nicks = mutableListOf<String>()
         }
-        return groups
+        val groups = LinkedHashMap<String, Gathering>()
+        for (reaction in list) {
+            val group = groups.getOrPut(reaction.value) { Gathering(mine = false) }
+            group.nicks.add(reaction.nick)
+            group.mine = group.mine || reaction.isSelf
+        }
+        return groups.map { (value, group) -> ReactionGroup(value = value, nicks = group.nicks, mine = group.mine) }
     }
 
     /**

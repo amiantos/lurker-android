@@ -249,7 +249,7 @@ class NetworkConfigTests {
             ),
             untouched.jsonBody(creating = false),
         )
-        val moved = untouched.copy(proxy = untouched.proxy.copy(port = 9150))
+        val moved = untouched.copy(proxy = untouched.proxy.edited(port = 9150))
         assertEquals(
             Json.parseToJsonElement(
                 """
@@ -261,7 +261,7 @@ class NetworkConfigTests {
             ),
             moved.jsonBody(creating = false),
         )
-        val off = untouched.copy(proxy = untouched.proxy.copy(enabled = false))
+        val off = untouched.copy(proxy = untouched.proxy.edited(enabled = false))
         assertEquals(
             Json.parseToJsonElement(
                 """

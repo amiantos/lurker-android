@@ -17,20 +17,20 @@ package net.amiantos.lurkerkit.support
  * space. No newlines.
  */
 fun Char.isInWhitespaces(): Boolean =
-    this == '\t' || this == '​' || Character.getType(this) == Character.SPACE_SEPARATOR.toInt()
+    this == '\t' || this == '\u200B' || Character.getType(this) == Character.SPACE_SEPARATOR.toInt()
 
 /**
  * `CharacterSet.whitespacesAndNewlines`: [isInWhitespaces] plus LF, VT, FF, CR, NEL and the
  * line and paragraph separators.
  */
 fun Char.isInWhitespacesAndNewlines(): Boolean =
-    isInWhitespaces() || this in '\n'..'\r' || this == '\u0085' || this == ' ' || this == ' '
+    isInWhitespaces() || this in '\n'..'\r' || this == '\u0085' || this == '\u2028' || this == '\u2029'
 
 /**
  * Swift's `Character.isWhitespace` — Unicode's White_Space property. The same as
  * [isInWhitespacesAndNewlines] without the zero-width space, which is not White_Space.
  */
-fun Char.isSwiftWhitespace(): Boolean = this != '​' && isInWhitespacesAndNewlines()
+fun Char.isSwiftWhitespace(): Boolean = this != '\u200B' && isInWhitespacesAndNewlines()
 
 /** `trimmingCharacters(in: .whitespacesAndNewlines)`. */
 fun String.trimmingWhitespacesAndNewlines(): String = trim { it.isInWhitespacesAndNewlines() }

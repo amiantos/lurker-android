@@ -27,6 +27,10 @@ import java.time.Instant
  *
  * Port note: `lastReadId` and `clearedBeforeId` are message ids, so they are `Long` here
  * (PORTING.md, Types). `bufferId`, `networkId` and the two counts stay `Int`.
+ *
+ * Port note: ⚠ `networkId`, `target` and `kind` are `let` in LurkerKit and `copy(...)` will
+ * change them here all the same. Never `copy(target = …)`: `kind` is decided from the target
+ * and would be left describing the old one. A rename goes through `renamed`.
  */
 data class Buffer(
     val networkId: Int?,

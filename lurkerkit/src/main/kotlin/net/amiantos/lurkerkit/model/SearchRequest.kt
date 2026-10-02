@@ -3,9 +3,9 @@
 
 package net.amiantos.lurkerkit.model
 
+import net.amiantos.lurkerkit.support.percentEncodedQuery
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import java.util.Locale
 
 /**
  * The URL for one page of `GET /api/search` (lurker-ios#123).
@@ -32,12 +32,8 @@ object SearchRequest {
      * is null here and a URL there, and the base comes back in `HttpUrl`'s canonical form (scheme
      * and host lowercased, a default port dropped) where `URLComponents` keeps it as typed.
      *
-     * Port note: ⚠ UNLIKE `UploadsRequest`, the query is percent-encoded here by hand, to
-     * `URLComponents`' own rule ([percentEncoded]), and handed to `HttpUrl` already encoded. Left
-     * to `addQueryParameter`, a `!` goes out as `%21` — the same value to the server, but
-     * `SearchRequestTests.allSigilsSurvive` holds the URL to `target=!chan`, and a test's
-     * expectation is not altered to suit the port. The one character the two still spell
-     * differently is `'`, which `HttpUrl` re-encodes to `%27` whoever encoded the rest.
+     * Port note: the query is encoded by `support.percentEncodedQuery`, to `URLComponents`' own
+     * rule, and handed to `HttpUrl` already encoded — see there for why, and for the `+`.
      */
     fun url(
         base: String,
@@ -57,53 +53,16 @@ object SearchRequest {
         if (networkId != null) items.add("networkId" to networkId.toString())
         if (before != null) items.add("before" to before.toString())
         items.add("limit" to limit.toString())
-        val percentEncodedQuery = items.joinToString("&") { (name, value) ->
-            percentEncoded(name) + "=" + percentEncoded(value)
-        }
-
-        // ⚠⚠ `+` has to be percent-encoded BY HAND, and this is the one thing about moving search
-        // onto a URL that the WS verb could not get wrong. `URLComponents` leaves a literal `+`
-        // alone — it is legal in a query — but the server parses query strings with
-        // form-urlencoded semantics, where `+` MEANS SPACE. So `C++` arrives as `C  ` and the
-        // search quietly answers a different question. JSON over the socket had no such reading.
-        //
-        // ⚠ Safe as a blanket replacement because `URLComponents` encodes a space as `%20` and
-        // never as `+`, so every `+` left in the output is one the user typed. Everything else it
-        // already handles: `#dev` → `%23dev`, `&` → `%26`.
-        //
-        // Port note: all of that is as true of `percentEncoded` as of `URLComponents`, which it
-        // copies. ⚠ And `encodedQuery` — like `addEncodedQueryParameter` — passes a `+` through
-        // untouched, so the by-hand step is as load-bearing here as it is on iOS.
+        // ⚠⚠ A typed `+` has to reach the server as `%2B`, and this is the one thing about moving
+        // search onto a URL that the WS verb could not get wrong: `C++` would arrive as `C  ` and
+        // the search quietly answer a different question. `percentEncodedQuery` is where that is
+        // done, for every request.
         //
         // Port note: `encodedQuery` replaces whatever query the string had, as
         // `URLComponents.queryItems = …` does.
-        components.encodedQuery(percentEncodedQuery.replace("+", "%2B"))
+        components.encodedQuery(percentEncodedQuery(items))
         return components.build()
     }
-
-    /**
-     * Port note: what `URLComponents` does to a query item's name or value, enumerated from
-     * Foundation on a Mac: the UTF-8 bytes, each written as `%XX` unless it is an ASCII letter
-     * or digit or one of `- . _ ~ ! $ ' ( ) * + , / : ; ? @`. So a space is `%20`, and `& = #
-     * %` are all escaped. `SearchRequestTests` pins the ones that matter.
-     */
-    private fun percentEncoded(text: String): String {
-        val out = StringBuilder()
-        for (byte in text.toByteArray(Charsets.UTF_8)) {
-            val unit = byte.toInt() and 0xFF
-            val character = unit.toChar()
-            if (unit < 0x80 && (character in 'a'..'z' || character in 'A'..'Z' || character in '0'..'9' ||
-                    literalInQuery.indexOf(character) >= 0)
-            ) {
-                out.append(character)
-            } else {
-                out.append(String.format(Locale.ROOT, "%%%02X", unit))
-            }
-        }
-        return out.toString()
-    }
-
-    private const val literalInQuery = "-._~!$'()*+,/:;?@"
 
     /** What a response status means for a search. */
     enum class Outcome {

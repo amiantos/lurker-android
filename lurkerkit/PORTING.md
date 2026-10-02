@@ -61,6 +61,7 @@ is an interface here and an implementation in `:app`:
 | `Calendar` (asked where a day starts) | `java.time.ZoneId`, the parameter named `zone` |
 | `Data` | `okio.ByteString` in a stored property (value equality); `ByteArray` only in passing |
 | `URL` | `okhttp3.HttpUrl` for http(s); `String` where it is only carried; `java.io.File` for a file URL. Never `java.net.URL` |
+| `URLComponents.queryItems` | `support.percentEncodedQuery`, into `HttpUrl.Builder.encodedQuery` — never `addQueryParameter` |
 | `NSRange` | `support.TextRange` |
 | `[T]`, `[K: V]`, `Set<T>` | `List<T>`, `Map<K, V>`, `Set<T>` (the read-only interfaces) |
 | `CaseIterable.allCases` | `entries` |
@@ -99,6 +100,11 @@ publish nor compare as a change.
 1. No `mutating` methods → immutable `data class`.
 2. `mutating func` returning `Void` → immutable `data class`; the method keeps its name and
    returns the updated copy (`progress = progress.apply(frame)`).
+A custom `==` that leaves fields out does not survive this. LurkerKit can compare only what is
+on screen because its mutations happen in place and always stick; a copy that differs only in
+the fields left out would compare equal to the value it replaces, and a `MutableStateFlow` or
+Compose state would drop it. An immutable port compares everything.
+
 3. `mutating func` that also returns a value (a small state machine: `OutgoingTyping`) →
    a plain `class` with `private set` properties and the same signatures. One value-returning
    mutator makes the whole type case 3, its `Void` mutators included. It has one owner,
@@ -207,7 +213,9 @@ are good material for a `// Port-only:` test (see `ServerAddressTests`).
 ## What not to do
 
 - **Do not stub.** If a file needs a type that is not ported yet, the file waits. Port in the
-  ledger's order.
+  ledger's order. Where only a separable part of a file needs the missing type, the rest may be
+  ported: a comment in the Kotlin names what waits, and `ledger.json`'s `partial` names the
+  tranche that completes it — the ledger then refuses to call that tranche done without it.
 - **Do not improve.** No renames, no restructuring, no "more idiomatic" rewrite of logic. An
   improvement worth making is made in LurkerKit and ported.
 - **Do not port from a feature branch.** The ledger's pin is a commit on lurker-ios `main`.

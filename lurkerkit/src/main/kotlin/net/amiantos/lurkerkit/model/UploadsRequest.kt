@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit.model
 
+import net.amiantos.lurkerkit.support.percentEncodedQuery
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
@@ -109,10 +110,8 @@ object UploadsRequest {
      * consequences, checked against the Swift. A base that is not http(s) — or is empty, or has
      * no scheme — is null here and a URL there; nothing signs in with one (`ServerAddress`).
      * `HttpUrl` writes the base in canonical form (scheme and host lowercased, a default port
-     * dropped), where `URLComponents` keeps it as typed. And the two percent-encode a query
-     * value differently: `HttpUrl` also escapes `~ ! @ $ ' ( ) , / : ; ?`, which
-     * `URLComponents` leaves literal. Both spellings decode to the same value on the server, so
-     * the request asks the same question; only the string differs.
+     * dropped), where `URLComponents` keeps it as typed. The query itself is encoded by
+     * `support.percentEncodedQuery`, to `URLComponents`' own rule.
      */
     fun url(
         base: String,
@@ -121,30 +120,22 @@ object UploadsRequest {
         limit: Int,
     ): HttpUrl? {
         val components = (base + "/api/uploads").toHttpUrlOrNull()?.newBuilder() ?: return null
-        // Port note: `URLComponents.queryItems = …` replaces whatever query the string had.
-        components.query(null)
-        components.addQueryParameter("limit", limit.toString())
-        if (before != null && !filter.favoritesOnly) {
-            components.addQueryParameter("before", before.toString())
-        }
-        if (filter.query.isNotEmpty()) components.addQueryParameter("q", filter.query)
+        val items = mutableListOf<Pair<String, String>>()
+        items.add("limit" to limit.toString())
+        if (before != null && !filter.favoritesOnly) items.add("before" to before.toString())
+        if (filter.query.isNotEmpty()) items.add("q" to filter.query)
         val kind = filter.kind
-        if (kind != null) components.addQueryParameter("kind", kind.rawValue)
-        if (filter.favoritesOnly) components.addQueryParameter("favorites", "1")
+        if (kind != null) items.add("kind" to kind.rawValue)
+        if (filter.favoritesOnly) items.add("favorites" to "1")
 
-        // ⚠⚠ On iOS `+` has to be percent-encoded BY HAND, exactly as in `SearchRequest`, and a
+        // ⚠⚠ A typed `+` has to reach the server as `%2B`, exactly as in `SearchRequest`, and a
         // filename search is where it bites hardest: `C++.png` and `notes+drafts.txt` are
-        // ordinary names. `URLComponents` leaves a literal `+` alone (it is legal in a query),
-        // but the server parses query strings with form-urlencoded semantics, where `+` MEANS
-        // SPACE — so the search quietly answers a different question and returns nothing.
+        // ordinary names, and a `+` the server reads as a space quietly returns nothing.
+        // `percentEncodedQuery` is where that is done, for every request.
         //
-        // ⚠ Safe there as a blanket replacement because `URLComponents` encodes a space as `%20`
-        // and never as `+`, so every `+` left in the output is one the user typed.
-        //
-        // Port note: there is no by-hand step here. `addQueryParameter` writes a typed `+` as
-        // `%2B` and a space as `%20` on its own — the same two answers — and
-        // `UploadsRequestTests.plusIsEncoded` is what holds it to that. ⚠ Not so
-        // `addEncodedQueryParameter`, which passes a `+` through: never swap one for the other.
+        // Port note: `encodedQuery` replaces whatever query the string had, as
+        // `URLComponents.queryItems = …` does.
+        components.encodedQuery(percentEncodedQuery(items))
         return components.build()
     }
 

@@ -162,12 +162,12 @@
     "Rendering/IRCFormatting.swift": "`rawIndex` is tested from `RelayEnvelopeTests` (T3); checked against the Swift meanwhile.",
     "Client/NotificationTap.swift": "Input is a `Map<String, Any?>`; FCM's all-strings data map is the shape Android will hand it.",
     "Model/Settings.swift": "`SettingValue.Int` is 32-bit; a wire number past that is skipped rather than wrapped.",
-    "Model/ChannelModes.swift": "All but the `extension ChatState` at the end, which arrives with the store (T5). `topicSetterLine` formats the date in the device locale; the wording differs slightly from iOS.",
+    "Model/ChannelModes.swift": "All but the `extension ChatState` at the end, which arrives with the store. `topicSetterLine` takes the date formatter from the app. `ChannelRefusals` and `ChannelModeDrafts` compare all their state, not just what is on screen.",
     "Model/Replies.swift": "All but `stripAddress`, `shown`, `presenting` and `continues`, which need NickCompletion, IgnoreSet and RelayBotSet (T3).",
     "Model/Reactions.swift": "Grapheme counting through `BreakIterator`: matches Swift on JDK 21 for emoji sequences, not for Indic conjuncts; verify on a device.",
     "Model/Buffer.swift": "`BufferKey.id` folds with `lowercase()`, which applies final sigma where Swift does not.",
     "Model/BufferOrder.swift": "`localizedCaseInsensitiveCompare` → `java.text.Collator`. The host JDK orders punctuation differently from ICU; verify on a device.",
-    "Model/SearchRequest.swift": "Percent-encodes by hand to `URLComponents`' rule, since a test pins a literal `!`.",
+    "Model/SearchRequest.swift": "The query is encoded by `support.percentEncodedQuery`, to `URLComponents`' rule.",
     "Model/LinkPreview.swift": "`isViewable` parses with `HttpUrl`, which can read a different host than Foundation when a backslash sits in the authority: the player must be handed `HttpUrl.toString()`, never the raw string (T6). Numeric fields decode slightly more strictly than `JSONDecoder`.",
     "Model/NetworkPreset.swift": "The catalogue is a byte-for-byte copy of LurkerKit's, itself a copy of the web's.",
     "Model/PendingJoins.swift": "A mutable class (case 3).",
@@ -176,7 +176,9 @@
     "Model/HighlightGrouping.swift": "\"The day before\" is ported from ICU's wall-time rule, not `minusDays`. Depends on time-zone data; verify on a device.",
     "Model/MessageActions.swift": "`MessageAction.symbol` keeps the SF Symbol names; the app maps them to its own icons.",
     "Model/WhoisResult.swift": "A plain value; the string-or-number reading is FrameParser's (T4).",
-    "Model/Modes.swift": "No Swift test of its own; checked against the Swift over a corpus."
+    "Model/Modes.swift": "No Swift test of its own; checked against the Swift over a corpus.",
+    "Model/UploadsRequest.swift": "The query is encoded by `support.percentEncodedQuery`, to `URLComponents`' rule.",
+    "Model/NetworkProxy.swift": "`ProxyDraft` is a plain class edited through `setType` and `edited`, so the protocol cannot change without its port."
   },
   "testNotes": {
     "BufferListPlaceholderTests.swift": {
@@ -592,5 +594,10 @@
       ],
       "note": "What each waits on is in the comment at the bottom of the Kotlin class."
     }
+  },
+  "partial": {
+    "Client/Uploads.swift": "T6",
+    "Model/Replies.swift": "T3",
+    "Model/ChannelModes.swift": "T5"
   }
 }

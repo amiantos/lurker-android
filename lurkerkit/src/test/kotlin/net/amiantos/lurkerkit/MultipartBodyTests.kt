@@ -178,24 +178,24 @@ class MultipartBodyTests {
     @Test
     fun testSanitizeFilenameStripsFormatCharactersAsFoundationDoes() {
         // A zero-width joiner, a BOM, a soft hyphen, a bidi override: all Cf.
-        assertEquals("ab.png", MultipartBody.sanitizeFilename("a‍b.png"))
-        assertEquals("a.png", MultipartBody.sanitizeFilename("﻿a.png"))
-        assertEquals("ab", MultipartBody.sanitizeFilename("a­b"))
-        assertEquals("ab", MultipartBody.sanitizeFilename("a‮b"))
+        assertEquals("ab.png", MultipartBody.sanitizeFilename("a\u200Db.png"))
+        assertEquals("a.png", MultipartBody.sanitizeFilename("\uFEFFa.png"))
+        assertEquals("ab", MultipartBody.sanitizeFilename("a\u00ADb"))
+        assertEquals("ab", MultipartBody.sanitizeFilename("a\u202Eb"))
         // An emoji family loses its joiners and keeps its people. Astral, so this is also the
         // code-point stepping.
         assertEquals(
             "👨👩👧.png",
-            MultipartBody.sanitizeFilename("👨‍👩‍👧.png"),
+            MultipartBody.sanitizeFilename("👨\u200D👩\u200D👧.png"),
         )
         // C0, DEL and C1 controls from the middle of a name.
         assertEquals("ab", MultipartBody.sanitizeFilename("a\u000Bb"))
         assertEquals("xy", MultipartBody.sanitizeFilename("x\u007Fy"))
         assertEquals("xy", MultipartBody.sanitizeFilename("x\u0085y"))
         // The trim takes every space separator, not just U+0020; a tab goes as a control.
-        assertEquals("a.png", MultipartBody.sanitizeFilename(" a.png　"))
+        assertEquals("a.png", MultipartBody.sanitizeFilename("\u00A0a.png\u3000"))
         assertEquals("a.png", MultipartBody.sanitizeFilename("\ta.png\t"))
         // Nothing left but stripped characters and spaces is still "nothing".
-        assertEquals("upload", MultipartBody.sanitizeFilename(" ​ "))
+        assertEquals("upload", MultipartBody.sanitizeFilename(" \u200B "))
     }
 }

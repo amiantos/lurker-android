@@ -10,7 +10,7 @@ Tests: **546 of 1,640** ported.
 
 ## Sources
 
-### T1 — Leaves (29/29)
+### T1 — Leaves (28/29, 1 partial)
 
 Files with no dependency on any other LurkerKit type.
 
@@ -19,7 +19,7 @@ Files with no dependency on any other LurkerKit type.
 | `Client/JSON.swift` | 60 | ported | → `client/Json.kt`. `FailableDecodable` is `Json.decodeEach`. The reads bridge numbers and booleans the way `NSNumber` does. |
 | `Client/NotificationTap.swift` | 57 | ported | Input is a `Map<String, Any?>`; FCM's all-strings data map is the shape Android will hand it. |
 | `Client/ProtocolVersion.swift` | 46 | ported |  |
-| `Client/Uploads.swift` | 405 | ported | All but `UploadProgressDelegate` (a `URLSessionTaskDelegate`), which becomes a counting OkHttp `RequestBody` in T6. `assemble` deletes its partial file on failure, which LurkerKit leaves to iOS. |
+| `Client/Uploads.swift` | 405 | partial until T6 | All but `UploadProgressDelegate` (a `URLSessionTaskDelegate`), which becomes a counting OkHttp `RequestBody` in T6. `assemble` deletes its partial file on failure, which LurkerKit leaves to iOS. |
 | `Commands/RelayArgs.swift` | 90 | ported |  |
 | `Commands/SpoilerMarkup.swift` | 141 | ported | Checked against the Swift over a corpus; differs only when a combining mark follows a `\|`. |
 | `Model/BufferListPlaceholder.swift` | 41 | ported |  |
@@ -46,7 +46,7 @@ Files with no dependency on any other LurkerKit type.
 | `Rendering/URLMatcher.swift` | 195 | ported | A word boundary beside a combining mark is engine-dependent; verify on a device. |
 | `Session/NewestAnswer.swift` | 34 | ported | A mutable class (case 3). |
 
-### T2 — Core entities (29/29)
+### T2 — Core entities (27/29, 2 partial)
 
 Buffers, messages, networks and what hangs directly off them.
 
@@ -54,7 +54,7 @@ Buffers, messages, networks and what hangs directly off them.
 |---|---:|---|---|
 | `Model/Buffer.swift` | 309 | ported | `BufferKey.id` folds with `lowercase()`, which applies final sigma where Swift does not. |
 | `Model/BufferOrder.swift` | 152 | ported | `localizedCaseInsensitiveCompare` → `java.text.Collator`. The host JDK orders punctuation differently from ICU; verify on a device. |
-| `Model/ChannelModes.swift` | 594 | ported | All but the `extension ChatState` at the end, which arrives with the store (T5). `topicSetterLine` formats the date in the device locale; the wording differs slightly from iOS. |
+| `Model/ChannelModes.swift` | 594 | partial until T5 | All but the `extension ChatState` at the end, which arrives with the store. `topicSetterLine` takes the date formatter from the app. `ChannelRefusals` and `ChannelModeDrafts` compare all their state, not just what is on screen. |
 | `Model/DccChat.swift` | 69 | ported |  |
 | `Model/Favorite.swift` | 25 | ported |  |
 | `Model/Highlight.swift` | 97 | ported |  |
@@ -69,17 +69,17 @@ Buffers, messages, networks and what hangs directly off them.
 | `Model/Network.swift` | 132 | ported |  |
 | `Model/NetworkConfig.swift` | 365 | ported |  |
 | `Model/NetworkPreset.swift` | 173 | ported | The catalogue is a byte-for-byte copy of LurkerKit's, itself a copy of the web's. |
-| `Model/NetworkProxy.swift` | 94 | ported |  |
+| `Model/NetworkProxy.swift` | 94 | ported | `ProxyDraft` is a plain class edited through `setType` and `edited`, so the protocol cannot change without its port. |
 | `Model/PendingDccOpen.swift` | 154 | ported | `DccOpens` is a mutable class (case 3); `PendingDccOpen` itself is immutable. |
 | `Model/PendingJoins.swift` | 120 | ported | A mutable class (case 3). |
 | `Model/ProfileStatus.swift` | 136 | ported |  |
 | `Model/Reactions.swift` | 156 | ported | Grapheme counting through `BreakIterator`: matches Swift on JDK 21 for emoji sequences, not for Indic conjuncts; verify on a device. |
-| `Model/Replies.swift` | 223 | ported | All but `stripAddress`, `shown`, `presenting` and `continues`, which need NickCompletion, IgnoreSet and RelayBotSet (T3). |
+| `Model/Replies.swift` | 223 | partial until T3 | All but `stripAddress`, `shown`, `presenting` and `continues`, which need NickCompletion, IgnoreSet and RelayBotSet (T3). |
 | `Model/SearchQuery.swift` | 120 | ported |  |
-| `Model/SearchRequest.swift` | 88 | ported | Percent-encodes by hand to `URLComponents`' rule, since a test pins a literal `!`. |
+| `Model/SearchRequest.swift` | 88 | ported | The query is encoded by `support.percentEncodedQuery`, to `URLComponents`' rule. |
 | `Model/UnsentCorrelator.swift` | 97 | ported | A mutable class (case 3). Mints `android-N` client ids where LurkerKit mints `ios-N`. |
 | `Model/UploadItem.swift` | 90 | ported |  |
-| `Model/UploadsRequest.swift` | 154 | ported |  |
+| `Model/UploadsRequest.swift` | 154 | ported | The query is encoded by `support.percentEncodedQuery`, to `URLComponents`' rule. |
 | `Model/WhoisResult.swift` | 152 | ported | A plain value; the string-or-number reading is FrameParser's (T4). |
 
 ### T3 — Ignores, commands, message rows (0/18)

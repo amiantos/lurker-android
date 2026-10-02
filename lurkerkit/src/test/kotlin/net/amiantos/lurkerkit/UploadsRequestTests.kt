@@ -54,8 +54,7 @@ class UploadsRequestTests {
         // nothing.
         assertTrue(url(UploadsFilter(query = "C++.png")).contains("q=C%2B%2B.png"))
         // ...and a real space is still a space, which is what makes the blanket replace safe
-        // there: URLComponents encodes it as %20 and never as +. (`HttpUrl` writes the same
-        // two answers without the replace; this is what holds it to them.)
+        // there: URLComponents encodes it as %20 and never as +.
         assertTrue(url(UploadsFilter(query = "screen shot")).contains("q=screen%20shot"))
     }
 
@@ -181,17 +180,18 @@ class UploadsRequestTests {
         assertEquals("http://localhost:8010/api/uploads?limit=50", url("http://localhost:8010"))
     }
 
-    /** the punctuation HttpUrl escapes and URLComponents does not still reads back the same */
+    /** punctuation goes out spelled as iOS spells it, and reads back as typed */
     @Test
-    fun theExtraEscapesDecodeToWhatWasTyped() {
-        // iOS: `q=~!@$%5E*()_-.,:;'/?` — the same value, with only the `^` escaped.
+    fun punctuationIsSpelledAsURLComponentsSpellsIt() {
+        // iOS: `q=~!@$%5E*()_-.,:;'/?` — only the `^` escaped. The same here but for the `'`,
+        // which `HttpUrl` re-spells as `%27` whoever encoded the rest.
         val typed = "~!@$^*()_-.,:;'/?"
         val built = UploadsRequest.url(
             base = "https://lurker.test", filter = UploadsFilter(query = typed), before = null, limit = 50,
         )
         assertEquals(typed, built?.queryParameter("q"))
         assertEquals(
-            "https://lurker.test/api/uploads?limit=50&q=%7E%21%40%24%5E*%28%29_-.%2C%3A%3B%27%2F%3F",
+            "https://lurker.test/api/uploads?limit=50&q=~!@$%5E*()_-.,:;%27/?",
             built?.toString(),
         )
     }

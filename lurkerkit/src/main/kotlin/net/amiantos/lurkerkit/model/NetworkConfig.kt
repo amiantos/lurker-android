@@ -135,7 +135,7 @@ sealed interface SecretEdit {
  * Port note: a form model the UI edits field by field — every property is a `var` in
  * LurkerKit. It has no `mutating` method, so here it is an immutable `data class` and an edit
  * is a `copy(…)` (PORTING.md, structs that mutate, case 1): `draft = draft.copy(tls = false)`,
- * and for the nested proxy `draft = draft.copy(proxy = draft.proxy.copy(port = 9150))`.
+ * and for the nested proxy `draft = draft.copy(proxy = draft.proxy.edited(port = 9150))`.
  */
 data class NetworkDraft(
     val name: String = "",

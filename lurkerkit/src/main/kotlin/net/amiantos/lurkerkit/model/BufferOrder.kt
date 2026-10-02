@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit.model
 
+import java.util.Locale
 import java.text.Collator
 
 /**
@@ -224,10 +225,20 @@ object BufferOrder {
     }
 
     /**
-     * Port note: the stand-in for `localizedCaseInsensitiveCompare` — see [order]. A fresh one
-     * per sort rather than a shared one: it follows the default locale as that changes, and a
-     * `Collator` is a mutable object (its strength is set here), not a value to hand around.
+     * Port note: the stand-in for `localizedCaseInsensitiveCompare` — see [order]. Kept per
+     * thread and rebuilt when the default locale changes: [order] is public and is asked twice
+     * per comparison by anything sorting with it, and building a collator each time would cost
+     * more than the sort. Per thread because a `Collator` is a mutable object, not a value to
+     * share.
      */
-    private fun nameCollator(): Collator =
-        Collator.getInstance().apply { strength = Collator.SECONDARY }
+    private fun nameCollator(): Collator {
+        val locale = Locale.getDefault()
+        val cached = collators.get()
+        if (cached != null && cached.first == locale) return cached.second
+        val fresh = Collator.getInstance(locale).apply { strength = Collator.SECONDARY }
+        collators.set(locale to fresh)
+        return fresh
+    }
+
+    private val collators = ThreadLocal<Pair<Locale, Collator>>()
 }

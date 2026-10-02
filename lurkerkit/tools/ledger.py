@@ -75,6 +75,8 @@ def main():
     tranches = config["tranches"]
     tranche_of = {f: t["id"] for t in tranches for f in t["files"]}
     notes = config.get("notes", {})
+    # Files whose Kotlin twin exists with a named part left out, and the tranche that completes it.
+    partial = config.get("partial", {})
     test_notes = config.get("testNotes", {})
 
     listing = git(args.ios, "ls-tree", "-r", "--name-only", pin, "LurkerKit/").splitlines()
@@ -114,6 +116,8 @@ def main():
         total_lines += lines
         ported_lines += lines if ported else 0
         status = "ported" if ported else "—"
+        if ported and swift in partial:
+            status = f"partial until {partial[swift]}"
         note = cell(notes.get(swift, ""))
         if ported and SRC + swift in drifted:
             status = "ported, **drifted**"
@@ -127,7 +131,15 @@ def main():
     for tranche in tranches:
         rows = rows_by_tranche[tranche["id"]]
         done = sum("| ported" in r for r in rows)
-        out.append(f"### {tranche['id']} — {tranche['title']} ({done}/{len(rows)})\n")
+        halfway = sum("| partial" in r for r in rows)
+        tally = f"{done}/{len(rows)}" + (f", {halfway} partial" if halfway else "")
+        out.append(f"### {tranche['id']} — {tranche['title']} ({tally})\n")
+        # A partial file is finished by a later tranche. Once every file of that tranche has a
+        # twin, a file still marked partial was forgotten.
+        if tranche["files"] and all((main_dir / kotlin_path(f)).exists() for f in tranche["files"]):
+            for swift, until in partial.items():
+                if until == tranche["id"] and swift not in tranche["files"]:
+                    problems.append(f"{swift} is still marked partial, but {until} is fully ported")
         if tranche.get("about"):
             out.append(tranche["about"] + "\n")
         out.append("| Swift file | Lines | Status | Notes |\n|---|---:|---|---|")

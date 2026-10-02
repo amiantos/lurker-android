@@ -46,8 +46,8 @@ class CharacterSetsTests {
     @Test
     fun testTheTrimsDifferFromKotlinsOwnExactlyWhereTheSetsDo() {
         // A zero-width space and a NEL: trimmed by Foundation, kept by `trim()`.
-        assertEquals("x", "​x\u0085".trimmingWhitespacesAndNewlines())
-        assertEquals("​x\u0085", "​x\u0085".trim())
+        assertEquals("x", "\u200Bx\u0085".trimmingWhitespacesAndNewlines())
+        assertEquals("\u200Bx\u0085", "\u200Bx\u0085".trim())
         // A C0 separator: kept by Foundation, trimmed by `trim()`.
         assertEquals("\u001Cx", "\u001Cx".trimmingWhitespacesAndNewlines())
         assertEquals("x", "\u001Cx".trim())

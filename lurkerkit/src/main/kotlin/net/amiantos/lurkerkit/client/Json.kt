@@ -94,9 +94,26 @@ private fun integer(literal: JsonPrimitive): Long? {
  * All-or-nothing, as the Swift `as? [[String: Any]]` cast is: one element that isn't an
  * object empties the whole read rather than quietly shortening it.
  */
-internal fun JsonObject.objects(key: String): List<JsonObject> {
-    val array = this[key] as? JsonArray ?: return emptyList()
-    return array.map { it as? JsonObject ?: return emptyList() }
+internal fun JsonObject.objects(key: String): List<JsonObject> = this[key]?.asObjects() ?: emptyList()
+
+/**
+ * This element as an array of objects, or null — `as? [[String: Any]]`, all-or-nothing in the
+ * same way, for a body whose top level is the array.
+ */
+internal fun JsonElement.asObjects(): List<JsonObject>? {
+    val array = this as? JsonArray ?: return null
+    return array.map { it as? JsonObject ?: return null }
+}
+
+/**
+ * The array of strings under [key], or null — `as? [String]`. All-or-nothing again: one
+ * element that isn't a string and there is no list, rather than a shorter one.
+ */
+internal fun JsonObject.strings(key: String): List<String>? {
+    val array = this[key] as? JsonArray ?: return null
+    return array.map { element ->
+        (element as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
+    }
 }
 
 /** A key present with a non-null value (`reset:false` still counts as present). */

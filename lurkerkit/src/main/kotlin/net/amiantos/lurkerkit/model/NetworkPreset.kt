@@ -3,12 +3,10 @@
 
 package net.amiantos.lurkerkit.model
 
+import net.amiantos.lurkerkit.client.strings
+import net.amiantos.lurkerkit.client.asObjects
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import net.amiantos.lurkerkit.client.bool
 import net.amiantos.lurkerkit.client.int
 import net.amiantos.lurkerkit.client.intOrNull
@@ -157,7 +155,7 @@ object BuiltinNetworks {
         } catch (_: SerializationException) {
             return emptyList()
         }
-        val rows = objects(parsed) ?: return emptyList()
+        val rows = parsed.asObjects() ?: return emptyList()
         return rows
             .map { row ->
                 Entry(
@@ -168,7 +166,7 @@ object BuiltinNetworks {
                         tls = row.bool("tls", true),
                         saslLikelyRequired = row.bool("saslLikelyRequired"),
                         defaultChannel = row.stringOrNull("defaultChannel"),
-                        tags = strings(row, "tags") ?: emptyList(),
+                        tags = row.strings("tags") ?: emptyList(),
                     ),
                     users = row.intOrNull("users"),
                 )
@@ -186,26 +184,6 @@ object BuiltinNetworks {
                 }
             }
             .map { it.preset }
-    }
-
-    /**
-     * Port note: Swift's `as? [[String: Any]]` on the parsed file — all-or-nothing, so one
-     * element that isn't an object means no catalogue rather than a shorter one.
-     */
-    private fun objects(root: JsonElement): List<JsonObject>? {
-        val array = root as? JsonArray ?: return null
-        return array.map { it as? JsonObject ?: return null }
-    }
-
-    /**
-     * Port note: Swift's `as? [String]`, all-or-nothing in the same way: one tag that isn't a
-     * string and the row has no tags.
-     */
-    private fun strings(row: JsonObject, key: String): List<String>? {
-        val array = row[key] as? JsonArray ?: return null
-        return array.map { element ->
-            (element as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
-        }
     }
 }
 

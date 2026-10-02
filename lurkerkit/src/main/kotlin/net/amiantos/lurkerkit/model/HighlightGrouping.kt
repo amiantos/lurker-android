@@ -122,23 +122,30 @@ object HighlightGrouping {
         now: Instant,
         zone: ZoneId = ZoneId.systemDefault(),
     ): List<HighlightGroup> {
-        val groups = mutableListOf<HighlightGroup>()
+        // Port note: each run gathers into a list of its own and becomes a group once, at the
+        // end. LurkerKit appends to the last group in place; a copy per item here would make a
+        // long single-channel run quadratic.
+        class Run(val first: HighlightItem, val day: HighlightDay, val offset: Int) {
+            val items = mutableListOf(first)
+        }
+        val runs = mutableListOf<Run>()
         for ((index, item) in items.withIndex()) {
             val day = HighlightDay.of(date = item.message.date, now = now, zone = zone)
-            val last = groups.lastOrNull()
-            if (last != null &&
-                last.items.lastOrNull()?.bufferKey?.id == item.bufferKey.id &&
-                last.day == day
-            ) {
-                groups[groups.size - 1] = last.copy(items = last.items + item)
+            val last = runs.lastOrNull()
+            if (last != null && last.items.last().bufferKey.id == item.bufferKey.id && last.day == day) {
+                last.items.add(item)
             } else {
-                groups.add(
-                    HighlightGroup(
-                        networkId = item.networkId, target = item.target, day = day, offset = index, items = listOf(item),
-                    )
-                )
+                runs.add(Run(first = item, day = day, offset = index))
             }
         }
-        return groups
+        return runs.map { run ->
+            HighlightGroup(
+                networkId = run.first.networkId,
+                target = run.first.target,
+                day = run.day,
+                offset = run.offset,
+                items = run.items,
+            )
+        }
     }
 }

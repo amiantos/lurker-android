@@ -55,13 +55,15 @@ data class NetworkProxy(
  * `type.defaultPort`, which is the same thing for every call that names a port or leaves it
  * out; only "pass an explicit nil" has no spelling.
  */
-data class ProxyDraft(
+class ProxyDraft(
     val enabled: Boolean = false,
     /**
      * Changed through `setType`, which brings an untouched default port along.
      *
-     * Port note: ⚠ `private(set)` in LurkerKit, which a data class cannot say — `copy(type = …)`
-     * compiles here and leaves the port behind. Nothing enforces it: go through `setType`.
+     * Port note: `private(set)` in LurkerKit. That is why this is not a `data class`: its
+     * `copy(type = …)` would change the protocol and leave the port behind, sending an HTTP
+     * proxy to SOCKS's 1080. Every other field is edited through [edited], which has no `type`
+     * to offer.
      */
     val type: ProxyType = ProxyType.Socks5,
     val host: String = "",
@@ -87,5 +89,35 @@ data class ProxyDraft(
      * (`proxy = proxy.setType(next)`).
      */
     fun setType(next: ProxyType): ProxyDraft =
-        copy(type = next, port = if (port == type.defaultPort) next.defaultPort else port)
+        ProxyDraft(
+            enabled = enabled,
+            type = next,
+            host = host,
+            port = if (port == type.defaultPort) next.defaultPort else port,
+            username = username,
+            password = password,
+        )
+
+    /**
+     * This draft with some fields changed — everything a form edits directly, which is
+     * everything but the protocol. Port-only: the stand-in for assigning to one of LurkerKit's
+     * `var`s (`draft.proxy.port = 9150` → `draft.proxy.edited(port = 9150)`).
+     */
+    fun edited(
+        enabled: Boolean = this.enabled,
+        host: String = this.host,
+        port: Int = this.port,
+        username: String? = this.username,
+        password: SecretEdit = this.password,
+    ): ProxyDraft =
+        ProxyDraft(enabled = enabled, type = type, host = host, port = port, username = username, password = password)
+
+    override fun equals(other: Any?): Boolean =
+        other is ProxyDraft && enabled == other.enabled && type == other.type && host == other.host &&
+            port == other.port && username == other.username && password == other.password
+
+    override fun hashCode(): Int = listOf(enabled, type, host, port, username, password).hashCode()
+
+    override fun toString(): String =
+        "ProxyDraft(enabled=$enabled, type=$type, host=$host, port=$port, username=$username, password=$password)"
 }

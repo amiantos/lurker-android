@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit
 
+import kotlin.test.assertNotEquals
 import net.amiantos.lurkerkit.model.ChannelModeDrafts
 import net.amiantos.lurkerkit.model.ChannelModeForm
 import net.amiantos.lurkerkit.model.ChannelRank
@@ -399,6 +400,35 @@ class ChannelModesTests {
             is Result.Success -> null
             is Result.Failure -> error
         }
+
+
+    // Port-only: LurkerKit mutates these two in place, so a change always sticks. Here each
+    // change is a new value, and a holder that keeps the latest value only when it differs
+    // (`MutableStateFlow`, Compose state) keeps it only if it compares unequal — which
+    // LurkerKit's own `==`, looking at what is on screen and nothing else, would not say.
+
+    @Test
+    fun testArmingIsAChangeEvenThoughNothingIsCurrentYet() {
+        val now = Instant.ofEpochSecond(1_000)
+        val refusal = "482 You're not a channel operator"
+        val fresh = ChannelRefusals()
+        val armed = fresh.arm(now)
+        assertEquals(fresh.current, armed.current)
+        assertNotEquals(fresh, armed)
+        // And the refusal that answers it is seen only because the arming was kept.
+        assertEquals(listOf(refusal), armed.note(refusal, now).current)
+        assertEquals(emptyList(), fresh.note(refusal, now).current)
+    }
+
+    @Test
+    fun testNotingASendIsAChangeEvenThoughTheFormLooksTheSame() {
+        val live = ChannelModeForm.Live(modes = "nt", params = emptyMap())
+        val drafts = ChannelModeDrafts().setOn("m", true, live)
+        val noted = drafts.noteSending(drafts.sending(listOf(OutgoingModeChange(sign = '+', letter = "m")), live = live))
+        assertEquals(drafts.rows, noted.rows)
+        assertEquals(drafts.topic, noted.topic)
+        assertNotEquals(drafts, noted)
+    }
 
     // Waiting on FrameParser, ServerFrame: testSnapshotCarriesTheSpecAndEachChannelsModeState,
     // testANullSpecIsUnknown, testModeSpecFrame, testChannelModesFrameNeverBecomesALine,

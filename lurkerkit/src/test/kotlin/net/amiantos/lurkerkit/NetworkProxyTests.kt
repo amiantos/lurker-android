@@ -55,11 +55,11 @@ class NetworkProxyTests {
     fun testAnEnabledProxyNeedsAnAddressAndAPort() {
         var d = draft().copy(proxy = ProxyDraft(enabled = true, host = "  "))
         assertNotNull(d.validationError)
-        d = d.copy(proxy = d.proxy.copy(host = "127.0.0.1"))
+        d = d.copy(proxy = d.proxy.edited(host = "127.0.0.1"))
         assertNull(d.validationError)
-        d = d.copy(proxy = d.proxy.copy(port = 0))
+        d = d.copy(proxy = d.proxy.edited(port = 0))
         assertNotNull(d.validationError)
-        d = d.copy(proxy = d.proxy.copy(port = 70000))
+        d = d.copy(proxy = d.proxy.edited(port = 70000))
         assertNotNull(d.validationError)
     }
 
@@ -128,7 +128,7 @@ class NetworkProxyTests {
         assertEquals(ProxyType.Http, after.type)
         assertEquals(3128, after.port)
         // Everything but the type and the port it brought along is carried over.
-        assertEquals(before.copy(type = ProxyType.Http, port = 3128), after)
+        assertEquals(ProxyDraft(type = ProxyType.Http, port = 3128), after)
     }
 
     // Port-only: LurkerKit's initialiser takes `port: Int? = nil` and falls back to the type's

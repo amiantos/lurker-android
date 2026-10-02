@@ -9,9 +9,6 @@ import net.amiantos.lurkerkit.support.Result
 import net.amiantos.lurkerkit.support.unicodeRegex
 import java.time.Duration
 import java.time.Instant
-import java.time.ZoneId
-import java.time.format.DateTimeFormatter
-import java.time.format.FormatStyle
 
 /**
  * A network's channel-mode vocabulary, as the server parsed it from ISUPPORT (lurker#727,
@@ -115,29 +112,22 @@ data class ChannelModeState(
     /**
      * "Set by alice · 1 Sep 2026 at 10:00" — whatever of the two the server said, or null.
      *
-     * Port note: ⚠ the date is this platform's wording, not iOS's. LurkerKit formats it with
-     * `formatted(date: .abbreviated, time: .shortened)`; this is the nearest `java.time` has
-     * (`MEDIUM` date, `SHORT` time), in the device's locale and time zone as they stand at the
-     * moment of the call. The two agree on what is shown and not on the words between: for the
-     * same instant in `en_US`, "Sep 1, 2026 at 3:00 AM" there and "Sep 1, 2026, 3:00 AM" on the
-     * host JVM. A device formats from its own locale data and is unverified. Nothing compares
-     * the string.
+     * Port note: a function taking the date's formatter, where LurkerKit has a property that
+     * formats with `formatted(date: .abbreviated, time: .shortened)`. The words are the kit's;
+     * how a date reads is the app's. A plain JVM module can only ask `java.time` for the
+     * locale's own style, which cannot see the device's 24-hour setting — so the line would say
+     * 3:00 PM beside every other time on screen saying 15:00.
      */
-    val topicSetterLine: String?
-        get() {
-            val nick = topicSetBy?.let(ChannelModeForm::setterNick)
-            val time = topicSetAt?.let {
-                DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
-                    .withZone(ZoneId.systemDefault())
-                    .format(it)
-            }
-            return when {
-                nick != null && time != null -> "Set by $nick · $time"
-                nick != null -> "Set by $nick"
-                time != null -> "Set $time"
-                else -> null
-            }
+    fun topicSetterLine(formatted: (Instant) -> String): String? {
+        val nick = topicSetBy?.let(ChannelModeForm::setterNick)
+        val time = topicSetAt?.let(formatted)
+        return when {
+            nick != null && time != null -> "Set by $nick · $time"
+            nick != null -> "Set by $nick"
+            time != null -> "Set $time"
+            else -> null
         }
+    }
 }
 
 /** One entry of a list mode — a ban, exception, invite exception or quiet. */
@@ -171,8 +161,11 @@ sealed interface ModeListResult {
  * and an unrelated error minutes later is not this change's. The web modal draws the same line.
  *
  * Port note: immutable. LurkerKit's `arm` and `note` mutate the struct in place; here each
- * returns the updated copy (`refusals = refusals.note(text)`). Equality is LurkerKit's own:
- * two of these are equal when their [current] answers are, whatever else they have seen.
+ * returns the updated copy (`refusals = refusals.note(text)`). ⚠ Equality is
+ * NOT LurkerKit's, which compares [current] alone: with copies instead of mutation in place, a
+ * holder that keeps the latest value only when it differs (`MutableStateFlow`, Compose state)
+ * would drop `arm()` — nothing current before, nothing current after — and every refusal after
+ * it. Two of these are equal when everything they have seen is.
  */
 @ConsistentCopyVisibility
 data class ChannelRefusals private constructor(
@@ -184,10 +177,6 @@ data class ChannelRefusals private constructor(
     private data class Armed(val from: Int, val at: Instant)
 
     constructor() : this(seen = emptyList(), armed = null)
-
-    override fun equals(other: Any?): Boolean = other is ChannelRefusals && current == other.current
-
-    override fun hashCode(): Int = current.hashCode()
 
     /** A change just went out: errors from here on are its answer. */
     fun arm(now: Instant = Instant.now()): ChannelRefusals = copy(armed = Armed(from = seen.size, at = now))
@@ -499,8 +488,11 @@ object ChannelModeForm {
  * Port note: immutable. Every mutator here returns `Void` in LurkerKit (`setOn`, `setValue`,
  * `setTopic`, `noteSending`, `settle`, `noteTopicSending`, `settleTopic`, `reconcile`), so
  * each returns the updated copy instead (`drafts = drafts.setOn("m", true, live)`).
- * Equality is LurkerKit's own: `rows` and `topic` only — the bookkeeping about what is out
- * and unanswered is not part of what a screen draws.
+ * ⚠ Equality is NOT LurkerKit's, which compares `rows` and `topic` only: with copies instead of
+ * mutation in place, a holder that keeps the latest value only when it differs
+ * (`MutableStateFlow`, Compose state) would drop `noteSending`, which changes neither, and with
+ * it the record of what is out and unanswered. Two of these are equal when all of it is; a
+ * screen that wants "same on screen" compares `rows` and `topic`.
  */
 @ConsistentCopyVisibility
 data class ChannelModeDrafts private constructor(
@@ -557,11 +549,6 @@ data class ChannelModeDrafts private constructor(
         topicPending = false,
         topicDissolvedWhilePending = null,
     )
-
-    override fun equals(other: Any?): Boolean =
-        other is ChannelModeDrafts && rows == other.rows && topic == other.topic
-
-    override fun hashCode(): Int = 31 * rows.hashCode() + (topic?.hashCode() ?: 0)
 
     fun shown(letter: String, live: ChannelModeForm.Live): ChannelModeForm.DraftRow =
         rows[letter] ?: live.row(letter)

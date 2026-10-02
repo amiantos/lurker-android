@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit.model
 
+import net.amiantos.lurkerkit.support.isInWhitespacesAndNewlines
 import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
@@ -135,7 +136,7 @@ object ServerAddress {
                 val authority = rest.substring(2).takeWhile { it != '/' && it != '?' && it != '#' }
                 // A space in the host is not a URL; one further along (`/a b`) is merely a path
                 // that wants encoding, and `URLComponents` takes it.
-                if (authority.any { it.isWhitespace() || it.isISOControl() }) return null
+                if (authority.any { it.isInWhitespacesAndNewlines() || it.isISOControl() }) return null
                 val hostPort = authority.substringAfterLast('@')
                 val host: String
                 val port: String
