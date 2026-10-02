@@ -3,10 +3,14 @@
 
 package net.amiantos.lurkerkit
 
+import kotlinx.serialization.json.JsonPrimitive
 import net.amiantos.lurkerkit.model.CertificateSource
 import net.amiantos.lurkerkit.model.ClientCertificatePEM
+import net.amiantos.lurkerkit.model.NetworkDraft
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -20,6 +24,58 @@ class ClientCertificateTests {
         const val cert = "-----BEGIN CERTIFICATE-----\nMIIC\n-----END CERTIFICATE-----"
         const val key = "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----"
         const val rsaKey = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----"
+    }
+
+    private fun draft(): NetworkDraft =
+        NetworkDraft(name = "Libera", host = "irc.libera.chat", port = 6697, tls = true, nick = "me")
+
+    // MARK: - Reading a row
+
+    // MARK: - The create body
+
+    @Test
+    fun testAGeneratedCertificateRidesTheCreate() {
+        // Attached before the first dial, which is the connect the user registers it from.
+        val d = draft().copy(certificate = CertificateSource.Generate)
+        val body = d.jsonBody(creating = true)
+        assertEquals(JsonPrimitive(true), body["generate_client_cert"])
+        assertNull(body["client_cert"])
+        assertNull(body["client_key"])
+    }
+
+    @Test
+    fun testAnImportedPairRidesTheCreate() {
+        val d = draft().copy(certificate = CertificateSource.Imported(cert = cert, key = key))
+        val body = d.jsonBody(creating = true)
+        assertEquals(JsonPrimitive(cert), body["client_cert"])
+        assertEquals(JsonPrimitive(key), body["client_key"])
+        // The server refuses a body carrying both.
+        assertNull(body["generate_client_cert"])
+    }
+
+    @Test
+    fun testAnEditNeverCarriesACertificate() {
+        // Once the network exists the certificate has routes of its own, and PATCH ignores these.
+        val d = draft().copy(certificate = CertificateSource.Imported(cert = cert, key = key))
+        val body = d.jsonBody(creating = false)
+        for (key in listOf("generate_client_cert", "client_cert", "client_key")) assertNull(body[key], key)
+    }
+
+    @Test
+    fun testNoCertificateSendsNoCertificateKeys() {
+        val body = draft().jsonBody(creating = true)
+        for (key in listOf("generate_client_cert", "client_cert", "client_key")) assertNull(body[key], key)
+    }
+
+    @Test
+    fun testACertificateNeedsTLS() {
+        var d = draft().copy(certificate = CertificateSource.Generate, tls = false)
+        assertNotNull(d.validationError)
+        d = d.copy(tls = true)
+        assertNull(d.validationError)
+        // TLS off with no certificate is still an ordinary network.
+        d = d.copy(certificate = null, tls = false)
+        assertNull(d.validationError)
     }
 
     // MARK: - Picked files (ported from shared/clientCertPem.test.ts)
@@ -82,10 +138,7 @@ class ClientCertificateTests {
         assertTrue(neither.message.contains("doesn't hold"), neither.message)
     }
 
-    // Waiting on FrameParser and NetworkConfig (reading a row): testACertificateReadsItsExpiry,
-    // testAnUnreadableCertificateIsNotNoCertificate, testNullAndAbsentBothMeanNoCertificate
-    //
-    // Waiting on NetworkDraft (the create body): testAGeneratedCertificateRidesTheCreate,
-    // testAnImportedPairRidesTheCreate, testAnEditNeverCarriesACertificate,
-    // testNoCertificateSendsNoCertificateKeys, testACertificateNeedsTLS
+    // Waiting on FrameParser (reading a row, and the `row(certificate:)` helper):
+    // testACertificateReadsItsExpiry, testAnUnreadableCertificateIsNotNoCertificate,
+    // testNullAndAbsentBothMeanNoCertificate
 }

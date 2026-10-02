@@ -3,7 +3,7 @@
 
 package net.amiantos.lurkerkit.client
 
-import net.amiantos.lurkerkit.support.isInWhitespaces
+import net.amiantos.lurkerkit.support.trimmingWhitespaces
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -424,7 +424,7 @@ internal object MultipartBody {
             val isControl = category == Character.CONTROL.toInt() || category == Character.FORMAT.toInt()
             if (scalar != '"'.code && !isControl) cleaned.appendCodePoint(scalar)
         }
-        val result = cleaned.toString().trim { it.isInWhitespaces() }
+        val result = cleaned.toString().trimmingWhitespaces()
         return if (result.isEmpty()) "upload" else result
     }
 

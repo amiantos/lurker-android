@@ -114,9 +114,11 @@ This is where a faithful-looking translation goes wrong.
 - `lowercased()` / `uppercased()` → `lowercase()` / `uppercase()`. Never a `Locale`-taking
   overload with the default locale. Where the Swift folds ASCII only (IRC targets), so does
   the Kotlin.
-- `trimmingCharacters(in: .whitespacesAndNewlines)` → `trim()`. (The two sets differ only at
-  U+0085 and U+001C–001F.)
-  `.whitespaces` (no newlines) → `trim { it.isInWhitespaces() }`, from `support/`.
+- ⚠ Never `trim()`, and never `Char.isWhitespace()`. Swift has three whitespace sets and
+  Kotlin's is none of them (it misses the zero-width space and NEL, and adds U+001C–001F).
+  From `support/`:
+  `trimmingCharacters(in: .whitespacesAndNewlines)` → `trimmingWhitespacesAndNewlines()`;
+  `.whitespaces` → `trimmingWhitespaces()`; `Character.isWhitespace` → `isSwiftWhitespace()`.
 - Swift compares strings by canonical equivalence (`é` equals `e` + U+0301); Kotlin compares
   code units. Nothing here normalises, so the two differ only on differently-normalised input.
   Leave it, and do not add normalisation the Swift does not have.

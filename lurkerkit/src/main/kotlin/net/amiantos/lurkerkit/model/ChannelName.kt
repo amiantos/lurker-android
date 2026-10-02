@@ -3,6 +3,8 @@
 
 package net.amiantos.lurkerkit.model
 
+import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
+
 /**
  * Channel-name handling shared by the command parser (which prefixes a bare `/join` target)
  * and the composer's autocomplete (which folds a query to match channels regardless of the
@@ -58,7 +60,7 @@ object ChannelName {
      * Trims here so there is one rule rather than one per caller: the two that existed on iOS
      * had already drifted to two different trims while a comment asserted they agreed.
      */
-    fun namesAChannel(name: String): Boolean = stripSigils(name.trim()).isNotEmpty()
+    fun namesAChannel(name: String): Boolean = stripSigils(name.trimmingWhitespacesAndNewlines()).isNotEmpty()
 
     /**
      * A bare name gets a leading `#`; an already-sigiled one is left alone. The web's

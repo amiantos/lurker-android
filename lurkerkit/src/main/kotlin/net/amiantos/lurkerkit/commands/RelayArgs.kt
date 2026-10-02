@@ -3,6 +3,9 @@
 
 package net.amiantos.lurkerkit.commands
 
+import net.amiantos.lurkerkit.support.isSwiftWhitespace
+import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
+
 /**
  * Argument parsing for `/relay` (lurker#277) — mark, unmark, and list relay/bridge bots on the
  * active network. A marked bot's messages get re-attributed to the speaker embedded in its
@@ -38,7 +41,7 @@ object RelayArgs {
         // Newlines too, not just spaces and tabs: the composer is multi-line and Return
         // inserts a newline, so `/relay\n` arrives here with one still attached — and an argLine
         // that is only a newline would otherwise miss the listing and be read as a subcommand.
-        val trimmed = argLine.trim()
+        val trimmed = argLine.trimmingWhitespacesAndNewlines()
         if (trimmed.isEmpty()) return Parsed.List
 
         val (sub, rest) = peel(trimmed)
@@ -51,7 +54,7 @@ object RelayArgs {
             if (nick.isEmpty()) return Parsed.Failure(message = "usage: /relay add <nick> [pattern]")
             return Parsed.Add(
                 nick = nick,
-                pattern = unquote(pattern.trim()),
+                pattern = unquote(pattern.trimmingWhitespacesAndNewlines()),
             )
         }
 
@@ -70,9 +73,9 @@ object RelayArgs {
      * custom template survives intact.
      */
     private fun peel(s: String): Pair<String, String> {
-        val start = s.dropWhile { it.isWhitespace() }
-        val token = start.takeWhile { !it.isWhitespace() }
-        val rest = start.drop(token.length).dropWhile { it.isWhitespace() }
+        val start = s.dropWhile { it.isSwiftWhitespace() }
+        val token = start.takeWhile { !it.isSwiftWhitespace() }
+        val rest = start.drop(token.length).dropWhile { it.isSwiftWhitespace() }
         return Pair(token, rest)
     }
 

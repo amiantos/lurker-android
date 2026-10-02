@@ -51,6 +51,6 @@ class UploadHistoryTests {
 
     // MARK: - Parsing
 
-    // Waiting on FrameParser, UploadItem: parsesALiveRow, parsesATombstone, pastedRowHasNoFilename,
-    // garbageIsEmpty
+    // Waiting on FrameParser (`parseUploads`): parsesALiveRow, parsesATombstone,
+    // pastedRowHasNoFilename, garbageIsEmpty
 }

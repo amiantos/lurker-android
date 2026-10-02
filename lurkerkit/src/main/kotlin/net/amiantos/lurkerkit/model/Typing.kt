@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit.model
 
+import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import java.time.Duration
 import java.time.Instant
 
@@ -192,7 +193,7 @@ class OutgoingTyping {
 
         /** Whether `draft` is something we'd tell the network we're composing. */
         private fun isComposing(draft: String): Boolean {
-            val trimmed = draft.trim()
+            val trimmed = draft.trimmingWhitespacesAndNewlines()
             return trimmed.isNotEmpty() && !draft.startsWith("/")
         }
     }

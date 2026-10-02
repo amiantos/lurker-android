@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit.model
 
+import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 /**
@@ -37,7 +38,7 @@ object ServerAddress {
      * "localhost" — the classic host:port trap.
      */
     fun normalize(raw: String): String {
-        val trimmed = raw.trim().trimEnd('/')
+        val trimmed = raw.trimmingWhitespacesAndNewlines().trimEnd('/')
         if (trimmed.isEmpty()) return trimmed
         return if (trimmed.contains("://")) trimmed else "https://$trimmed"
     }
