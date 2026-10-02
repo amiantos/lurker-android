@@ -83,6 +83,9 @@ only ever carried as a value stays a plain `enum class` / `sealed interface`.
 
 **Named tuples** in a signature become a small `data class`.
 
+**`Result<T, E>`** → `support.Result`, imported by name — not `kotlin.Result`, whose failure is
+any `Throwable` and cannot be switched on.
+
 **A case named like a builtin** (`SettingValue.string`) keeps its name (`SettingValue.String`);
 inside that type the builtin is written `kotlin.String`.
 

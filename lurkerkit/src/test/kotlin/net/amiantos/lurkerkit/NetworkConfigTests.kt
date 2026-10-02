@@ -6,6 +6,7 @@ package net.amiantos.lurkerkit
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NetworkConfig
 import net.amiantos.lurkerkit.model.NetworkDraft
 import net.amiantos.lurkerkit.model.NetworkProxy
@@ -32,6 +33,12 @@ class NetworkConfigTests {
     // MARK: - The `state` event
 
     // MARK: - Nameless networks (lurker-ios#136)
+
+    @Test
+    fun testANamelessNetworkStillRendersAsSomething() {
+        assertEquals("Unnamed network", Network(id = 1, name = null).displayName)
+        assertEquals("Libera", Network(id = 1, name = "Libera").displayName)
+    }
 
     // MARK: - Roster membership
 
@@ -166,7 +173,6 @@ class NetworkConfigTests {
     // testTheRosterRemovesANetworkItNoLongerNames, testRemovingANetworkTakesItsBuffersWithIt,
     // testAnUnreadableRosterDoesNotWipeTheNetworks, testAnEmptyRosterIsStillAnAnswer
     //
-    // Waiting on Network: testANamelessNetworkStillRendersAsSomething
 
     // Port-only: the whole body, key for key, as LurkerKit builds it (the expected JSON is the
     // Swift's own output for the same draft). The suite above reads a body one key at a time,

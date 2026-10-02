@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.model.MemberPrefix
 import net.amiantos.lurkerkit.model.NickNote
 import net.amiantos.lurkerkit.model.NickNoteSet
 import kotlin.test.Test
@@ -20,6 +21,31 @@ import kotlin.test.assertTrue
  * each was a shipped bug (lurker#818) before it was a rule, and each fails differently.
  */
 class WhoisTests {
+
+    // MARK: - The channels line
+
+    @Test
+    fun testSplitPrefersTheLargestPeelThatStillLeavesAChannel() {
+        // `+#chan` is ambiguous — voiced in `#chan`, or a channel named `+#chan` — and nothing
+        // here can tell without ISUPPORT. Preferring the largest legal peel resolves it the way
+        // traffic actually runs, and leaves `+chan` (whose peel isn't legal) alone.
+        assertEquals("+", MemberPrefix.splitChannelToken("+#chan")?.prefix)
+        assertEquals("#chan", MemberPrefix.splitChannelToken("+#chan")?.name)
+        assertEquals("", MemberPrefix.splitChannelToken("+chan")?.prefix)
+        assertEquals("+chan", MemberPrefix.splitChannelToken("+chan")?.name)
+        // Two glyphs deep, with a sigil-shaped one in the middle.
+        assertEquals("~", MemberPrefix.splitChannelToken("~&chan")?.prefix)
+        assertEquals("&chan", MemberPrefix.splitChannelToken("~&chan")?.name)
+    }
+
+    @Test
+    fun testATokenOnAnUnknownChannelTypeIsKeptUnpeeledRatherThanDropped() {
+        // No legal peel (nothing left is a channel by this client's CHANTYPES), but a network
+        // that uses another one still has real channels there. Showing it unpeeled beats
+        // silently hiding it.
+        assertEquals("chan", MemberPrefix.splitChannelToken("chan")?.name)
+        assertEquals("", MemberPrefix.splitChannelToken("chan")?.prefix)
+    }
 
     // MARK: - Nick notes
 
@@ -95,9 +121,8 @@ class WhoisTests {
 
     // Waiting on WhoisResult: testHostmaskFillsAMissingHalfWithAStarAndIsNilWithNeither,
     // testChannelsIsOneSpaceSeparatedStringNotAnArray, testAGreedySigilPeelWouldEatTheChannelSigil,
-    // testAnUnprefixedChannelKeepsItsOwnSigil, testSplitPrefersTheLargestPeelThatStillLeavesAChannel,
-    // testASigilOnlyTokenIsDroppedRatherThanBecomingATappableBlank,
-    // testATokenOnAnUnknownChannelTypeIsKeptUnpeeledRatherThanDropped, testAnAbsentChannelsLineIsNoChannels
+    // testAnUnprefixedChannelKeepsItsOwnSigil,
+    // testASigilOnlyTokenIsDroppedRatherThanBecomingATappableBlank, testAnAbsentChannelsLineIsNoChannels
     //
     // Waiting on FrameParser, ServerFrame (and WhoisResult):
     // testParsesTheFullReplyUsingIrcFrameworksFieldNames,
