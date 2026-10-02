@@ -16,12 +16,12 @@ Files with no dependency on any other LurkerKit type.
 
 | Swift file | Lines | Status | Notes |
 |---|---:|---|---|
-| `Client/JSON.swift` | 60 | ported | → `client/Json.kt`. `FailableDecodable` is `Json.decodeEach`. |
+| `Client/JSON.swift` | 60 | ported | → `client/Json.kt`. `FailableDecodable` is `Json.decodeEach`. The reads bridge numbers and booleans the way `NSNumber` does. |
 | `Client/NotificationTap.swift` | 57 | ported | Input is a `Map<String, Any?>`; FCM's all-strings data map is the shape Android will hand it. |
 | `Client/ProtocolVersion.swift` | 46 | ported |  |
-| `Client/Uploads.swift` | 405 | ported | All but `UploadProgressDelegate` (a `URLSessionTaskDelegate`), which becomes a counting OkHttp `RequestBody` in T6. |
+| `Client/Uploads.swift` | 405 | ported | All but `UploadProgressDelegate` (a `URLSessionTaskDelegate`), which becomes a counting OkHttp `RequestBody` in T6. `assemble` deletes its partial file on failure, which LurkerKit leaves to iOS. |
 | `Commands/RelayArgs.swift` | 90 | ported |  |
-| `Commands/SpoilerMarkup.swift` | 141 | ported | Checked against the Swift over a corpus; differs only when a combining mark follows a `|`. |
+| `Commands/SpoilerMarkup.swift` | 141 | ported | Checked against the Swift over a corpus; differs only when a combining mark follows a `\|`. |
 | `Model/BufferListPlaceholder.swift` | 41 | ported |  |
 | `Model/BufferPlaceholder.swift` | 88 | ported |  |
 | `Model/ChannelName.swift` | 83 | ported |  |
@@ -34,7 +34,7 @@ Files with no dependency on any other LurkerKit type.
 | `Model/NickNoteSet.swift` | 100 | ported |  |
 | `Model/Presence.swift` | 69 | ported |  |
 | `Model/PreviewReask.swift` | 64 | ported |  |
-| `Model/ServerAddress.swift` | 78 | ported | Parses by hand to match `URLComponents`; edges pinned by a port-only test. |
+| `Model/ServerAddress.swift` | 78 | ported | Parses by hand to match `URLComponents`, then also requires that OkHttp can load the address — stricter than iOS at a few edges, pinned by a port-only test. |
 | `Model/Settings.swift` | 240 | ported | `SettingValue.Int` is 32-bit; a wire number past that is skipped rather than wrapped. |
 | `Model/Speakers.swift` | 102 | ported |  |
 | `Model/Typing.swift` | 170 | ported | `OutgoingTyping` is a mutable class (PORTING.md, structs that mutate, case 3). No Kotlin test until `TypingTests` can run against the store. |

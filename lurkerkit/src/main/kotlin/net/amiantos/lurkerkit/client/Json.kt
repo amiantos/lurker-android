@@ -10,18 +10,20 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.longOrNull
 
 // Typed reads over a parsed `JsonObject` — the Kotlin stand-in for LurkerKit's reads over a
 // `JSONSerialization` dictionary. `stringOrNull` collapses missing, JSON null, and "" to
 // null — restoring the wire's distinction between an absent/empty string and a present one
 // (e.g. a null topic vs. a real one).
 //
-// ⚠ Every read is type-strict, the way a Swift `as?` cast is: a number is never read as a
-// string, nor `"3"` as a number, nor `1` as `true`. kotlinx's own `JsonPrimitive.content`
-// and `.int` would happily coerce all three, so nothing below goes through them unguarded.
+// ⚠ Every read casts the way a Swift `as?` does on a `JSONSerialization` value, no more and no
+// less. A string is never a number and a number never a string: kotlinx's own
+// `JsonPrimitive.content` and `.int` would read `"3"` as 3 and `3` as "3", so nothing below
+// goes through them unguarded. But a JSON number or boolean is an `NSNumber` over there, and
+// those DO bridge into each other: `true` reads as the integer 1, `1` and `0` read as booleans,
+// and `3.0` reads as the integer 3. A field the server sends as a SQLite 0/1 is a boolean on
+// iOS for that reason, and has to be one here. (Answers taken from Foundation, pinned in
+// `JsonTests`.)
 
 /** The value under [key] if it is a JSON string (quoted on the wire), else null. */
 private fun JsonObject.stringValue(key: String): String? =
@@ -41,7 +43,8 @@ internal fun JsonObject.string(key: String, fallback: String = ""): String =
  * null for missing/null; used where absent (null networkId → system buffer) must be
  * distinguished from 0.
  */
-internal fun JsonObject.intOrNull(key: String): Int? = literal(key)?.intOrNull
+internal fun JsonObject.intOrNull(key: String): Int? =
+    longOrNull(key)?.takeIf { it >= Int.MIN_VALUE && it <= Int.MAX_VALUE }?.toInt()
 
 internal fun JsonObject.int(key: String, fallback: Int = 0): Int = intOrNull(key) ?: fallback
 
@@ -50,12 +53,40 @@ internal fun JsonObject.int(key: String, fallback: Int = 0): Int = intOrNull(key
  * counts, epoch milliseconds. Swift's `Int` is 64-bit everywhere, so LurkerKit has one read
  * where this port has two.
  */
-internal fun JsonObject.longOrNull(key: String): Long? = literal(key)?.longOrNull
+internal fun JsonObject.longOrNull(key: String): Long? = literal(key)?.let(::integer)
 
 internal fun JsonObject.long(key: String, fallback: Long = 0): Long = longOrNull(key) ?: fallback
 
-internal fun JsonObject.bool(key: String, fallback: Boolean = false): Boolean =
-    literal(key)?.booleanOrNull ?: fallback
+internal fun JsonObject.bool(key: String, fallback: Boolean = false): Boolean {
+    val literal = literal(key) ?: return fallback
+    return when (literal.content) {
+        "true" -> true
+        "false" -> false
+        // Only 0 and 1 are booleans; `2` is not.
+        else -> when (integer(literal)) {
+            0L -> false
+            1L -> true
+            else -> fallback
+        }
+    }
+}
+
+/**
+ * An unquoted literal as an integer, the way an `NSNumber` casts to `Int`: a boolean is 1 or 0,
+ * and a number is itself when it is whole (`3`, `3.0`, `1e3`) and in range. `1.5` is nothing.
+ */
+private fun integer(literal: JsonPrimitive): Long? {
+    when (literal.content) {
+        "true" -> return 1
+        "false" -> return 0
+    }
+    literal.content.toLongOrNull()?.let { return it }
+    val number = literal.content.toDoubleOrNull() ?: return null
+    // NaN fails the first test; 2^63 itself rounds into range as a double, hence `<`.
+    if (number != Math.rint(number)) return null
+    if (number < -9.223372036854775808E18 || number >= 9.223372036854775808E18) return null
+    return number.toLong()
+}
 
 /**
  * The array of objects under [key], or empty.

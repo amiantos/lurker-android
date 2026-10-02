@@ -25,9 +25,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Port-only. LurkerKit has no suite for its JSON reads because a Swift `as?` cast cannot
- * coerce; kotlinx's primitives can, so the strictness the rest of the port assumes is pinned
- * here.
+ * Port-only. LurkerKit has no suite for its JSON reads because they are bare `as?` casts on
+ * `JSONSerialization` values. These reads have to reproduce those casts by hand, so each
+ * expectation here is what Foundation answered for the same JSON (probed with a compiled Swift
+ * program): strings and numbers never cross, numbers and booleans do.
  */
 class JsonTests {
 
@@ -53,7 +54,7 @@ class JsonTests {
     @Test
     fun testANumberIsNeverReadAsAStringNorAStringAsANumber() {
         // ⚠⚠ The coercions `JsonPrimitive.content` and `.int` would both perform.
-        val o = obj("""{"id":3,"quoted":"3","flag":true,"word":"true"}""")
+        val o = obj("""{"id":3,"quoted":"3","flag":true,"word":"true","one":"1"}""")
         assertNull(o.stringOrNull("id"))
         assertEquals("", o.string("id"))
         assertNull(o.intOrNull("quoted"))
@@ -61,6 +62,7 @@ class JsonTests {
         assertNull(o.longOrNull("quoted"))
         assertNull(o.stringOrNull("flag"))
         assertFalse(o.bool("word"))
+        assertFalse(o.bool("one"))
     }
 
     @Test
@@ -74,20 +76,48 @@ class JsonTests {
 
     @Test
     fun testAFractionalOrOversizedNumberIsNotAnInt() {
-        val o = obj("""{"half":1.5,"big":4294967296}""")
+        val o = obj("""{"half":1.5,"big":4294967296,"huge":1e30,"past":9223372036854775808}""")
         assertNull(o.intOrNull("half"))
         assertNull(o.longOrNull("half"))
+        assertNull(o.longOrNull("huge"))
+        assertNull(o.longOrNull("past"))
         // Past 32 bits: not an `Int`, but exactly what `long` is for.
         assertNull(o.intOrNull("big"))
         assertEquals(4_294_967_296L, o.long("big"))
     }
 
     @Test
-    fun testBoolReadsOnlyALiteralBoolean() {
-        val o = obj("""{"yes":true,"no":false,"one":1,"nothing":null}""")
+    fun testAWholeNumberIsAnIntHoweverItIsWritten() {
+        val o = obj("""{"plain":3,"point":3.0,"exp":1e3,"neg":-1}""")
+        assertEquals(3, o.intOrNull("plain"))
+        assertEquals(3, o.intOrNull("point"))
+        assertEquals(1000, o.intOrNull("exp"))
+        assertEquals(-1, o.intOrNull("neg"))
+        assertEquals(3L, o.longOrNull("point"))
+    }
+
+    @Test
+    fun testABooleanReadsAsOneOrZero() {
+        // What `true as? Int` gives on iOS, where both are `NSNumber`s.
+        val o = obj("""{"yes":true,"no":false}""")
+        assertEquals(1, o.intOrNull("yes"))
+        assertEquals(0, o.intOrNull("no"))
+    }
+
+    @Test
+    fun testBoolReadsALiteralBooleanOrAZeroOrOne() {
+        // ⚠ The 0/1 arm is the one that matters: a SQLite integer flag the server echoes without
+        // normalising is a boolean on iOS, and reading it as "absent" here would be silent.
+        val o = obj("""{"yes":true,"no":false,"one":1,"zero":0,"one0":1.0,"two":2,"half":0.5,"nothing":null}""")
         assertTrue(o.bool("yes"))
         assertFalse(o.bool("no", true))
-        assertFalse(o.bool("one"))
+        assertTrue(o.bool("one"))
+        assertFalse(o.bool("zero", true))
+        assertTrue(o.bool("one0"))
+        // Not booleans: the fallback, whichever way it points.
+        assertFalse(o.bool("two"))
+        assertTrue(o.bool("two", true))
+        assertFalse(o.bool("half"))
         assertTrue(o.bool("nothing", true))
         assertTrue(o.bool("absent", true))
     }

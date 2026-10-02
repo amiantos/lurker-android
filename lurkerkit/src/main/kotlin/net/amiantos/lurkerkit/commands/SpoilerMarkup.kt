@@ -87,28 +87,30 @@ object SpoilerMarkup {
      */
     private fun tokenize(text: String): List<Token> {
         val tokens = mutableListOf<Token>()
-        var buffer = ""
+        // Port note: builders, not `+=` on a String — that copies the whole text per character
+        // here, where Swift's `append` does not.
+        val buffer = StringBuilder()
         val chars = text
         var i = 0
         while (i < chars.length) {
             if (chars[i] == '\\' && i + 2 < chars.length && chars[i + 1] == '|' && chars[i + 2] == '|') {
-                buffer += "||"
+                buffer.append("||")
                 i += 3
                 continue
             }
             if (chars[i] == '|' && i + 1 < chars.length && chars[i + 1] == '|') {
                 if (buffer.isNotEmpty()) {
-                    tokens.add(Token.Text(buffer))
-                    buffer = ""
+                    tokens.add(Token.Text(buffer.toString()))
+                    buffer.setLength(0)
                 }
                 tokens.add(Token.Delimiter)
                 i += 2
                 continue
             }
-            buffer += chars[i]
+            buffer.append(chars[i])
             i += 1
         }
-        if (buffer.isNotEmpty()) tokens.add(Token.Text(buffer))
+        if (buffer.isNotEmpty()) tokens.add(Token.Text(buffer.toString()))
         return tokens
     }
 
@@ -125,19 +127,19 @@ object SpoilerMarkup {
     fun apply(text: String): String {
         if (!text.contains("||")) return text
         val tokens = tokenize(text)
-        var out = ""
+        val out = StringBuilder()
         var i = 0
         while (i < tokens.size) {
             when (val token = tokens[i]) {
                 is Token.Text -> {
-                    out += token.value
+                    out.append(token.value)
                     i += 1
                     continue
                 }
                 Token.Delimiter -> Unit
             }
             // An opening `||`: gather everything up to the next delimiter.
-            var content = ""
+            val content = StringBuilder()
             var closeIndex = -1
             for (j in i + 1 until tokens.size) {
                 when (val candidate = tokens[j]) {
@@ -145,7 +147,7 @@ object SpoilerMarkup {
                         closeIndex = j
                         break
                     }
-                    is Token.Text -> content += candidate.value
+                    is Token.Text -> content.append(candidate.value)
                 }
             }
             if (closeIndex != -1 && content.isNotEmpty()) {
@@ -159,14 +161,14 @@ object SpoilerMarkup {
                         Token.Delimiter -> Unit
                     }
                 }
-                out += open + content + close(next)
+                out.append(open).append(content).append(close(next))
                 i = closeIndex + 1
             } else {
                 // Unmatched, or an empty `||||` — the opening `||` is just literal text.
-                out += "||"
+                out.append("||")
                 i += 1
             }
         }
-        return out
+        return out.toString()
     }
 }

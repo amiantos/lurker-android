@@ -26,10 +26,11 @@ kotlin {
 }
 
 dependencies {
-    implementation(libs.kotlinx.serialization.json)
-    implementation(libs.kotlinx.coroutines.core)
-    // `api`: HttpUrl and okio.ByteString appear in the kit's own signatures.
+    // `api`: these appear in the kit's own signatures — `JsonElement` (settings values),
+    // `HttpUrl` and `okio.ByteString` — so a consumer has to be able to name them.
+    api(libs.kotlinx.serialization.json)
     api(libs.okhttp)
+    implementation(libs.kotlinx.coroutines.core)
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.kotlinx.coroutines.test)
 }

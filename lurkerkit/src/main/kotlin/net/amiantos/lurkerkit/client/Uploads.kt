@@ -72,7 +72,7 @@ data class UploadResponse(
  * Everything that can go wrong turning a picked file into a pasted URL. Each case carries a
  * user-facing sentence so the presenter never has to interpret an error code.
  */
-sealed class UploadError : Exception() {
+sealed class UploadError : Exception(null, null, false, false) {
     /** No live session — the token was dropped between picking and uploading. */
     data object NotSignedIn : UploadError()
 
@@ -451,6 +451,28 @@ internal object MultipartBody {
             "lurker-upload-${UUID.randomUUID().toString().uppercase()}.multipart",
         )
 
+        try {
+            assembleInto(outURL, boundary, token, fileURL, filename, mime)
+        } catch (failure: Throwable) {
+            // Port note: not in LurkerKit, where the half-written body is left for iOS to purge
+            // with the rest of its temporary directory. Android only trims its cache under
+            // quota pressure, and the likeliest failure here is a full disk — the one condition
+            // in which leaving up to a whole video behind per attempt makes the next one worse.
+            outURL.delete()
+            throw failure
+        }
+
+        return Assembled(fileURL = outURL, contentType = "multipart/form-data; boundary=$boundary")
+    }
+
+    private fun assembleInto(
+        outURL: File,
+        boundary: String,
+        token: String,
+        fileURL: File,
+        filename: String,
+        mime: String,
+    ) {
         FileOutputStream(outURL).use { out ->
             fun write(string: String) {
                 out.write(string.toByteArray(Charsets.UTF_8))
@@ -479,8 +501,6 @@ internal object MultipartBody {
 
             write("\r\n--$boundary--\r\n")
         }
-
-        return Assembled(fileURL = outURL, contentType = "multipart/form-data; boundary=$boundary")
     }
 }
 

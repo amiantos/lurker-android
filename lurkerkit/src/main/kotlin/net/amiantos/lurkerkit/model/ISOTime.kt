@@ -56,19 +56,21 @@ object ISOTime {
      * Parse, or null if absent/unparseable. Never throws — an unreadable timestamp costs
      * a rendered clock, not a dropped message.
      *
-     * Ordered by how often each shape actually arrives: nearly every timestamp on the wire is
-     * an event `time`, which is ISO.
+     * Port note: the shape is told apart up front rather than by trying one parser and then
+     * the other, as LurkerKit does. A failed parse is a thrown exception here, and whole columns
+     * arrive in the SQLite shape — a list of them would pay for one per row.
      */
     fun parse(iso: String?): Instant? {
         if (iso == null) return null
+        val sqliteShaped = iso.length == 19 && iso[10] == ' '
         return try {
-            OffsetDateTime.parse(iso, DateTimeFormatter.ISO_OFFSET_DATE_TIME).toInstant()
-        } catch (_: DateTimeParseException) {
-            try {
+            if (sqliteShaped) {
                 LocalDateTime.parse(iso, sqliteDateTime).toInstant(ZoneOffset.UTC)
-            } catch (_: DateTimeParseException) {
-                null
+            } else {
+                OffsetDateTime.parse(iso, DateTimeFormatter.ISO_OFFSET_DATE_TIME).toInstant()
             }
+        } catch (_: DateTimeParseException) {
+            null
         }
     }
 

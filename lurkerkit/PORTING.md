@@ -73,8 +73,12 @@ is an interface here and an implementation in `:app`:
 **`switch` → `when`.** Exhaustive over an enum or sealed type, with no `else` branch, so that
 adding a case breaks the build here exactly as it does in Swift.
 
-**Thrown errors** (`enum FooError: Error`) → `sealed class FooError : Exception()` with
-`data object` / `data class` cases, so they still compare equal in tests. An error enum that is
+**Thrown errors** (`enum FooError: Error`) → `sealed class FooError : Exception(null, null,
+false, false)` with `data object` / `data class` cases, so they still compare equal in tests.
+The four arguments switch off the stack trace and suppressed exceptions: a `data object` case
+is one shared instance, and a shared `Throwable` that records where it was first touched, and
+collects suppressed failures from every thread, is wrong in every later report. A Swift error
+carries neither. An error enum that is
 only ever carried as a value stays a plain `enum class` / `sealed interface`.
 
 **Named tuples** in a signature become a small `data class`.
@@ -129,8 +133,10 @@ This is where a faithful-looking translation goes wrong.
 
 - A `[String: Any]` from `JSONSerialization` → `kotlinx.serialization.json.JsonObject`, read
   through the helpers in `client/Json.kt` (`stringOrNull`, `string`, `intOrNull`, `int`,
-  `longOrNull`, `long`, `bool`, `objects`, `has`). They are type-strict the way `as?` is.
+  `longOrNull`, `long`, `bool`, `objects`, `has`). They cast the way `as?` does on such a value.
   ⚠ Never read `JsonPrimitive.content` or `.int` directly: both coerce (`"3"` → 3, `3` → "3").
+- A number and a boolean bridge into each other, as `NSNumber`s do: `true` reads as 1, `1`
+  as `true`, `3.0` as 3. The helpers do this; a hand-rolled read must too.
 - `Codable` → `@Serializable`.
 - A test that builds a dictionary literal → `Json.parseToJsonElement("""…""")` or
   `buildJsonObject { … }`.

@@ -122,15 +122,12 @@ class ServerAddressTests {
             "http://a.b@c.d@localhost",
             "http://localhost:",
             "http://[::1]",
-            "http://[fe80::1%25en0]:8010",
             "http://001.002.003.004",
-            "http://.local",
             "http://box.local/path?q=1#f",
             "http://localhost/a b",
             "http://localhost#frag",
             "http://localhost?x=1",
             "http://LOCALHOST",
-            "http://1.2.3.4:99999",
             "http://éxample.local",
         )
         for (url in passes) assertNull(ServerAddress.rejection(url), url)
@@ -166,6 +163,17 @@ class ServerAddressTests {
             "mailto:me@example.org",
         )
         for (url in unparsable) assertEquals(looksWrong, ServerAddress.rejection(url), url)
+
+        // Where this port deliberately leaves iOS: `URLComponents` passes these, but OkHttp
+        // cannot load them, and an address that clears sign-in must be one a request can use.
+        val unloadable = listOf(
+            "http://1.2.3.4:99999",
+            "https://chat.example.org:0",
+            "http://.local",
+            "https://a..b",
+            "http://[fe80::1%25en0]:8010",
+        )
+        for (url in unloadable) assertEquals(looksWrong, ServerAddress.rejection(url), url)
 
         // The scheme is compared as written — an upper-case one is not `https`.
         for (url in listOf("HTTPS://app.lurker.chat", "HTTP://localhost", "ht+tp://x")) {

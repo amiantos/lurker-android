@@ -3,6 +3,8 @@
 
 package net.amiantos.lurkerkit.model
 
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+
 /**
  * The transport policy for a typed-in server address (lurker-ios#29).
  *
@@ -51,14 +53,24 @@ object ServerAddress {
         val host = components?.host
         if (components == null || host.isNullOrEmpty()) return "That server URL doesn't look right."
         return when {
-            components.scheme == "https" -> null
-            components.scheme == "http" && isLocalHost(host) -> null
+            components.scheme == "https" -> loadable(normalized)
+            components.scheme == "http" && isLocalHost(host) -> loadable(normalized)
             components.scheme == "http" ->
                 "That server needs HTTPS — plain http:// only works for local " +
                     "addresses (an IP, a .local name, or a single-word host like localhost)."
             else -> "Server URLs start with https:// (or http:// for a local server)."
         }
     }
+
+    /**
+     * Port note: the last word on an address the policy passes. On iOS the gate and the HTTP
+     * stack read a URL with the same parser, so what passes is loadable by construction. Here
+     * the gate parses by hand and OkHttp loads, and OkHttp is the stricter: it refuses a port
+     * past 65535 or of 0, an empty label (`a..b`, `.local`), and a zone id in an IPv6 literal.
+     * Without this, such an address would clear sign-in and then throw from the first request.
+     */
+    private fun loadable(normalized: String): String? =
+        if (normalized.toHttpUrlOrNull() != null) null else "That server URL doesn't look right."
 
     /**
      * Apple's three "local" host classes, verbatim from the `NSAllowsLocalNetworking`
