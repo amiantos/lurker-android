@@ -1861,13 +1861,14 @@ class LurkerStoreTests {
     // Swift struct gets for free.
 
     /**
-     * A `StateFlow` drops a state equal to the one it holds, so a frame that changes nothing
-     * wakes no subscriber — where LurkerKit's `CurrentValueSubject` re-sends the same state for
-     * every frame. Pinned so a screen written against one behaviour can't quietly be relying on
-     * the other.
+     * Every assignment publishes, as `CurrentValueSubject` does: a frame that changes nothing
+     * (a `send-result`, a `join-error`, a topic for a buffer we don't hold) still re-sends the
+     * same state, and a collector that fell behind is handed every state in order, not the
+     * latest. Pinned because `AppBadge` writes on the settled EDGE of a burst and would never see
+     * it through a conflating `StateFlow` (see `LurkerStore`'s Port note).
      */
     @Test
-    fun testAFrameThatChangesNothingPublishesNothing() = runTest {
+    fun testEveryAssignmentPublishesEqualOrNot() = runTest {
         val store = LurkerStore()
         val seen = mutableListOf<ChatState>()
         backgroundScope.launch { store.statePublisher.collect { seen.add(it) } }
@@ -1879,14 +1880,13 @@ class LurkerStoreTests {
         assertEquals(2, seen.size)
 
         store.apply(ServerFrame.SendResult(clientId = "c1", ok = false, error = "not-connected"))
-        runCurrent()
         store.apply(ServerFrame.JoinError(networkId = 1, target = "#secret", reason = "This channel is invite-only."))
-        runCurrent()
         store.apply(ServerFrame.ChannelTopic(networkId = 1, target = "#nowhere", topic = "x"))
-        runCurrent()
         store.clearError()
+        // Four assignments before the collector ran once: all four arrive, equal or not.
         runCurrent()
-        assertEquals(2, seen.size, "nothing moved, so nothing was published")
+        assertEquals(6, seen.size, "every assignment is published, in order")
+        assertEquals(seen[1], seen[5], "and they were the same state")
     }
 
     /**

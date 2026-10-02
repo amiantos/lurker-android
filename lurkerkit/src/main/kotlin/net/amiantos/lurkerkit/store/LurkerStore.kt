@@ -3,9 +3,9 @@
 
 package net.amiantos.lurkerkit.store
 
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import net.amiantos.lurkerkit.client.HistoryMode
 import net.amiantos.lurkerkit.client.Incompatibility
 import net.amiantos.lurkerkit.client.NetworkSnapshot
@@ -512,35 +512,47 @@ data class ChatState(
      * device closing a buffer (`removeBuffer`), the server saying another device did
      * (`buffer-closed`), and reconciling a burst that no longer lists it (`pruneToBurst`).
      */
-    internal fun dropBuffer(key: String): ChatState {
+    internal fun dropBuffer(key: String): ChatState = dropBuffers(listOf(key))
+
+    /**
+     * Port note: `dropBuffer` over a collection, in one pass. LurkerKit drops in place and its
+     * two bulk callers (`dropNetwork`, `pruneToBurst`) simply loop; here each `dropBuffer` would
+     * rebuild twelve maps, so the loop is folded into one subtraction per map. The body is
+     * `dropBuffer`'s.
+     */
+    internal fun dropBuffers(keys: Collection<String>): ChatState {
+        if (keys.isEmpty()) return this
+        val keySet = keys.toSet()
         var keysById = this.keysById
-        val id = buffers[key]?.bufferId
-        if (id != null && keysById[id] == key) keysById = keysById - id
         // The reactions on its lines go with them: a reopen's rows carry their own again. Network
         // buffers only — system-buffer ids are another sequence, and would free network lines'.
         // ⚠ Asked before the row goes, which is what says which kind this is.
-        var reactions = this.reactions
-        if (buffers[key]?.networkId != null) {
-            reactions = reactions - messages[key].orEmpty().map { it.id }.toSet()
+        val freedReactions = HashSet<Long>()
+        for (key in keySet) {
+            val id = buffers[key]?.bufferId
+            if (id != null && keysById[id] == key) keysById = keysById - id
+            if (buffers[key]?.networkId != null) {
+                messages[key].orEmpty().mapTo(freedReactions) { it.id }
+            }
         }
         return copy(
             keysById = keysById,
-            reactions = reactions,
-            reactionsRevisions = reactionsRevisions - key,
-            buffers = buffers - key,
-            messages = messages - key,
-            members = members - key,
-            channelModes = channelModes - key,
-            typing = typing - key,
-            speakers = speakers - key,
-            heldLive = heldLive - key,
+            reactions = reactions - freedReactions,
+            reactionsRevisions = reactionsRevisions - keySet,
+            buffers = buffers - keySet,
+            messages = messages - keySet,
+            members = members - keySet,
+            channelModes = channelModes - keySet,
+            typing = typing - keySet,
+            speakers = speakers - keySet,
+            heldLive = heldLive - keySet,
             // ⚠ A refused line held for this buffer goes with it. Closing is deliberate, and
             // text keyed to a buffer that is no longer on the list would resurface without
             // warning whenever it was reopened. The cost is real — it is the user's own writing
             // — but a buffer they closed is not where they are looking for it.
-            unsent = unsent - key,
+            unsent = unsent - keySet,
             // The draft too: the server deletes its row on a close.
-            drafts = drafts - key,
+            drafts = drafts - keySet,
         )
     }
 
@@ -555,8 +567,7 @@ data class ChatState(
      * cannot inherit the old one's presence.
      */
     internal fun dropNetwork(id: Int): ChatState {
-        var next = this
-        for (key in buffers.values.filter { it.networkId == id }.map { it.key.id }) next = next.dropBuffer(key)
+        val next = dropBuffers(buffers.values.filter { it.networkId == id }.map { it.key.id })
         return next.copy(
             networks = next.networks - id,
             peerPresence = next.peerPresence - id,
@@ -673,11 +684,9 @@ data class ChatState(
      */
     internal fun pruneToBurst(): ChatState {
         if (!burstActive) return this
-        // Collected before mutating: `buffers` is being written in the loop below.
+        // Collected before mutating: on iOS `buffers` is being written in the loop that follows.
         val doomed = buffers.keys.filter { !burstSeen.contains(it) }
-        var next = this
-        for (key in doomed) next = next.dropBuffer(key)
-        return next.copy(burstActive = false, burstSeen = emptySet())
+        return dropBuffers(doomed).copy(burstActive = false, burstSeen = emptySet())
     }
 
     /**
@@ -900,16 +909,21 @@ data class ChatState(
      */
     internal fun noteBookmarks(messages: List<Message>, networkId: Int?): ChatState {
         if (networkId == null) return this
-        val ids = LinkedHashSet(bookmarkedIds)
+        // Port note: the set is copied only once a row disagrees with it. LurkerKit mutates in
+        // place; here every backlog page would otherwise copy the whole set to change nothing.
+        var ids: LinkedHashSet<Long>? = null
         for (message in messages) {
             if (message.id == 0L) continue
+            val held = (ids ?: bookmarkedIds).contains(message.id)
+            if (message.bookmarked == held) continue
+            val set = ids ?: LinkedHashSet(bookmarkedIds).also { ids = it }
             if (message.bookmarked) {
-                ids.add(message.id)
+                set.add(message.id)
             } else {
-                ids.remove(message.id)
+                set.remove(message.id)
             }
         }
-        return copy(bookmarkedIds = ids)
+        return if (ids == null) this else copy(bookmarkedIds = ids)
     }
 
     /**
@@ -1096,23 +1110,37 @@ data class ChatState(
 /**
  * Holds the domain state and folds `ServerFrame`s into it. The fold is a pure function
  * (`reduce`) with no I/O, so it is fully unit-testable; the store just wraps it in a
- * `MutableStateFlow` the UI observes. Confined to the main thread, because the client
+ * replaying flow the UI observes. Confined to the main thread, because the client
  * marshals every frame to main before applying it, so no locking is needed.
  *
  * Port note: `clock` is port-only. LurkerKit's `apply` lets `reduce` read `Date()`; here it
  * reads `clock`, which defaults to the system and lets a test pin the typing lease and the
  * speaker map's fallback time through the store.
  *
- * Port note: a `StateFlow` conflates — assigning a state equal to the current one publishes
- * nothing — where LurkerKit's `CurrentValueSubject` publishes on every assignment. So a frame
- * that changes nothing (a `send-result`, a `join-error`, a patch for a row we don't hold)
- * wakes no subscriber here, where on iOS it re-sent the same state.
+ * Port note: the subject is a `SharedFlow` with a replay of one and an unbounded buffer, not a
+ * `StateFlow`, because `CurrentValueSubject` has two properties a `StateFlow` lacks and the
+ * kit leans on both: every assignment publishes, equal or not (a `send-result` or a
+ * `join-error` re-sends the same state), and a subscriber sees every value in order. A
+ * `StateFlow` drops an equal value and lets a collector that has fallen behind skip to the
+ * latest — so a connect burst applied in one looper turn (snapshot, backlogs,
+ * `backlog-complete`) would reach `AppBadge` as a single settled state, and the settled edge it
+ * writes the badge on (lurker-ios#134) would never be seen. The buffer only holds values a
+ * live collector has not yet taken; with no collector it holds the replay alone.
  */
 internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
-    private val subject = MutableStateFlow(ChatState())
+    private val subject = MutableSharedFlow<ChatState>(replay = 1, extraBufferCapacity = Int.MAX_VALUE - 1)
 
-    val state: ChatState get() = subject.value
-    val statePublisher: StateFlow<ChatState> get() = subject.asStateFlow()
+    init {
+        publish(ChatState())
+    }
+
+    val state: ChatState get() = subject.replayCache.first()
+    val statePublisher: SharedFlow<ChatState> = subject.asSharedFlow()
+
+    /** The one assignment — `subject.value = next` in LurkerKit. Never suspends: the buffer is unbounded. */
+    private fun publish(next: ChatState) {
+        check(subject.tryEmit(next))
+    }
 
     /**
      * Clear everything session-scoped. Reachability survives: it's a fact about the
@@ -1120,7 +1148,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
      * the `true` default would leave an offline phone claiming it's online.
      */
     fun reset() {
-        subject.value = ChatState(reachable = subject.value.reachable)
+        publish(ChatState(reachable = state.reachable))
     }
 
     /**
@@ -1132,8 +1160,8 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
      * `ChatViewModel.requestWhois` is the only caller, and holds that order.
      */
     fun markWhoisPending(networkId: Int, nick: String) {
-        val next = subject.value
-        subject.value = next.copy(whoisPending = next.whoisPending + ChatState.whoisKey(networkId = networkId, nick = nick))
+        val next = state
+        publish(next.copy(whoisPending = next.whoisPending + ChatState.whoisKey(networkId = networkId, nick = nick)))
     }
 
     /**
@@ -1141,11 +1169,11 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
      * close-buffer (the server then hides it, so it won't re-appear on the next snapshot).
      */
     fun removeBuffer(key: BufferKey) {
-        subject.value = subject.value.dropBuffer(key.id)
+        publish(state.dropBuffer(key.id))
     }
 
     fun clearError() {
-        subject.value = subject.value.copy(error = null)
+        publish(state.copy(error = null))
     }
 
     /**
@@ -1163,9 +1191,9 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
      */
     fun holdUnsent(key: BufferKey, text: String, reply: PendingReply? = null) {
         if (text.isEmpty()) return
-        val next = subject.value
+        val next = state
         val queue = next.unsent[key.id].orEmpty() + UnsentLine(text = text, reply = reply)
-        subject.value = next.copy(unsent = next.unsent + (key.id to queue))
+        publish(next.copy(unsent = next.unsent + (key.id to queue)))
     }
 
     /**
@@ -1176,12 +1204,12 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
      * was reopened.
      */
     fun takeUnsentLine(key: BufferKey): UnsentLine? {
-        val next = subject.value
+        val next = state
         val queue = next.unsent[key.id]
         if (queue == null || queue.isEmpty()) return null
         val line = queue.first()
         val rest = queue.drop(1)
-        subject.value = next.copy(unsent = next.unsent.setting(key.id, if (rest.isEmpty()) null else rest))
+        publish(next.copy(unsent = next.unsent.setting(key.id, if (rest.isEmpty()) null else rest)))
         return line
     }
 
@@ -1194,9 +1222,9 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
      * persists, so resyncs and reloads drop it, exactly like the web's local lines.
      */
     fun appendLocal(key: BufferKey, text: String) {
-        val next = subject.value
+        val next = state
         val line = Message(id = 0, type = EventType.System, nick = null, text = text, level = SystemLevel.Info)
-        subject.value = next.copy(messages = next.messages + (key.id to (next.messages[key.id].orEmpty() + line)))
+        publish(next.copy(messages = next.messages + (key.id to (next.messages[key.id].orEmpty() + line))))
     }
 
     /**
@@ -1205,8 +1233,8 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
      * alongside the other direct mutations rather than lying in `reduce`.
      */
     fun setReachable(reachable: Boolean) {
-        if (subject.value.reachable == reachable) return
-        subject.value = subject.value.copy(reachable = reachable)
+        if (state.reachable == reachable) return
+        publish(state.copy(reachable = reachable))
     }
 
     /**
@@ -1215,14 +1243,14 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
      * socket.
      */
     fun setIncompatible(incompatibility: Incompatibility) {
-        if (subject.value.connection == SocketStatus.Incompatible(incompatibility)) return
-        subject.value = subject.value.copy(connection = SocketStatus.Incompatible(incompatibility))
+        if (state.connection == SocketStatus.Incompatible(incompatibility)) return
+        publish(state.copy(connection = SocketStatus.Incompatible(incompatibility)))
     }
 
     /** The server takes this build again. What follows is a fresh connect, not a reconnect. */
     fun clearIncompatible() {
-        if (subject.value.connection.incompatibility == null) return
-        subject.value = subject.value.copy(connection = SocketStatus.Connecting)
+        if (state.connection.incompatibility == null) return
+        publish(state.copy(connection = SocketStatus.Connecting))
     }
 
     /**
@@ -1235,16 +1263,16 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
      */
     fun noteBookmarked(ids: List<Long>) {
         if (ids.isEmpty()) return
-        subject.value = subject.value.noteBookmarked(ids)
+        publish(state.noteBookmarked(ids))
     }
 
     fun apply(frame: ServerFrame) {
-        subject.value = reduce(subject.value, frame, now = clock())
+        publish(reduce(state, frame, now = clock()))
     }
 
     /** `draft-snapshot`, keeping this device's own copy wherever it holds something newer. */
     fun seedDrafts(entries: List<DraftEntry>, keeping: Set<String>) {
-        subject.value = subject.value.seedDrafts(entries, keeping = keeping)
+        publish(state.seedDrafts(entries, keeping = keeping))
     }
 
     /**
@@ -1253,8 +1281,8 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
      */
     fun setDraft(key: BufferKey, draft: ComposerDraft) {
         val value: ComposerDraft? = if (draft.isEmpty) null else draft
-        if (subject.value.drafts[key.id] == value) return
-        subject.value = subject.value.copy(drafts = subject.value.drafts.setting(key.id, value))
+        if (state.drafts[key.id] == value) return
+        publish(state.copy(drafts = state.drafts.setting(key.id, value)))
     }
 
     companion object {

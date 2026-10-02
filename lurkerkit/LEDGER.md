@@ -119,7 +119,7 @@ Frames and the parser that produces them.
 
 ### T5 — Store (6/6)
 
-`ChatState`, the reducer, and what reads straight off it. Replaces `:app`'s prototype store.
+`ChatState` and the reducer. The prototype's store in `:app` stays until T7 retires it; the two coexist meanwhile.
 
 | Swift file | Lines | Status | Notes |
 |---|---:|---|---|
@@ -127,7 +127,7 @@ Frames and the parser that produces them.
 | `Model/NetworkRow.swift` | 93 | ported | `NetworkRow` and `NetworkAction`. |
 | `Model/StatusLight.swift` | 100 | ported | A plain value. |
 | `Session/AppBadge.swift` | 97 | ported | The badge write is an injected `(Int) -> Unit`, as the Swift’s `write` closure. `follow(states: Flow<ChatState>, scope)` collects in the given scope; calling it again cancels the previous collection, as replacing the `AnyCancellable` does. No `[weak self]`. |
-| `Store/LurkerStore.swift` | 2158 | ported | `ChatState` is an immutable data class (case 2): its thirteen mutators return the updated copy, and it compares all its state. `LurkerStore` publishes through a `MutableStateFlow` exposed as `statePublisher: StateFlow` and assigns once per method; ⚠ a StateFlow conflates, so an inert frame (`joinError`, `sendResult`, `unauthorized`, `ignored`, a patch for an unknown row) publishes nothing where `CurrentValueSubject` republished — T7 must not read "state fired" as "a frame arrived". `clock: () -> Instant` is injected for the tests. `applyBufferRenamed` is lifted out of `reduce` for readability, body unchanged. `visibleMembers` matches your nick with `IgnoreMatch.FoldedLiteral` in place of `caseInsensitiveCompare`; `typists` tie-breaks by UTF-16 unit, Swift by scalar. |
+| `Store/LurkerStore.swift` | 2158 | ported | `ChatState` is an immutable data class (case 2): its thirteen mutators return the updated copy, and it compares all its state. `LurkerStore` publishes through a replaying `SharedFlow` with an unbounded buffer, not a `StateFlow`: `CurrentValueSubject` republishes equal states and a subscriber sees every value in order, and `AppBadge` writes on the settled EDGE of a burst (lurker-ios#134), which a conflating flow would skip. One assignment per method. `clock: () -> Instant` is injected for the tests. Port-only mechanics: `dropBuffers` folds the bulk drops into one subtraction per map; `noteBookmarks` copies the set only on a change; `applyBufferRenamed` is lifted out of `reduce`, body unchanged. `visibleMembers` matches your nick with `IgnoreMatch.FoldedLiteral` in place of `caseInsensitiveCompare`; `typists` tie-breaks by UTF-16 unit, Swift by scalar. ⚠ `ChatState`’s internal fields are settable through the public `copy`; nothing outside the kit should. |
 | `Store/SettingsCache.swift` | 59 | ported | `UserDefaults` → `SettingsCacheStorage` (`dictionary`, `set`, `removeObject`, mirroring the three calls), implemented by `:app`; no default storage. Values travel as `JsonObject`. |
 
 ### T6 — Client (0/4)

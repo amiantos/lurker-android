@@ -74,7 +74,10 @@ class AppBadge(private val write: (Int) -> Unit) {
      * on subscribe; on a cold launch that's the empty store, which writes nothing.
      *
      * Port note: as assigning a new `AnyCancellable` ends the old subscription in LurkerKit,
-     * following again cancels the previous collection.
+     * following again cancels the previous collection. ⚠ Combine's `sink` subscribes at once;
+     * `launch` subscribes when `scope` next runs it, and states published before then reach
+     * this only as the replayed latest. Give it a scope on `Dispatchers.Main.immediate`, or call
+     * it before the first frame is applied.
      */
     fun follow(states: Flow<ChatState>, scope: CoroutineScope) {
         cancellable?.cancel()

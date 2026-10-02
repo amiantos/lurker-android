@@ -116,7 +116,8 @@ class AppBadgeTests {
  * Port note: LurkerKit drives a `CurrentValueSubject`; here a `MutableStateFlow` collected on a
  * `StandardTestDispatcher`, run to idle after every send. A `StateFlow` drops a state equal to
  * the one it holds, where the subject re-sends it; every expectation here is about a state
- * that writes nothing either way, so the two agree.
+ * that writes nothing either way, so the two agree. The real store does not conflate (see
+ * `LurkerStore`), and the port-only test at the bottom drives the badge through it.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppBadgeWriteTests {
@@ -252,5 +253,37 @@ class AppBadgeWriteTests {
         assertEquals(listOf(0, 3, 0), writes)
         send(ChatState())
         assertEquals(listOf(0, 3, 0), writes, "nothing-to-nothing is not a write")
+    }
+
+    // Port-only:
+
+    /**
+     * A reconnect burst that lands in one looper turn — snapshot, the backlogs, then
+     * `backlog-complete` — before the badge's collector runs once. Through the real store every
+     * state still arrives, so the settled edge is seen and the count is re-written (the
+     * lurker-ios#134 repair). A conflating `StateFlow` would hand the collector only the final
+     * state, already settled, and write nothing.
+     */
+    @Test
+    fun testABurstAppliedBeforeTheCollectorRunsStillWritesAtItsSettledEdge() {
+        val store = LurkerStore()
+        val burstWrites = mutableListOf<Int>()
+        val burstBadge = AppBadge { burstWrites.add(it) }
+        burstBadge.follow(store.statePublisher, scope)
+        // Subscribed (Combine's `sink` does this at once; `launch` needs the dispatcher to run).
+        scope.runCurrent()
+        store.apply(snapshot)
+        store.apply(backlog("bob", highlights = 2))
+        store.apply(ServerFrame.BacklogComplete)
+        scope.runCurrent()
+        assertEquals(listOf(0, 2, 2), burstWrites)
+
+        // The reconnect, all in one turn again: the unsettled snapshot state is seen in passing,
+        // so the terminator's write is the settled edge, not a count that never moved.
+        store.apply(snapshot)
+        store.apply(backlog("bob", highlights = 2))
+        store.apply(ServerFrame.BacklogComplete)
+        scope.runCurrent()
+        assertEquals(listOf(0, 2, 2, 2), burstWrites)
     }
 }
