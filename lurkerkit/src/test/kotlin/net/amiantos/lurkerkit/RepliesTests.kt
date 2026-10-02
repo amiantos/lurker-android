@@ -3,6 +3,8 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.model.IgnoreSet
@@ -22,6 +24,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /** IRCv3 replies (lurker-ios#184): the wire, the display rules, the Reply gate, the send. */
 class RepliesTests {
@@ -41,6 +44,38 @@ class RepliesTests {
     private val alice = ReplyParent(id = 7, nick = "alice", type = EventType.Message, text = "has anyone tried it?", userhost = "alice!a@host")
 
     // MARK: - Wire
+
+    @Test
+    fun testRowsCarryReplyToAndTheStamp() {
+        val frame = FrameParser.parseWs(
+            """
+            {"kind":"backlog","networkId":1,"target":"#c","hasMoreOlder":false,"events":[
+              {"id":2,"type":"message","nick":"bob","text":"alice: yes","replyTo":{"msgid":"p1","parent":{"id":7,"nick":"alice","type":"action","text":"waves","userhost":"alice!a@h","self":true}},"replyToSelf":true,"matched":true},
+              {"id":3,"type":"message","nick":"bob","text":"x","replyTo":{"msgid":"gone","parent":null}},
+              {"id":4,"type":"message","nick":"bob","text":"plain"}
+            ]}
+            """.trimIndent(),
+        )
+        if (frame !is ServerFrame.Backlog) fail("$frame")
+        val messages = frame.messages
+        assertEquals(
+            ReplyContext(
+                msgid = "p1",
+                parent = ReplyParent(
+                    id = 7, nick = "alice", type = EventType.Action, text = "waves", userhost = "alice!a@h", isSelf = true,
+                ),
+            ),
+            messages[0].replyTo,
+        )
+        assertTrue(messages[0].replyToSelf)
+        assertEquals(
+            ReplyContext(msgid = "gone", parent = null),
+            messages[1].replyTo,
+            "a reply with nothing to quote is still a reply",
+        )
+        assertNull(messages[2].replyTo)
+        assertFalse(messages[2].replyToSelf)
+    }
 
     // MARK: - Text
 
@@ -188,8 +223,6 @@ class RepliesTests {
 
     // MARK: - Refusals give the reply back
 
-    // Waiting on FrameParser, ServerFrame: testRowsCarryReplyToAndTheStamp
-    //
     // Waiting on UnsentLine, LurkerStore: testARefusedLineComesHomeWithItsReply
 }
 

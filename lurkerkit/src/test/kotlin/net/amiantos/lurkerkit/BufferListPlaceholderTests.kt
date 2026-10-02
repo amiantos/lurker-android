@@ -3,6 +3,8 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.model.BufferListPlaceholder
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -65,7 +67,16 @@ class BufferListPlaceholderTests {
 
     // MARK: - The signal itself
 
-    // Waiting on LurkerStore, ServerFrame, FrameParser: testASnapshotAloneDoesNotMeanTheRosterLanded,
+    /**
+     * The frame carries no payload, so the only thing that can go wrong is not recognizing
+     * its `kind` — in which case it parses as `Ignored` and the list spins forever.
+     */
+    @Test
+    fun testTheTerminalFrameParses() {
+        assertEquals(ServerFrame.BacklogComplete, FrameParser.parseWs("""{"kind":"backlog-complete"}"""))
+    }
+
+    // Waiting on LurkerStore: testASnapshotAloneDoesNotMeanTheRosterLanded,
     // testBacklogCompleteLatchesTheRoster, testBacklogCompleteSurvivesAReconnect,
-    // testResetClearsBacklogComplete, testTheTerminalFrameParses
+    // testResetClearsBacklogComplete
 }

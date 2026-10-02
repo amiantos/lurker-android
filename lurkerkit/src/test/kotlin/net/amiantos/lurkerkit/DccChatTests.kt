@@ -3,6 +3,8 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.commands.ArgKind
 import net.amiantos.lurkerkit.commands.CommandCompletion
 import net.amiantos.lurkerkit.commands.CommandEffect
@@ -241,6 +243,37 @@ class DccChatTests {
 
     // MARK: - Wire
 
+    @Test
+    fun testTheSnapshotCarriesLiveChatsAndWaitingOffers() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"snapshot","networks":[{"networkId":1,"state":"disconnected","nick":"me","channels":[],"dccChats":["Bob",""],"dccChatOffers":["carol"]}]}""",
+        )
+        if (frame !is ServerFrame.Snapshot) fail("got $frame")
+        assertEquals(listOf("Bob"), frame.networks.firstOrNull()?.dccChats, "an empty peer names no one")
+        assertEquals(listOf("carol"), frame.networks.firstOrNull()?.dccChatOffers)
+    }
+
+    @Test
+    fun testTheThreeEventsNameThePeerInTheFromField() {
+        assertEquals(
+            ServerFrame.DccChatOffer(networkId = 1, nick = "bob", passive = true),
+            FrameParser.parseWs("""{"kind":"irc","type":"dcc-chat-offer","networkId":1,"target":":server:1","from":"bob","passive":true}"""),
+        )
+        assertEquals(
+            ServerFrame.DccChatOfferClosed(networkId = 1, nick = "bob"),
+            FrameParser.parseWs("""{"kind":"irc","type":"dcc-chat-offer-closed","networkId":1,"target":":server:1","from":"bob"}"""),
+        )
+        assertEquals(
+            ServerFrame.DccChatState(networkId = 1, nick = "bob", live = true),
+            FrameParser.parseWs("""{"kind":"irc","type":"dcc-chat-state","networkId":1,"target":":server:1","from":"bob","live":true}"""),
+        )
+        // Nobody named, nothing to key on.
+        assertEquals(
+            ServerFrame.Ignored,
+            FrameParser.parseWs("""{"kind":"irc","type":"dcc-chat-offer","networkId":1,"target":":server:1"}"""),
+        )
+    }
+
     // MARK: - Store
 
     // MARK: - Going to a chat once its buffer exists
@@ -391,11 +424,8 @@ class DccChatTests {
 
     // Waiting on StatusLight: testTheLightFollowsTheSessionNotTheNetwork
     //
-    // Waiting on FrameParser, ServerFrame: testTheSnapshotCarriesLiveChatsAndWaitingOffers,
-    // testTheThreeEventsNameThePeerInTheFromField
-    //
-    // Waiting on LurkerStore, ChatState, ServerFrame, NetworkSnapshot (and the private `snapshot`
-    // helper and `bob`): testAChatIsLiveWhateverTheNetworkIsDoing, testLiveStateFollowsTheEvents,
+    // Waiting on LurkerStore, ChatState (and the private `snapshot` helper and `bob`):
+    // testAChatIsLiveWhateverTheNetworkIsDoing, testLiveStateFollowsTheEvents,
     // testTheSnapshotReplacesLiveChatsWholesale, testAnOfferWaitsUntilTheServerClosesIt,
     // testAnOfferMadeAgainReplacesTheOldOneWithANewId, testASnapshotKeepsAnOfferWeAlreadyHold,
     // testASnapshotSurfacesAnOfferWeMissed, testASnapshotRetiresAnOfferItNoLongerLists,

@@ -116,6 +116,29 @@ internal fun JsonObject.strings(key: String): List<String>? {
     }
 }
 
+/** `as? String` on a value rather than under a key: the string, with no fallback and "" kept. */
+internal fun JsonElement?.asString(): String? =
+    (this as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+/** `as? Int` on a value rather than under a key, bridging a boolean the way the keyed read does. */
+internal fun JsonElement?.asLong(): Long? =
+    (this as? JsonPrimitive)?.takeIf { !it.isString && it !is JsonNull }?.let(::integer)
+
+/**
+ * The array of integers under [key], or null — `as? [Int]`. All-or-nothing, as `strings` is: one
+ * element that isn't a whole number and there is no list, rather than a shorter one.
+ */
+internal fun JsonObject.longs(key: String): List<Long>? {
+    val array = this[key] as? JsonArray ?: return null
+    return array.map { element -> element.asLong() ?: return null }
+}
+
+/** The object of strings under [key], or null — `as? [String: String]`, all-or-nothing again. */
+internal fun JsonObject.stringMap(key: String): Map<String, String>? {
+    val obj = this[key] as? JsonObject ?: return null
+    return obj.mapValues { (_, value) -> value.asString() ?: return null }
+}
+
 /** A key present with a non-null value (`reset:false` still counts as present). */
 internal fun JsonObject.has(key: String): Boolean {
     val value = this[key] ?: return false

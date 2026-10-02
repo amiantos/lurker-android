@@ -3,17 +3,21 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.SystemLevel
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * The system buffer rendered empty for its whole life on iOS because the chat screen filtered
@@ -180,11 +184,133 @@ class SystemBufferTests {
 
     // MARK: - Severity rides `level`, not `type`
 
+    @Test
+    fun testAnErrorSystemLineIsStillTypeSystem() {
+        // The server does NOT encode severity in `type` — reading `type: "error"` off a
+        // system line would mean styling nothing, and filtering for it would mean
+        // dropping the line entirely.
+        val frame = FrameParser.parseWs(
+            """{"kind":"irc","networkId":null,"target":":system:","type":"system","level":"error","text":"connect failed","time":"2026-07-16T10:00:00.000Z"}""",
+        )
+        if (frame !is ServerFrame.Live) fail("expected live, got $frame")
+        val (networkId, target, message) = frame
+        assertNull(networkId)
+        assertEquals(":system:", target)
+        assertEquals(EventType.System, message.type)
+        assertEquals(SystemLevel.Error, message.level)
+        assertTrue(BufferKind.of(networkId = networkId, target = target).renders(message.type))
+    }
+
+    @Test
+    fun testSystemLineDefaultsToInfoWhenLevelIsAbsentOrJunk() {
+        val absent = FrameParser.parseWs(
+            """{"kind":"irc","networkId":null,"target":":system:","type":"system","text":"hello"}""",
+        )
+        if (absent !is ServerFrame.Live) fail("expected live")
+        assertEquals(SystemLevel.Info, absent.message.level, "matches the server's own default")
+
+        val junk = FrameParser.parseWs(
+            """{"kind":"irc","networkId":null,"target":":system:","type":"system","level":"catastrophe","text":"hi"}""",
+        )
+        if (junk !is ServerFrame.Live) fail("expected live")
+        assertEquals(SystemLevel.Info, junk.message.level, "an unknown level must not drop the line")
+    }
+
+    @Test
+    fun testLevelIsOnlySetForSystemLines() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"irc","networkId":1,"target":"#lurker","type":"message","nick":"alice","text":"hi"}""",
+        )
+        if (frame !is ServerFrame.Live) fail("expected live")
+        assertNull(frame.message.level, "a channel message has no severity")
+    }
+
+    @Test
+    fun testSeverityAndOriginAreBothSystemOnlyEvenIfTheWireSaysOtherwise() {
+        // `systemLineToEvent` is the only producer of either field and only ever builds
+        // `type: "system"` events, so seeing them on anything else means the wire is not
+        // what we think it is — reading them there would invent a meaning it doesn't have.
+        val frame = FrameParser.parseWs(
+            """{"kind":"irc","networkId":1,"target":"#lurker","type":"message","nick":"alice","text":"hi","level":"error","originNetworkId":7}""",
+        )
+        if (frame !is ServerFrame.Live) fail("expected live")
+        assertNull(frame.message.level)
+        assertNull(frame.message.originNetworkId)
+    }
+
     // MARK: - originNetworkId
+
+    @Test
+    fun testSystemLineCarriesTheNetworkItIsAbout() {
+        // The system buffer is app-scoped (networkId null), so this is the only thing that
+        // lets a line say which network it's talking about.
+        val frame = FrameParser.parseWs(
+            """{"kind":"irc","networkId":null,"originNetworkId":7,"target":":system:","type":"system","level":"warn","text":"reconnecting"}""",
+        )
+        if (frame !is ServerFrame.Live) fail("expected live")
+        val (networkId, _, message) = frame
+        assertNull(networkId, "the buffer is app-scoped…")
+        assertEquals(7, message.originNetworkId, "…but the line is about network 7")
+        assertEquals(SystemLevel.Warn, message.level)
+    }
 
     // MARK: - Types the server sends that the client didn't model
 
+    @Test
+    fun testTypesTheServerSendsThatTheClientDidNotModel() {
+        // The server emits these; the enum used to lack them, so they all folded into
+        // `Other` and lost their identity on the way in.
+        for (raw in listOf("motd", "invite", "e2e", "ctcp")) {
+            val json = """{"kind":"irc","networkId":1,"target":"#lurker","type":"$raw","text":"x"}"""
+            val frame = FrameParser.parseWs(json)
+            if (frame !is ServerFrame.Live) fail("expected live for $raw")
+            assertEquals(EventType.fromRawValue(raw), frame.message.type, "$raw should parse to itself")
+            assertNotEquals(EventType.Other, frame.message.type, "$raw is modelled now")
+        }
+    }
+
+    @Test
+    fun testAGenuinelyUnknownTypeStillFoldsToOther() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"irc","networkId":1,"target":"#lurker","type":"telepathy","text":"x"}""",
+        )
+        if (frame !is ServerFrame.Live) fail("expected live")
+        assertEquals(EventType.Other, frame.message.type)
+    }
+
     // MARK: - The system backlog is a latest slice, never a resume delta
+
+    @Test
+    fun testTheSystemBacklogReplacesEvenThoughItSaysResetFalse() {
+        // `buildSystemBacklog` hardcodes `reset: false` on EVERY connect — it always ships
+        // a full latest slice. Reading that the way a *network* buffer's `reset` is read
+        // ("reset present and false → this is a resume delta → append") is what corrupts
+        // the buffer, so the system buffer must ignore the field entirely.
+        val frame = FrameParser.parseWs(
+            """{"kind":"backlog","networkId":null,"target":":system:","reset":false,"hasMoreOlder":false,"events":[{"id":5,"type":"system","text":"hi"}]}""",
+        )
+        if (frame !is ServerFrame.Backlog) fail("expected backlog")
+        assertFalse(frame.append, "the system backlog is a latest slice — replace, don't append")
+    }
+
+    @Test
+    fun testANetworkResumeSliceStillAppends() {
+        // The exception above must not cost channels their resume path.
+        val frame = FrameParser.parseWs(
+            """{"kind":"backlog","networkId":1,"target":"#lurker","reset":false,"hasMoreOlder":false,"events":[{"id":5,"type":"message","nick":"a","text":"hi"}]}""",
+        )
+        if (frame !is ServerFrame.Backlog) fail("expected backlog")
+        assertTrue(frame.append, "reset:false on a network buffer IS a resume delta")
+    }
+
+    @Test
+    fun testAnOversizedNetworkGapStillReplaces() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"backlog","networkId":1,"target":"#lurker","reset":true,"hasMoreOlder":false,"events":[{"id":5,"type":"message","nick":"a","text":"hi"}]}""",
+        )
+        if (frame !is ServerFrame.Backlog) fail("expected backlog")
+        assertFalse(frame.append, "reset:true means the gap overflowed — replace or splice a hole")
+    }
 
     // MARK: - What the server will actually answer
 
@@ -234,6 +360,18 @@ class SystemBufferTests {
         assertEquals("sys::" + Buffer.systemTarget, Buffer.system.key.id)
     }
 
+    @Test
+    fun testTheSyntheticSystemBufferMatchesTheServersOwn() {
+        // If these keys ever diverged, the launch screen would sit on an empty buffer
+        // forever while the real one filled up beside it.
+        val frame = FrameParser.parseWs(
+            """{"kind":"backlog","networkId":null,"target":":system:","hasMoreOlder":false,"events":[]}""",
+        )
+        if (frame !is ServerFrame.Backlog) fail("expected backlog")
+        assertEquals(Buffer.system.key.id, frame.buffer.key.id)
+        assertEquals(Buffer.system.kind, frame.buffer.kind)
+    }
+
     // Port-only:
 
     /**
@@ -266,14 +404,5 @@ class SystemBufferTests {
         assertNotEquals(BufferKey(networkId = 1, target = "#Chan"), BufferKey(networkId = 1, target = "#chan"))
     }
 
-    // Waiting on FrameParser, ServerFrame: testAnErrorSystemLineIsStillTypeSystem,
-    // testSystemLineDefaultsToInfoWhenLevelIsAbsentOrJunk, testLevelIsOnlySetForSystemLines,
-    // testSeverityAndOriginAreBothSystemOnlyEvenIfTheWireSaysOtherwise,
-    // testSystemLineCarriesTheNetworkItIsAbout, testTypesTheServerSendsThatTheClientDidNotModel,
-    // testAGenuinelyUnknownTypeStillFoldsToOther, testTheSystemBacklogReplacesEvenThoughItSaysResetFalse,
-    // testANetworkResumeSliceStillAppends, testAnOversizedNetworkGapStillReplaces,
-    // testTheSyntheticSystemBufferMatchesTheServersOwn
-    //
-    // Waiting on LurkerStore (and FrameParser):
-    // testALiveSystemLineBeatingTheBacklogDoesNotShoveHistoryBelowIt
+    // Waiting on LurkerStore: testALiveSystemLineBeatingTheBacklogDoesNotShoveHistoryBelowIt
 }

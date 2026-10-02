@@ -3,22 +3,28 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.commands.CommandEffect
 import net.amiantos.lurkerkit.commands.CommandParser
 import net.amiantos.lurkerkit.commands.ParsedInput
 import net.amiantos.lurkerkit.model.EventType
+import net.amiantos.lurkerkit.model.FeedCursor
+import net.amiantos.lurkerkit.model.FeedReaction
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageActionContext
 import net.amiantos.lurkerkit.model.MessageActionKey
 import net.amiantos.lurkerkit.model.MessageActionScope
 import net.amiantos.lurkerkit.model.MessageActions
 import net.amiantos.lurkerkit.model.MessageReaction
+import net.amiantos.lurkerkit.model.ReactionChange
 import net.amiantos.lurkerkit.model.ReactionGroup
 import net.amiantos.lurkerkit.model.Reactions
 import net.amiantos.lurkerkit.support.Result
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -39,7 +45,86 @@ class ReactionsTests {
             msgid = msgid, isE2E = isE2E, reactions = reactions,
         )
 
+    private val thumbs = MessageReaction(nick = "bob", value = "👍", isSelf = false)
+
     // MARK: - Wire
+
+    @Test
+    fun testRowsCarryMsgidE2eAndReactions() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"backlog","networkId":1,"target":"#lurker","hasMoreOlder":false,"events":[{"id":1,"type":"message","nick":"a","text":"plain"},{"id":2,"type":"message","nick":"a","text":"x","msgid":"abc","e2e":true,"reactions":[{"nick":"bob","value":"👍","self":false},{"nick":"me","value":"lol","self":true},{"nick":"","value":"?"}]}]}""",
+        )
+        if (frame !is ServerFrame.Backlog) fail("$frame")
+        val messages = frame.messages
+        assertNull(messages[0].msgid)
+        assertNull(messages[0].reactions, "absent means none, not an empty list")
+        assertFalse(messages[0].isE2E)
+        assertEquals("abc", messages[1].msgid)
+        assertTrue(messages[1].isE2E)
+        assertEquals(
+            listOf(
+                MessageReaction(nick = "bob", value = "👍", isSelf = false),
+                MessageReaction(nick = "me", value = "lol", isSelf = true),
+            ),
+            messages[1].reactions,
+            "an entry with no nick names nobody",
+        )
+    }
+
+    @Test
+    fun testReactionFrameParses() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"reaction","networkId":1,"bufferId":9,"target":"#lurker","messageId":42,"nick":"bob","value":"🎉","self":false,"remove":true,"toSelf":true,"time":"2026-09-30T00:00:00Z"}""",
+        )
+        assertEquals(
+            ServerFrame.Reaction(
+                ReactionChange(
+                    networkId = 1, target = "#lurker", messageId = 42, nick = "bob", value = "🎉",
+                    isSelf = false, remove = true, toSelf = true,
+                ),
+            ),
+            frame,
+        )
+    }
+
+    @Test
+    fun testReactionFrameThatAddressesNothingIsIgnored() {
+        assertEquals(ServerFrame.Ignored, FrameParser.parseWs("""{"kind":"reaction","networkId":1,"value":"x"}"""))
+        assertEquals(ServerFrame.Ignored, FrameParser.parseWs("""{"kind":"reaction","messageId":4,"value":"x"}"""))
+        assertEquals(
+            ServerFrame.Ignored,
+            FrameParser.parseWs("""{"kind":"reaction","networkId":1,"messageId":4,"value":""}"""),
+        )
+    }
+
+    @Test
+    fun testReactionsSyncParses() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"reactions-sync","messageIds":[1,2],"reactions":{"1":[{"nick":"bob","value":"👍","self":false}]}}""",
+        )
+        assertEquals(
+            ServerFrame.ReactionsSync(messageIds = listOf(1L, 2L), reactions = mapOf(1L to listOf(thumbs))),
+            frame,
+        )
+        assertEquals(
+            ServerFrame.Ignored,
+            FrameParser.parseWs("""{"kind":"reactions-sync","reactions":{}}"""),
+            "with no id list it can't be authoritative about anything",
+        )
+    }
+
+    @Test
+    fun testReactSupportAndSnapshotCanReactParse() {
+        assertEquals(
+            ServerFrame.ReactSupport(networkId = 3, canReact = true),
+            FrameParser.parseWs("""{"kind":"irc","type":"react-support","networkId":3,"target":":server:3","canReact":true}"""),
+        )
+        val snapshot = FrameParser.parseWs(
+            """{"kind":"snapshot","networks":[{"networkId":3,"state":"connected","nick":"me","channels":[],"canReact":true}]}""",
+        )
+        if (snapshot !is ServerFrame.Snapshot) fail("$snapshot")
+        assertTrue(snapshot.networks[0].canReact)
+    }
 
     // MARK: - Side map
 
@@ -146,12 +231,8 @@ class ReactionsTests {
         assertFalse(Reactions.isValidValue("x".repeat(64) + family))
     }
 
-    // Waiting on FrameParser, ServerFrame: testRowsCarryMsgidE2eAndReactions, testReactionFrameParses,
-    // testReactionFrameThatAddressesNothingIsIgnored, testReactionsSyncParses,
-    // testReactSupportAndSnapshotCanReactParse
-    //
-    // Waiting on LurkerStore, ChatState, ServerFrame (and the private `backlog`/`change` helpers,
-    // `chanKey` and `thumbs`): testARowIsAuthoritativeForItselfInBothDirections,
+    // Waiting on LurkerStore, ChatState (and the private `backlog`/`change` helpers and
+    // `chanKey`): testARowIsAuthoritativeForItselfInBothDirections,
     // testSilenceAboutALineIsNotARemoval, testSystemRowsNeverTouchTheMap,
     // testLiveReactionsAddDedupeAndRemove, testOurUnreactMatchesSelfNotNick,
     // testAReactionWeAlreadyHoldChangesNothing, testSyncIsAuthoritativeForEveryIdItNames,
@@ -161,9 +242,49 @@ class ReactionsTests {
     // testARevisionIsPerBuffer, testDroppingTheSystemBufferLeavesNetworkReactionsAlone
 }
 
-// Waiting on FrameParser (`parseActivity`): the whole
-// `ActivityFeedParsingTests` suite — testHighlightAndReactionRowsAndThePairedCursor,
-// testOneSidedCursorStillPagesAndNullEnds, testAReactionRowWithoutAValueIsDropped
+/** `GET /api/activity` (lurker-ios#183): two sources merged, a cursor per source. */
+class ActivityFeedParsingTests {
+
+    @Test
+    fun testHighlightAndReactionRowsAndThePairedCursor() {
+        val page = FrameParser.parseActivity(
+            """
+            {"items":[
+              {"kind":"reaction","id":40,"reactionId":7,"networkId":1,"networkName":"Libera","target":"#c","nick":"bob","userhost":"bob!b@h","value":"🎉","time":"2026-09-30T12:00:00Z","text":"my line","messageTime":"2026-09-30T11:00:00Z"},
+              {"kind":"highlight","id":39,"networkId":1,"target":"#c","type":"message","nick":"carol","text":"me: hi","matched":true}
+            ],"next":{"beforeMessage":39,"beforeReaction":7}}
+            """.trimIndent(),
+        )
+        assertEquals(2, page.items.size)
+        val reaction = page.items[0]
+        assertEquals(FeedReaction(reactionId = 7, value = "🎉", lineText = "my line"), reaction.reaction)
+        assertEquals(40L, reaction.message.id, "your line's id: the jump target")
+        assertEquals("bob", reaction.message.nick, "the reactor, for the header and ignore rules")
+        assertEquals("🎉", reaction.message.text)
+        assertEquals("bob!b@h", reaction.message.userhost)
+        assertNotNull(reaction.message.date, "the reaction's own time")
+        assertNull(page.items[1].reaction)
+        assertEquals("me: hi", page.items[1].message.text)
+        assertEquals(FeedCursor(beforeMessage = 39, beforeReaction = 7), page.next)
+        assertTrue(page.hasMore)
+    }
+
+    @Test
+    fun testOneSidedCursorStillPagesAndNullEnds() {
+        val oneSided = FrameParser.parseActivity("""{"items":[],"next":{"beforeReaction":3}}""")
+        assertEquals(FeedCursor(beforeMessage = null, beforeReaction = 3), oneSided.next)
+        assertTrue(oneSided.hasMore, "a side that's given nothing yet has no cursor, and that's not the end")
+        assertFalse(FrameParser.parseActivity("""{"items":[],"next":null}""").hasMore)
+    }
+
+    @Test
+    fun testAReactionRowWithoutAValueIsDropped() {
+        val page = FrameParser.parseActivity(
+            """{"items":[{"kind":"reaction","id":1,"reactionId":2,"value":""}],"next":null}""",
+        )
+        assertTrue(page.items.isEmpty())
+    }
+}
 
 /** `/react` (lurker-ios#183). */
 class ReactCommandTests {
@@ -226,5 +347,5 @@ class ReactCommandTests {
     }
 }
 
-// Waiting on LurkerStore, ServerFrame: the whole `ReactionRenameTests` suite —
+// Waiting on LurkerStore: the whole `ReactionRenameTests` suite —
 // testARenameCarriesTheRevision

@@ -6,6 +6,9 @@ package net.amiantos.lurkerkit
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NetworkConfig
 import net.amiantos.lurkerkit.model.NetworkDraft
@@ -14,9 +17,11 @@ import net.amiantos.lurkerkit.model.ProxyType
 import net.amiantos.lurkerkit.model.SecretEdit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * Network management (lurker-ios#11) below the UI: the live `state` event the client used to
@@ -32,7 +37,50 @@ class NetworkConfigTests {
 
     // MARK: - The `state` event
 
+    @Test
+    fun testAStateEventCarriesTheConnectionAndItsNick() {
+        // The connect transition, and the only one that carries a nick.
+        val frame = FrameParser.parseWs(
+            """{"kind":"irc","networkId":2,"type":"state","state":"connected","nick":"me"}""",
+        )
+        if (frame !is ServerFrame.NetworkState) fail("expected networkState, got $frame")
+        val (networkId, state, nick) = frame
+        assertEquals(2, networkId)
+        assertEquals(ConnectionState.Connected, state)
+        assertEquals("me", nick)
+    }
+
+    @Test
+    fun testAStateEventWithoutANickSaysNothingAboutIt() {
+        // Every transition but `connected` sends `{type:'state', state}` and nothing else. An
+        // absent nick has to read as "unchanged" — as "" it would blank the nick on every
+        // disconnect, and everything that asks "is this me?" would start answering wrong.
+        val frame = FrameParser.parseWs("""{"kind":"irc","networkId":2,"type":"state","state":"reconnecting"}""")
+        if (frame !is ServerFrame.NetworkState) fail("expected networkState, got $frame")
+        assertEquals(ConnectionState.Reconnecting, frame.state)
+        assertNull(frame.nick)
+    }
+
+    @Test
+    fun testAStateEventCarriesNoTargetAndIsParsedAnyway() {
+        // `setState` publishes without a target, so this has to be handled above the target
+        // guard the buffer-scoped events sit behind. Dropped there, the app's connection
+        // state would stay frozen at whatever the connect snapshot said — which is exactly
+        // the bug this frame was added to fix.
+        val frame = FrameParser.parseWs("""{"kind":"irc","networkId":2,"type":"state","state":"disconnected"}""")
+        if (frame !is ServerFrame.NetworkState) fail("expected networkState, got $frame")
+    }
+
     // MARK: - Nameless networks (lurker-ios#136)
+
+    @Test
+    fun testARosterRowWithNoNameParsesAsNameless() {
+        // Belt to the snapshot's braces: the endpoint always sends a name today, and a row
+        // without one must still not invent the word "network".
+        val frame = FrameParser.parseNetworks("""{"networks":[{"id":3}]}""")
+        if (frame !is ServerFrame.Networks) fail("expected networks, got $frame")
+        assertNull(frame.networks.firstOrNull()?.name)
+    }
 
     @Test
     fun testANamelessNetworkStillRendersAsSomething() {
@@ -43,6 +91,71 @@ class NetworkConfigTests {
     // MARK: - Roster membership
 
     // MARK: - Config rows
+
+    private val row = """
+    {"networks":[{
+      "id":4,"name":"Libera","host":"irc.libera.chat","port":6697,"tls":true,
+      "trusted_certificates":false,"nick":"me","username":"meuser","realname":"Me",
+      "autoconnect":true,"sasl_account":"me","connect_commands":"/msg NickServ help",
+      "has_password":true,"has_sasl_password":true,"blocked":true
+    }]}
+    """.trimIndent()
+
+    @Test
+    fun testAConfigRowReadsEveryFieldTheFormEdits() {
+        val config = FrameParser.parseNetworkConfigs(row)?.firstOrNull()
+        assertEquals(4, config?.id)
+        assertEquals("Libera", config?.name)
+        assertEquals("irc.libera.chat", config?.host)
+        assertEquals(6697, config?.port)
+        assertEquals(true, config?.tls)
+        assertEquals(false, config?.trustedCertificates)
+        assertEquals("me", config?.nick)
+        assertEquals("meuser", config?.username)
+        assertEquals("Me", config?.realname)
+        assertEquals(true, config?.autoconnect)
+        assertEquals("me", config?.saslAccount)
+        assertEquals("/msg NickServ help", config?.connectCommands)
+        assertEquals(true, config?.hasPassword)
+        assertEquals(true, config?.hasSaslPassword)
+        assertEquals(true, config?.blocked)
+    }
+
+    @Test
+    fun testAnAbsentBlockedFlagReadsAsNotBlocked() {
+        // A server predating the admin allowlist (lurker#298) sends no `blocked`. It has no
+        // allowlist to be excluded from, so defaulting the other way would grey out every
+        // network on every older server.
+        val config = FrameParser.parseNetworkConfigs("""{"networks":[{"id":1,"name":"n","host":"h"}]}""")?.firstOrNull()
+        assertEquals(false, config?.blocked)
+    }
+
+    @Test
+    fun testAMissingPortFallsBackToTheServersDefault() {
+        // `int()` reads an absent port as 0, which is not a port anything can connect to.
+        val config = FrameParser.parseNetworkConfigs("""{"networks":[{"id":1,"name":"n","host":"h"}]}""")?.firstOrNull()
+        assertEquals(6697, config?.port)
+    }
+
+    @Test
+    fun testAnUnreadableBodyIsNotAnEmptyRoster() {
+        // The screen shows a fresh account "add your first network" on an empty list, so an
+        // unreadable reply reported as an empty list would greet a failed request with a welcome.
+        assertNull(FrameParser.parseNetworkConfigs("not json"))
+        assertNull(FrameParser.parseNetworkReply("not json"))
+    }
+
+    @Test
+    fun testAnEmptyListIsStillAnAnswer() {
+        assertEquals(0, FrameParser.parseNetworkConfigs("""{"networks":[]}""")?.size)
+    }
+
+    @Test
+    fun testACreateReplyCarriesTheSavedRow() {
+        val config = FrameParser.parseNetworkReply("""{"network":{"id":9,"name":"OFTC","host":"irc.oftc.net","port":6697,"tls":true,"nick":"me"}}""")
+        assertEquals(9, config?.id)
+        assertEquals("OFTC", config?.name)
+    }
 
     // MARK: - Request bodies
 
@@ -120,6 +233,28 @@ class NetworkConfigTests {
         )
     }
 
+    @Test
+    fun testAnAbsentVerifyFlagReadsAsVerifying() {
+        // Defaults true where every other flag here defaults false, for the same reason: read
+        // as false, a row would report a network as not verifying when the column says it
+        // does — and the edit form would then save that misreading back.
+        val config = FrameParser.parseNetworkConfigs("""{"networks":[{"id":1,"name":"n","host":"h"}]}""")?.firstOrNull()
+        assertEquals(true, config?.trustedCertificates)
+    }
+
+    @Test
+    fun testTurningVerificationOffRoundTripsThroughTheForm() {
+        // The one case that must survive an edit: a self-signed server the user deliberately
+        // accepted must not be silently re-secured (or, worse, the other way) by opening the
+        // form and saving it unchanged.
+        val config = FrameParser.parseNetworkConfigs(
+            """{"networks":[{"id":1,"name":"n","host":"h","trusted_certificates":false}]}""",
+        )!!.first()
+        assertFalse(config.trustedCertificates)
+        val body = NetworkDraft(editing = config).jsonBody(creating = false)
+        assertEquals(JsonPrimitive(false), body["trusted_certificates"])
+    }
+
     // MARK: - Validation
 
     @Test
@@ -155,24 +290,27 @@ class NetworkConfigTests {
         assertEquals(JsonPrimitive("me"), body["nick"])
     }
 
-    // Waiting on FrameParser, ServerFrame: testAStateEventCarriesTheConnectionAndItsNick,
-    // testAStateEventWithoutANickSaysNothingAboutIt, testAStateEventCarriesNoTargetAndIsParsedAnyway,
-    // testARosterRowWithNoNameParsesAsNameless
-    //
-    // Waiting on FrameParser (reading a config row; and the `row` fixture they share):
-    // testAConfigRowReadsEveryFieldTheFormEdits, testAnAbsentBlockedFlagReadsAsNotBlocked,
-    // testAMissingPortFallsBackToTheServersDefault, testAnUnreadableBodyIsNotAnEmptyRoster,
-    // testAnEmptyListIsStillAnAnswer, testACreateReplyCarriesTheSavedRow,
-    // testAnAbsentVerifyFlagReadsAsVerifying, testTurningVerificationOffRoundTripsThroughTheForm,
-    // testEditingADraftStartsBothSecretsUnchanged
-    //
-    // Waiting on LurkerStore, Network (several through FrameParser too):
+    @Test
+    fun testEditingADraftStartsBothSecretsUnchanged() {
+        // The values were never sent to us. Anything but `unchanged` would be a guess, and the
+        // guess that loses a password is the one that costs the user their connection.
+        val config = FrameParser.parseNetworkConfigs(row)!!.first()
+        val d = NetworkDraft(editing = config)
+        assertEquals(SecretEdit.Unchanged, d.password)
+        assertEquals(SecretEdit.Unchanged, d.saslPassword)
+        assertEquals("Libera", d.name)
+        assertEquals("irc.libera.chat", d.host)
+        assertEquals("me", d.nick)
+        // Create-only, and this draft is for an edit.
+        assertNull(d.defaultChannel)
+    }
+
+    // Waiting on LurkerStore, Network:
     // testTheStoreAppliesTheStateAndTheNick, testADisconnectKeepsTheNick,
     // testTheRosterNameSurvivesAStateEvent, testASnapshotForAnUnknownNetworkLeavesItNameless,
     // testTheRosterFillsInANamelessNetwork, testAStateEventMaterializesANetworkCreatedSinceWeConnected,
     // testTheRosterRemovesANetworkItNoLongerNames, testRemovingANetworkTakesItsBuffersWithIt,
     // testAnUnreadableRosterDoesNotWipeTheNetworks, testAnEmptyRosterIsStillAnAnswer
-    //
 
     // Port-only: the whole body, key for key, as LurkerKit builds it (the expected JSON is the
     // Swift's own output for the same draft). The suite above reads a body one key at a time,

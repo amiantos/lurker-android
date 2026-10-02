@@ -3,6 +3,8 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.commands.CommandEffect
 import net.amiantos.lurkerkit.commands.CommandParser
 import net.amiantos.lurkerkit.commands.ParsedInput
@@ -16,7 +18,9 @@ import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * The `/clear` marker (lurker-ios#121): what the wire says, what the store keeps, and what the
@@ -37,6 +41,58 @@ class ClearMarkerTests {
         Message(id = id, type = EventType.Message, nick = "alice", text = "hi")
 
     // MARK: - The wire
+
+    // "a backlog frame carries the marker onto the buffer"
+    @Test
+    fun backlogCarriesTheMarker() {
+        val frame = FrameParser.parseWs(
+            """
+            {"kind":"backlog","networkId":1,"target":"#lurker","events":[],
+             "hasMoreOlder":false,"clearedBeforeId":42,"clearedAt":"2026-07-20T12:00:00.000Z"}
+            """.trimIndent(),
+        )
+        if (frame !is ServerFrame.Backlog) fail("expected a backlog, got $frame")
+        assertEquals(42L, frame.buffer.clearedBeforeId)
+        assertEquals(clearedAt, frame.buffer.clearedAt)
+    }
+
+    // "a backlog for a buffer that was never cleared says so"
+    @Test
+    fun backlogWithoutAMarker() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"backlog","networkId":1,"target":"#lurker","events":[],"hasMoreOlder":false}""",
+        )
+        if (frame !is ServerFrame.Backlog) fail("expected a backlog, got $frame")
+        assertEquals(0L, frame.buffer.clearedBeforeId)
+        assertNull(frame.buffer.clearedAt)
+    }
+
+    // "the buffer-cleared fan-out parses"
+    @Test
+    fun bufferClearedParses() {
+        val frame = FrameParser.parseWs(
+            """
+            {"kind":"buffer-cleared","networkId":1,"target":"#lurker","bufferId":7,
+             "clearedBeforeId":42,"clearedAt":"2026-07-20T12:00:00.000Z"}
+            """.trimIndent(),
+        )
+        assertEquals(
+            ServerFrame.BufferCleared(networkId = 1, target = "#lurker", clearedBeforeId = 42, clearedAt = clearedAt),
+            frame,
+        )
+    }
+
+    // "an undo arrives as a zero boundary, not as a missing frame"
+    @Test
+    fun undoParses() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"buffer-cleared","networkId":1,"target":"#lurker","clearedBeforeId":0,"clearedAt":null}""",
+        )
+        assertEquals(
+            ServerFrame.BufferCleared(networkId = 1, target = "#lurker", clearedBeforeId = 0, clearedAt = null),
+            frame,
+        )
+    }
 
     // MARK: - The store
 
@@ -126,6 +182,21 @@ class ClearMarkerTests {
         val local = Message(id = 0, type = EventType.System, nick = null, text = "unknown command")
         val built = rows(listOf(msg(1), local), clearedBeforeId = 5, clearedAt = clearedAt)
         assertEquals(listOf("unknown command"), built.mapNotNull { it.message?.text })
+    }
+
+    // "⚠⚠ a boundary with no instant is discarded whole, at the parser"
+    @Test
+    fun aHalfStatedMarkerIsDiscarded() {
+        // `cleared_at` is nullable server-side and the rename / case-fold merges carry the two
+        // columns independently, so this reaches us from the wire rather than only from a bug
+        // here. Taken at face value it hides every row and draws no divider — a blank buffer
+        // whose only way out is a `/clear off` the reader was never told about.
+        val frame = FrameParser.parseWs(
+            """{"kind":"backlog","networkId":1,"target":"#lurker","events":[],"hasMoreOlder":false,"clearedBeforeId":42,"clearedAt":null}""",
+        )
+        if (frame !is ServerFrame.Backlog) fail("expected a backlog, got $frame")
+        assertEquals(0L, frame.buffer.clearedBeforeId, "showing cleared messages is the safe failure")
+        assertNull(frame.buffer.clearedAt)
     }
 
     // "⚠⚠ and the row builder refuses to half-apply one either, in both directions"
@@ -245,10 +316,7 @@ class ClearMarkerTests {
         assertEquals(listOf<CommandEffect>(CommandEffect.Clear(target = "#lurker", undo = false)), parse("/clear all"))
     }
 
-    // Waiting on FrameParser, ServerFrame: backlogCarriesTheMarker, backlogWithoutAMarker,
-    // bufferClearedParses, undoParses, aHalfStatedMarkerIsDiscarded
-    //
-    // Waiting on LurkerStore, ChatState, ServerFrame (and the private `clearedBuffer` helper):
+    // Waiting on LurkerStore, ChatState (and the private `clearedBuffer` helper):
     // fanOutMovesTheMarker, undoDropsBothHalves, aClearForAnUnknownBufferIsIgnored,
     // aBacklogRetractsTheMarker, aClearDropsLocalLines, anUndoKeepsLocalLines,
     // aRevealNeverTouchesTheMarker

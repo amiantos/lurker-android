@@ -3,6 +3,8 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.client.UploadBatch
 import net.amiantos.lurkerkit.client.UploadError
 import net.amiantos.lurkerkit.client.UploadProgress
@@ -26,6 +28,101 @@ import kotlin.test.assertTrue
 class UploadProgressTests {
 
     // MARK: - The wire
+
+    @Test
+    fun testProcessingFrameParses() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"upload-progress","token":"abc","phase":"processing","destination":"Catbox","percent":null}""",
+        )
+        assertEquals(
+            ServerFrame.UploadProgress(
+                token = "abc",
+                progress = UploadServerProgress(
+                    phase = UploadServerProgress.Phase.Processing,
+                    percent = null,
+                    destination = "Catbox",
+                ),
+            ),
+            frame,
+        )
+    }
+
+    @Test
+    fun testSendingFrameCarriesItsPercent() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"upload-progress","token":"abc","phase":"sending","destination":"Catbox","percent":42}""",
+        )
+        assertEquals(
+            ServerFrame.UploadProgress(
+                token = "abc",
+                progress = UploadServerProgress(
+                    phase = UploadServerProgress.Phase.Sending,
+                    percent = 42,
+                    destination = "Catbox",
+                ),
+            ),
+            frame,
+        )
+    }
+
+    @Test
+    fun testAbsentPercentIsNilRatherThanZero() {
+        // ⚠ The whole point of the nullable percent. Read as 0, a driver that never counts a
+        // byte (`local` renames a temp file — there is no wire) would freeze the readout at
+        // "Sending… 0%" for the entire send: the same dead air one phase along.
+        val frame = FrameParser.parseWs(
+            """{"kind":"upload-progress","token":"abc","phase":"sending","destination":"Local disk"}""",
+        )
+        assertEquals(
+            ServerFrame.UploadProgress(
+                token = "abc",
+                progress = UploadServerProgress(
+                    phase = UploadServerProgress.Phase.Sending,
+                    percent = null,
+                    destination = "Local disk",
+                ),
+            ),
+            frame,
+        )
+    }
+
+    @Test
+    fun testFrameWithoutATokenIsIgnored() {
+        // Unmatchable: the token is the only thing tying a frame to the upload it describes,
+        // and these fan out to every socket the account has open.
+        assertEquals(
+            ServerFrame.Ignored,
+            FrameParser.parseWs("""{"kind":"upload-progress","phase":"sending","percent":10}"""),
+        )
+    }
+
+    @Test
+    fun testUnknownPhaseIsIgnored() {
+        // A phase this build has no rendering for. Falling back to the indeterminate readout
+        // already on screen beats acting on a payload we can't read.
+        assertEquals(
+            ServerFrame.Ignored,
+            FrameParser.parseWs("""{"kind":"upload-progress","token":"abc","phase":"finalising"}"""),
+        )
+    }
+
+    @Test
+    fun testDestinationIsOptional() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"upload-progress","token":"abc","phase":"processing","destination":null,"percent":null}""",
+        )
+        assertEquals(
+            ServerFrame.UploadProgress(
+                token = "abc",
+                progress = UploadServerProgress(
+                    phase = UploadServerProgress.Phase.Processing,
+                    percent = null,
+                    destination = null,
+                ),
+            ),
+            frame,
+        )
+    }
 
     // MARK: - Folding the two legs
 
@@ -429,8 +526,4 @@ class UploadProgressTests {
         assertEquals(unheard.stage, heard.stage)
         assertNotEquals(unheard, heard)
     }
-
-    // Waiting on FrameParser, ServerFrame: testProcessingFrameParses,
-    // testSendingFrameCarriesItsPercent, testAbsentPercentIsNilRatherThanZero,
-    // testFrameWithoutATokenIsIgnored, testUnknownPhaseIsIgnored, testDestinationIsOptional
 }

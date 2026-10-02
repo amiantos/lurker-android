@@ -3,6 +3,8 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.commands.CommandEffect
 import net.amiantos.lurkerkit.commands.CommandParser
 import net.amiantos.lurkerkit.commands.ParsedInput
@@ -291,6 +293,38 @@ class RelayBotsTests {
 
     // MARK: - The wire
 
+    @Test
+    fun testParsesTheSnapshotAndUpdateFrames() {
+        val frame = FrameParser.parseWs(
+            """
+            {"kind":"snapshot","networks":[{"networkId":7,"state":"connected","nick":"me","channels":[],
+             "relayBots":[{"nick":"bridge","pattern":"{nick}: {message}"},{"nick":"","pattern":"x"}]}]}
+            """.trimIndent(),
+        )
+        if (frame !is ServerFrame.Snapshot) fail("expected a snapshot")
+        // The nick-less row is dropped rather than becoming a mark keyed on the empty string,
+        // which would then "match" every nick-less line the client renders.
+        assertEquals(
+            listOf(RelayBot(nick = "bridge", pattern = "{nick}: {message}")),
+            frame.networks.firstOrNull()?.relayBots,
+        )
+
+        assertEquals(
+            ServerFrame.RelayBotUpdated(networkId = 7, nick = "Bridge", marked = true, pattern = "p"),
+            FrameParser.parseWs("""{"kind":"relay-bot-updated","networkId":7,"nick":"Bridge","marked":true,"pattern":"p"}"""),
+        )
+        // A mark with no network or no nick addresses nothing, so it's refused rather than folded
+        // onto network 0 or the empty nick.
+        for (bad in listOf(
+            """{"kind":"relay-bot-updated","nick":"bridge","marked":true}""",
+            """{"kind":"relay-bot-updated","networkId":null,"nick":"bridge","marked":true}""",
+            """{"kind":"relay-bot-updated","networkId":7,"marked":true}""",
+            """{"kind":"relay-bot-updated","networkId":7,"nick":"","marked":true}""",
+        )) {
+            assertEquals(ServerFrame.Ignored, FrameParser.parseWs(bad), bad)
+        }
+    }
+
     // MARK: - /relay
 
     // Port note: `CommandParser.parse` takes the expiry's formatter here (see
@@ -479,10 +513,8 @@ class RelayBotsTests {
         assertTrue(text.contains("needs an active network"), text)
     }
 
-    // Waiting on LurkerStore, ServerFrame, NetworkSnapshot: testTheSnapshotSeedsMarksAndReplacesThemWholesale,
+    // Waiting on LurkerStore: testTheSnapshotSeedsMarksAndReplacesThemWholesale,
     // testTheUpdateFramePatchesOneNick
-    //
-    // Waiting on FrameParser, ServerFrame: testParsesTheSnapshotAndUpdateFrames
 
     // Port-only: equality. LurkerKit's `RelayBotSet` is a reference type compared by identity;
     // here it sits in published state and compares every mark it holds (see its port note).

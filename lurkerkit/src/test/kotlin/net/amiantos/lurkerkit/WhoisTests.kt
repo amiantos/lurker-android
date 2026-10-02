@@ -3,15 +3,19 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.model.MemberPrefix
 import net.amiantos.lurkerkit.model.NickNote
 import net.amiantos.lurkerkit.model.NickNoteSet
 import net.amiantos.lurkerkit.model.WhoisResult
+import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * Whois and nick notes end to end (lurker-ios#12): the wire in, the types they build, what the
@@ -24,6 +28,103 @@ import kotlin.test.assertTrue
 class WhoisTests {
 
     // MARK: - The payload
+
+    @Test
+    fun testParsesTheFullReplyUsingIrcFrameworksFieldNames() {
+        // Field-for-field the object irc-framework assembles and `ircConnection.ts` forwards
+        // untouched. `real_name`, `actual_ip`, `server_info` and `registered_nick` are its
+        // spellings, and this is the only place that should know them.
+        val frame = FrameParser.parseWs(
+            """
+            {"kind":"irc","type":"whois_result","networkId":7,"whois":{
+              "nick":"Alice","ident":"~alice","hostname":"example.org","real_name":"Alice A",
+              "actual_hostname":"gateway.example.org","actual_ip":"198.51.100.4",
+              "server":"irc.example.org","server_info":"Example Network","account":"alice",
+              "channels":"@#foo +#bar","modes":"+iw","operator":"is an IRC Operator",
+              "helpop":"is available for help","bot":"is a bot","registered_nick":"is identified",
+              "secure":true,"certfp":"abc123","away":"back later","idle":"345","logon":"1700000000"}}
+            """.trimIndent(),
+        )
+        if (frame !is ServerFrame.WhoisResult) fail("expected a whoisResult, got $frame")
+        val (networkId, whois) = frame
+        assertEquals(7, networkId)
+        assertEquals("Alice", whois.nick)
+        assertEquals("~alice", whois.ident)
+        assertEquals("example.org", whois.hostname)
+        assertEquals("Alice A", whois.realName)
+        assertEquals("gateway.example.org", whois.actualHostname)
+        assertEquals("198.51.100.4", whois.actualIP)
+        assertEquals("irc.example.org", whois.server)
+        assertEquals("Example Network", whois.serverInfo)
+        assertEquals("alice", whois.account)
+        assertEquals("+iw", whois.modes)
+        assertEquals("is an IRC Operator", whois.isOperator)
+        assertEquals("is available for help", whois.helpop)
+        assertEquals("is a bot", whois.bot)
+        assertEquals("is identified", whois.registeredNick)
+        assertTrue(whois.isSecure)
+        assertEquals("abc123", whois.certfp)
+        assertEquals("back later", whois.away)
+        assertFalse(whois.isNotFound)
+    }
+
+    @Test
+    fun testIdleAndSignonArriveAsStringsBecauseIrcParametersAreText() {
+        // ⚠⚠ The regression this locks: irc-framework assigns `idle`/`logon` straight off
+        // `command.params` (user.js:238), and IRC parameters are text. A bare integer read gives
+        // null on every real reply, so both rows would silently never render.
+        val frame = FrameParser.parseWs(
+            """
+            {"kind":"irc","type":"whois_result","networkId":1,
+             "whois":{"nick":"bob","idle":"345","logon":"1700000000"}}
+            """.trimIndent(),
+        )
+        if (frame !is ServerFrame.WhoisResult) fail("expected a whoisResult")
+        assertEquals(345L, frame.whois.idleSeconds)
+        assertEquals(Instant.ofEpochSecond(1_700_000_000), frame.whois.signedOn)
+    }
+
+    @Test
+    fun testIdleAndSignonAlsoAcceptRealJsonNumbers() {
+        // A server (or a future irc-framework) that sends them as numbers must work too —
+        // the point is that the reader takes either, not that it swapped one guess for another.
+        val frame = FrameParser.parseWs(
+            """
+            {"kind":"irc","type":"whois_result","networkId":1,
+             "whois":{"nick":"bob","idle":345,"logon":1700000000}}
+            """.trimIndent(),
+        )
+        if (frame !is ServerFrame.WhoisResult) fail("expected a whoisResult")
+        assertEquals(345L, frame.whois.idleSeconds)
+        assertEquals(Instant.ofEpochSecond(1_700_000_000), frame.whois.signedOn)
+    }
+
+    @Test
+    fun testAnAbsentSignonIsNilRatherThanTheEpoch() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"irc","type":"whois_result","networkId":1,"whois":{"nick":"bob"}}""",
+        )
+        if (frame !is ServerFrame.WhoisResult) fail("expected a whoisResult")
+        // 1970 is plausible-looking and wrong; a missing row simply doesn't draw.
+        assertNull(frame.whois.signedOn)
+        assertNull(frame.whois.idleSeconds)
+    }
+
+    @Test
+    fun testTheNotFoundMissIsAnOrdinaryReplyCarryingAnError() {
+        // ⚠⚠ This does NOT come from ERR_NOSUCHNICK — that numeric produces no whois event at
+        // all. irc-framework synthesizes this at RPL_ENDOFWHOIS when nothing filled the cache,
+        // which is why it arrives with a nick and nothing else.
+        val frame = FrameParser.parseWs(
+            """
+            {"kind":"irc","type":"whois_result","networkId":1,
+             "whois":{"nick":"ghost","error":"not_found"}}
+            """.trimIndent(),
+        )
+        if (frame !is ServerFrame.WhoisResult) fail("expected a whoisResult")
+        assertTrue(frame.whois.isNotFound)
+        assertEquals("ghost", frame.whois.nick)
+    }
 
     @Test
     fun testHostmaskFillsAMissingHalfWithAStarAndIsNilWithNeither() {
@@ -108,6 +209,32 @@ class WhoisTests {
         assertTrue(WhoisResult(nick = "bob").channels.isEmpty())
     }
 
+    // MARK: - The frame
+
+    @Test
+    fun testWhoisResultSurvivesCarryingNoTarget() {
+        // ⚠⚠ The regression that made `/whois` do nothing on this client for its whole life:
+        // the reply has no `target`, so below `parseIrc`'s target guard it folded to `Other`
+        // and was discarded. This asserts it is recognised *above* that guard.
+        val frame = FrameParser.parseWs(
+            """{"kind":"irc","type":"whois_result","networkId":3,"whois":{"nick":"bob"}}""",
+        )
+        if (frame !is ServerFrame.WhoisResult) fail("expected a whoisResult, got $frame")
+    }
+
+    @Test
+    fun testAReplyWeCannotAddressIsRefused() {
+        for (bad in listOf(
+            """{"kind":"irc","type":"whois_result","whois":{"nick":"bob"}}""",
+            """{"kind":"irc","type":"whois_result","networkId":null,"whois":{"nick":"bob"}}""",
+            """{"kind":"irc","type":"whois_result","networkId":1}""",
+            """{"kind":"irc","type":"whois_result","networkId":1,"whois":{}}""",
+            """{"kind":"irc","type":"whois_result","networkId":1,"whois":{"nick":""}}""",
+        )) {
+            assertEquals(ServerFrame.Ignored, FrameParser.parseWs(bad), bad)
+        }
+    }
+
     // MARK: - Nick notes
 
     @Test
@@ -180,15 +307,81 @@ class WhoisTests {
         assertEquals("b", set.note(networkId = 2, nick = "alice")?.note)
     }
 
-    // Waiting on FrameParser, ServerFrame:
-    // testParsesTheFullReplyUsingIrcFrameworksFieldNames,
-    // testIdleAndSignonArriveAsStringsBecauseIrcParametersAreText,
-    // testIdleAndSignonAlsoAcceptRealJsonNumbers, testAnAbsentSignonIsNilRatherThanTheEpoch,
-    // testTheNotFoundMissIsAnOrdinaryReplyCarryingAnError, testWhoisResultSurvivesCarryingNoTarget,
-    // testAReplyWeCannotAddressIsRefused, testParsesTheNoteUpdateFrame, testANoteAboutNobodyIsRefused,
-    // testAFrameWithNoReadableNoteIsRefusedRatherThanTreatedAsAClear,
-    // testTheSnapshotSeedsNotesAndDropsUnusableRows
-    //
+    @Test
+    fun testParsesTheNoteUpdateFrame() {
+        // ⚠⚠ `"2026-08-29 12:00:00"` — a space, no zone — is what the server actually sends.
+        // `user_nick_notes.updated_at` is `DEFAULT (datetime('now'))` and `nickNotes.ts` echoes
+        // the column verbatim, unlike the tables declared with an explicit
+        // `strftime('%Y-%m-%dT%H:%M:%fZ')`. Feeding this an ISO string is a test that passes
+        // over a broken production path — which is what the first cut of it did.
+        assertEquals(
+            ServerFrame.NickNoteUpdated(
+                networkId = 7, nick = "Alice", note = "hi",
+                updatedAt = Instant.ofEpochSecond(1_788_004_800),
+            ),
+            FrameParser.parseWs(
+                """
+                {"kind":"nick-note-updated","networkId":7,"nick":"Alice","note":"hi",
+                 "updatedAt":"2026-08-29 12:00:00"}
+                """.trimIndent(),
+            ),
+        )
+        // The clear arrives as the same frame with an empty note and no timestamp.
+        assertEquals(
+            ServerFrame.NickNoteUpdated(networkId = 7, nick = "Alice", note = "", updatedAt = null),
+            FrameParser.parseWs("""{"kind":"nick-note-updated","networkId":7,"nick":"Alice","note":""}"""),
+        )
+    }
+
+    @Test
+    fun testANoteAboutNobodyIsRefused() {
+        for (bad in listOf(
+            """{"kind":"nick-note-updated","nick":"alice","note":"n"}""",
+            """{"kind":"nick-note-updated","networkId":null,"nick":"alice","note":"n"}""",
+            """{"kind":"nick-note-updated","networkId":7,"note":"n"}""",
+            """{"kind":"nick-note-updated","networkId":7,"nick":"","note":"n"}""",
+        )) {
+            assertEquals(ServerFrame.Ignored, FrameParser.parseWs(bad), bad)
+        }
+    }
+
+    @Test
+    fun testAFrameWithNoReadableNoteIsRefusedRatherThanTreatedAsAClear() {
+        // ⚠⚠ An empty note is a DELETE, so folding an absent or non-string `note` to `""`
+        // would let a malformed frame destroy something the user typed. Absent is not a
+        // statement that the note is empty. The asymmetry settles it: refusing costs a missed
+        // update, accepting costs the note.
+        for (bad in listOf(
+            """{"kind":"nick-note-updated","networkId":7,"nick":"alice"}""",
+            """{"kind":"nick-note-updated","networkId":7,"nick":"alice","note":null}""",
+            """{"kind":"nick-note-updated","networkId":7,"nick":"alice","note":42}""",
+        )) {
+            assertEquals(ServerFrame.Ignored, FrameParser.parseWs(bad), bad)
+        }
+        // The real clear still lands — `""` is present.
+        assertEquals(
+            ServerFrame.NickNoteUpdated(networkId = 7, nick = "alice", note = "", updatedAt = null),
+            FrameParser.parseWs("""{"kind":"nick-note-updated","networkId":7,"nick":"alice","note":""}"""),
+        )
+    }
+
+    @Test
+    fun testTheSnapshotSeedsNotesAndDropsUnusableRows() {
+        val frame = FrameParser.parseWs(
+            """
+            {"kind":"snapshot","networks":[{"networkId":7,"state":"connected","nick":"me","channels":[],
+             "nickNotes":[{"nick":"Alice","note":"lives in Berlin","updatedAt":"2026-08-29 12:00:00"},
+                          {"nick":"","note":"x"},{"nick":"bob","note":""}]}]}
+            """.trimIndent(),
+        )
+        if (frame !is ServerFrame.Snapshot) fail("expected a snapshot")
+        assertEquals(listOf("Alice"), frame.networks.firstOrNull()?.nickNotes?.map { it.nick })
+        assertEquals(
+            Instant.ofEpochSecond(1_788_004_800),
+            frame.networks.firstOrNull()?.nickNotes?.firstOrNull()?.updatedAt,
+        )
+    }
+
     // Waiting on LurkerStore, ChatState, ChatViewModel (and the `viewModel()` helper):
     // testAReplyIsCachedUnderTheServersCasingAndFoundUnderAnyOther, testAReplyFreesTheInFlightSlot,
     // testANotFoundFreesTheSlotToo, testAReplyForOneNickLeavesAnotherLookupPending,

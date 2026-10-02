@@ -4,8 +4,12 @@
 package net.amiantos.lurkerkit
 
 import kotlinx.serialization.json.JsonPrimitive
+import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.model.CertificateSource
+import net.amiantos.lurkerkit.model.ClientCertificate
 import net.amiantos.lurkerkit.model.ClientCertificatePEM
+import net.amiantos.lurkerkit.model.ISOTime
+import net.amiantos.lurkerkit.model.NetworkConfig
 import net.amiantos.lurkerkit.model.NetworkDraft
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -26,10 +30,45 @@ class ClientCertificateTests {
         const val rsaKey = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----"
     }
 
+    private fun row(certificate: String): NetworkConfig? =
+        FrameParser.parseNetworkReply(
+            """{"network":{"id":1,"name":"n","host":"h","tls":true,"nick":"me","client_cert":$certificate}}""",
+        )
+
     private fun draft(): NetworkDraft =
         NetworkDraft(name = "Libera", host = "irc.libera.chat", port = 6697, tls = true, nick = "me")
 
     // MARK: - Reading a row
+
+    @Test
+    fun testACertificateReadsItsExpiry() {
+        val config = row(
+            certificate = """
+            {"sha256":"b2","sha1":"a1","sha512":"c5","subject":"CN=me",
+             "validFrom":"2026-09-11T00:00:00.000Z","validTo":"2027-09-11T00:00:00.000Z"}
+            """.trimIndent(),
+        )
+        val expires = ISOTime.parse("2027-09-11T00:00:00.000Z")
+        assertNotNull(expires)
+        assertEquals(ClientCertificate.Usable(expires = expires), config?.clientCertificate)
+    }
+
+    @Test
+    fun testAnUnreadableCertificateIsNotNoCertificate() {
+        // ⚠⚠ The server says `{unusable: true}` for a pair that won't parse, which archive import
+        // can produce without anyone pasting anything. It refuses to dial while that's attached,
+        // so reading it as "no certificate" would offer Generate on a network whose problem is the
+        // certificate it already has.
+        assertEquals(ClientCertificate.Unusable, row(certificate = """{"unusable":true}""")?.clientCertificate)
+    }
+
+    @Test
+    fun testNullAndAbsentBothMeanNoCertificate() {
+        assertNull(row(certificate = "null")?.clientCertificate)
+        val absent = FrameParser.parseNetworkReply("""{"network":{"id":1,"name":"n","host":"h"}}""")
+        assertNotNull(absent)
+        assertNull(absent.clientCertificate)
+    }
 
     // MARK: - The create body
 
@@ -137,8 +176,4 @@ class ClientCertificateTests {
         assertTrue(noCert.message.contains("no certificate"), noCert.message)
         assertTrue(neither.message.contains("doesn't hold"), neither.message)
     }
-
-    // Waiting on FrameParser (reading a row, and the `row(certificate:)` helper):
-    // testACertificateReadsItsExpiry, testAnUnreadableCertificateIsNotNoCertificate,
-    // testNullAndAbsentBothMeanNoCertificate
 }

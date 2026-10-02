@@ -144,6 +144,6 @@ class UnsentHoldTests {
         )
     }
 
-    // Waiting on LurkerStore, ServerFrame: takeIsReadAndClear, holdsQueueRatherThanClobber,
+    // Waiting on LurkerStore: takeIsReadAndClear, holdsQueueRatherThanClobber,
     // renameMovesTheHold, sendResultIsSilent
 }

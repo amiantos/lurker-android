@@ -428,8 +428,6 @@ class IgnoreArgsTests {
         assertEquals(true, error("-time 36501d bob").contains("invalid -time"))
     }
 
-    // Waiting on LurkerClient (`ruleJSON`), FrameParser:
-    // testTheEncodedRuleRoundTripsThroughTheFrameDecoder
-    //
-    // Waiting on LurkerClient (`ruleJSON`): testTheEncoderOmitsUnsetDimensionsRatherThanSendingNulls
+    // Waiting on LurkerClient (`ruleJSON`): testTheEncodedRuleRoundTripsThroughTheFrameDecoder,
+    // testTheEncoderOmitsUnsetDimensionsRatherThanSendingNulls
 }

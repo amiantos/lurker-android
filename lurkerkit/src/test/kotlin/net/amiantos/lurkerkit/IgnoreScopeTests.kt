@@ -3,8 +3,12 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.model.EventType
+import net.amiantos.lurkerkit.model.ISOTime
 import net.amiantos.lurkerkit.model.IgnoreInput
+import net.amiantos.lurkerkit.model.IgnorePatternKind
 import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Member
@@ -14,7 +18,9 @@ import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * Ignore rules from the wire to the answer: how the two scopes union, how the frames seed and
@@ -137,6 +143,85 @@ class IgnoreScopeTests {
     }
 
     // MARK: - Frames
+
+    @Test
+    fun testTheWireShapeParsesIntoARule() {
+        val frame = FrameParser.parseWs(
+            """
+            {"kind":"ignore-list-updated","networkId":7,"masks":[
+              {"id":3,"mask":"bob!*@spam","channels":["#chan"],"pattern":"word",
+               "patternKind":"full","levels":["PUBLIC","NOHIGHLIGHT"],"isExcept":true,
+               "expiresAt":"2999-01-01T00:00:00.000Z","createdAt":"2026-01-01T00:00:00.000Z"}
+            ]}
+            """.trimIndent(),
+        )
+        if (frame !is ServerFrame.IgnoreListUpdated) fail("expected ignoreListUpdated, got $frame")
+        val (networkId, rules) = frame
+        assertEquals(7, networkId)
+        assertEquals(1, rules.size)
+        val rule = rules[0]
+        assertEquals(3, rule.id)
+        assertEquals("bob!*@spam", rule.mask)
+        assertEquals(listOf("#chan"), rule.channels)
+        assertEquals("word", rule.pattern)
+        assertEquals(IgnorePatternKind.Full, rule.patternKind)
+        assertEquals(listOf("PUBLIC", "NOHIGHLIGHT"), rule.levels)
+        assertTrue(rule.isExcept)
+        assertEquals(ISOTime.parse("2999-01-01T00:00:00.000Z"), rule.expiresAt)
+    }
+
+    /**
+     * A frame with no usable `masks` is DROPPED, not read as "this scope has no rules".
+     *
+     * `objects()` answers an empty list for a missing, null or mistyped key, and the store treats
+     * the payload as complete for its scope — so without the guard one malformed frame silently
+     * deletes every rule in the bucket, live. A hide feature has to fail closed.
+     */
+    @Test
+    fun testAnIgnoreUpdateWithoutAUsableMasksArrayIsDroppedNotReadAsEmpty() {
+        for (body in listOf(
+            """{"kind":"ignore-list-updated","networkId":null}""",
+            """{"kind":"ignore-list-updated","networkId":null,"masks":null}""",
+            """{"kind":"ignore-list-updated","networkId":null,"masks":"nope"}""",
+        )) {
+            assertEquals(ServerFrame.Ignored, FrameParser.parseWs(body), "should be dropped: $body")
+        }
+        // …but a genuinely empty list is a real "the last rule was removed" and must apply.
+        val frame = FrameParser.parseWs(
+            """{"kind":"ignore-list-updated","networkId":null,"masks":[]}""",
+        )
+        if (frame !is ServerFrame.IgnoreListUpdated) fail("an empty masks array is a legitimate update")
+        assertTrue(frame.rules.isEmpty())
+    }
+
+    /** A global-scope update carries `networkId: null`, which must not read as network 0. */
+    @Test
+    fun testANullNetworkIdParsesAsTheGlobalScope() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"ignore-list-updated","networkId":null,"masks":[]}""",
+        )
+        if (frame !is ServerFrame.IgnoreListUpdated) fail("expected ignoreListUpdated, got $frame")
+        assertNull(frame.networkId)
+    }
+
+    /** Every optional field absent is a legal rule — the shape a bare `/ignore nick` produces. */
+    @Test
+    fun testAMinimalRuleParsesWithEverythingUnconstrained() {
+        val frame = FrameParser.parseWs(
+            """
+            {"kind":"snapshot","networks":[],"globalIgnores":[
+              {"id":1,"mask":"bob","channels":null,"pattern":null,"patternKind":"substr",
+               "levels":["ALL"],"isExcept":false,"expiresAt":null}
+            ]}
+            """.trimIndent(),
+        )
+        if (frame !is ServerFrame.Snapshot) fail("expected snapshot, got $frame")
+        val globalIgnores = frame.globalIgnores
+        assertEquals(1, globalIgnores.size)
+        assertNull(globalIgnores[0].channels)
+        assertNull(globalIgnores[0].pattern)
+        assertNull(globalIgnores[0].expiresAt)
+    }
 
     // MARK: - Store-level readers
 
@@ -380,13 +465,9 @@ class IgnoreScopeTests {
         )
     }
 
-    // Waiting on LurkerStore, ServerFrame (`NetworkSnapshot`):
+    // Waiting on LurkerStore:
     // testTheSnapshotSeedsBothBucketsAndReplacesThemWholesale,
     // testIgnoreListUpdatedReplacesOnlyTheScopeItNames
-    //
-    // Waiting on FrameParser: testTheWireShapeParsesIntoARule,
-    // testAnIgnoreUpdateWithoutAUsableMasksArrayIsDroppedNotReadAsEmpty,
-    // testANullNetworkIdParsesAsTheGlobalScope, testAMinimalRuleParsesWithEverythingUnconstrained
     //
     // Waiting on ChatState: testAnIgnoredPeerIsNotReportedAsTyping,
     // testVisibleMembersDropsIgnoredPeopleButNeverYou

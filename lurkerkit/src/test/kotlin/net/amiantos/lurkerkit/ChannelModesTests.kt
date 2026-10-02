@@ -3,7 +3,9 @@
 
 package net.amiantos.lurkerkit
 
-import kotlin.test.assertNotEquals
+import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.client.TopicMeta
 import net.amiantos.lurkerkit.model.ChannelModeDrafts
 import net.amiantos.lurkerkit.model.ChannelModeForm
 import net.amiantos.lurkerkit.model.ChannelRank
@@ -21,6 +23,7 @@ import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -40,6 +43,106 @@ class ChannelModesTests {
     )
 
     // MARK: - Wire
+
+    @Test
+    fun testSnapshotCarriesTheSpecAndEachChannelsModeState() {
+        val frame = FrameParser.parseWs(
+            """
+            {"kind":"snapshot","networks":[{"networkId":1,"state":"connected","nick":"me",
+              "modeSpec":{"list":"beI","always":"k","onSet":"l","flags":"imnst",
+                "prefix":[{"mode":"o","symbol":"@"},{"mode":"vv","symbol":"+"},{"mode":"v","symbol":"+"}],
+                "maxModes":null,"topicLen":307},
+              "channels":[{"name":"#c","topic":"hi","topicSetBy":"alice!a@h","topicSetAt":"2026-09-01T10:00:00.000Z",
+                "modes":"ntkl","modeParams":{"l":"50"},"createdAt":"2020-01-01T00:00:00.000Z","members":[]}]}]}
+            """.trimIndent(),
+        )
+        if (frame !is ServerFrame.Snapshot) fail("expected snapshot, got $frame")
+        val network = frame.networks.firstOrNull() ?: fail("expected snapshot, got $frame")
+        val parsed = network.modeSpec
+        assertEquals("beI", parsed?.list)
+        assertEquals(listOf("o", "v"), parsed?.prefix?.map { it.mode }, "a prefix entry that isn't one letter is dropped")
+        assertNull(parsed?.maxModes, "null is no limit, not a default")
+        assertEquals(307, parsed?.topicLen)
+        val channel = network.channels.firstOrNull()?.modeState
+        assertEquals("ntkl", channel?.modes)
+        assertEquals(mapOf("l" to "50"), channel?.params)
+        assertEquals("alice!a@h", channel?.topicSetBy)
+        assertNotNull(channel?.topicSetAt)
+        assertNotNull(channel?.createdAt)
+    }
+
+    /** ⚠⚠ Null until the burst ends — and null must stay "unknown", never become the defaults. */
+    @Test
+    fun testANullSpecIsUnknown() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"snapshot","networks":[{"networkId":1,"state":"connected","nick":"me","modeSpec":null,"channels":[]}]}""",
+        )
+        if (frame !is ServerFrame.Snapshot) fail("expected snapshot")
+        assertNull(frame.networks.firstOrNull()?.modeSpec)
+    }
+
+    /** A network-scoped frame on a `:server:` carrier — below the target guard it would be a line. */
+    @Test
+    fun testModeSpecFrame() {
+        val frame = FrameParser.parseWs(
+            """
+            {"kind":"irc","networkId":2,"target":":server:2","type":"mode-spec",
+             "modeSpec":{"list":"beIq","always":"k","onSet":"l","flags":"nt","prefix":[{"mode":"o","symbol":"@"}],"maxModes":4,"topicLen":null}}
+            """.trimIndent(),
+        )
+        assertEquals(
+            ServerFrame.ModeSpec(
+                networkId = 2,
+                spec = ModeSpec(
+                    list = "beIq", always = "k", onSet = "l", flags = "nt",
+                    prefix = listOf(PrefixMode(mode = "o", symbol = "@")), maxModes = 4, topicLen = null,
+                ),
+            ),
+            frame,
+        )
+    }
+
+    @Test
+    fun testChannelModesFrameNeverBecomesALine() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"irc","networkId":1,"target":"#c","type":"channel-modes","modes":"ntl","modeParams":{"l":"50"},"createdAt":null}""",
+        )
+        assertEquals(
+            ServerFrame.ChannelModes(networkId = 1, target = "#c", modes = "ntl", params = mapOf("l" to "50"), createdAt = null),
+            frame,
+        )
+    }
+
+    /**
+     * The setter's KEY is what says the server stated it: `null` replaces a stale setter, an
+     * absent key leaves it alone.
+     */
+    @Test
+    fun testChannelTopicMetaFollowsKeyPresence() {
+        val stated = FrameParser.parseWs(
+            """{"kind":"irc","networkId":1,"target":"#c","type":"channel-topic","topic":"t","setBy":"bob","setAt":null}""",
+        )
+        if (stated !is ServerFrame.ChannelTopic) fail("expected channelTopic")
+        assertEquals(TopicMeta(setBy = "bob", setAt = null), stated.meta)
+
+        val silent = FrameParser.parseWs("""{"kind":"irc","networkId":1,"target":"#c","type":"channel-topic","topic":"t"}""")
+        if (silent !is ServerFrame.ChannelTopic) fail("expected channelTopic")
+        assertNull(silent.meta)
+    }
+
+    @Test
+    fun testNetworkConfigReadsChannelKeys() {
+        val configs = FrameParser.parseNetworkConfigs(
+            """
+            {"networks":[{"id":1,"name":"n","host":"h","port":6697,"nick":"me",
+              "channels":[{"name":"#Secret","key":"hunter2"},{"name":"#open","key":null},{"name":"","key":"x"}]}]}
+            """.trimIndent(),
+        )
+        val config = configs?.firstOrNull()
+        assertEquals("hunter2", config?.key(channel = "#secret"), "looked up case-insensitively")
+        assertNull(config?.key(channel = "#open"))
+        assertEquals(1, config?.channelKeys?.size)
+    }
 
     // MARK: - Live lines
 
@@ -430,16 +533,11 @@ class ChannelModesTests {
         assertNotEquals(drafts, noted)
     }
 
-    // Waiting on FrameParser, ServerFrame: testSnapshotCarriesTheSpecAndEachChannelsModeState,
-    // testANullSpecIsUnknown, testModeSpecFrame, testChannelModesFrameNeverBecomesALine,
-    // testChannelTopicMetaFollowsKeyPresence (and TopicMeta), testNetworkConfigReadsChannelKeys (and
-    // NetworkConfig)
-    //
-    // Waiting on ChatViewModel, VerbReply (and FrameParser, SessionStore, SettingsCache):
+    // Waiting on ChatViewModel (and SessionStore, SettingsCache):
     // testVerbReplyCarriesItsData, testVerbErrorsAreWorded, testLiveLinesAndResyncsReachChannelEvents,
     // testASaveFailureSaysWhetherAnythingCanHaveGoneOut
     //
-    // Waiting on LurkerStore, ChatState, ServerFrame (and the private `storeWithChannel` helper and
+    // Waiting on LurkerStore, ChatState (and the private `storeWithChannel` helper and
     // `key`): testSnapshotSeedsSpecAndChannelState,
     // testChannelModesFrameReplacesModesButKeepsTheTopicSetter, testATopicLineNamesItsSetter,
     // testChannelTopicMetaReplacesOnlyWhenStated,

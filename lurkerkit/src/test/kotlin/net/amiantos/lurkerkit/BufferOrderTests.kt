@@ -3,6 +3,8 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
@@ -12,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * The buffer list's order, where the order is the user's own: their network arrangement and
@@ -258,10 +261,32 @@ class BufferOrderTests {
 
     // MARK: - Store
 
-    // Waiting on FrameParser, ServerFrame: testPinsChangedParsesItsOrderedList,
-    // testTheRosterCarriesThePosition, testAnOlderServerWithNoPositionSortsLast
-    //
-    // Waiting on LurkerStore, ChatState (and FrameParser):
+    @Test
+    fun testPinsChangedParsesItsOrderedList() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"pins-changed","networkId":4,"pinned":["#b","#a"],"pinnedIds":[7,3]}""",
+        )
+        if (frame !is ServerFrame.PinsChanged) fail("expected pinsChanged, got $frame")
+        val (networkId, pinned) = frame
+        assertEquals(4, networkId)
+        assertEquals(listOf("#b", "#a"), pinned)
+    }
+
+    @Test
+    fun testTheRosterCarriesThePosition() {
+        val frame = FrameParser.parseNetworks("""{"networks":[{"id":1,"name":"Libera","position":3}]}""")
+        if (frame !is ServerFrame.Networks) fail("expected networks, got $frame")
+        assertEquals(3, frame.networks.firstOrNull()?.position)
+    }
+
+    @Test
+    fun testAnOlderServerWithNoPositionSortsLast() {
+        val frame = FrameParser.parseNetworks("""{"networks":[{"id":1,"name":"Libera"}]}""")
+        if (frame !is ServerFrame.Networks) fail("expected networks, got $frame")
+        assertEquals(Int.MAX_VALUE, frame.networks.firstOrNull()?.position)
+    }
+
+    // Waiting on LurkerStore, ChatState:
     // testTheSnapshotSeedsPinsAndReplacesThemWholesale, testPinsChangedReplacesOneNetworksList,
     // testDeletingANetworkTakesItsPinsWithIt,
     // testTheRosterMergeCarriesThePositionOntoAnExistingNetwork

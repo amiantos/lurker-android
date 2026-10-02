@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.model.BuiltinNetworks
 import net.amiantos.lurkerkit.model.NetworkPreset
 import net.amiantos.lurkerkit.model.NetworkPresets
@@ -10,6 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -123,6 +125,32 @@ class NetworkPresetTests {
     // MARK: - Instance presets and the lockdown
 
     @Test
+    fun testPresetsParseWithTheirChannelsAndPolicy() {
+        val presets = FrameParser.parseNetworkPresets(
+            """
+            {"presets":[{"id":3,"name":"Corp","host":"irc.corp.example","port":6667,"tls":false,
+            "saslLikelyRequired":true,"channels":["#general"]}],"allowUserDefined":false}
+            """.trimIndent(),
+        )
+        assertEquals(1, presets?.instance?.size)
+        assertEquals(3, presets?.instance?.firstOrNull()?.instanceID)
+        assertEquals(6667, presets?.instance?.firstOrNull()?.port)
+        assertEquals(false, presets?.instance?.firstOrNull()?.tls)
+        assertEquals(listOf("#general"), presets?.instance?.firstOrNull()?.recommendedChannels)
+        assertEquals(true, presets?.instance?.firstOrNull()?.isInstance)
+        assertEquals(false, presets?.allowUserDefined)
+    }
+
+    @Test
+    fun testAnOlderServerIsNotTreatedAsLockedDown() {
+        // ⚠⚠ A server predating lurker#298 sends no policy, and reading its silence as "locked
+        // down" would hide the custom-server path — leaving an app that can't add a network
+        // at all, which is the failure lurker-ios#11 exists to fix.
+        assertEquals(true, FrameParser.parseNetworkPresets("""{"presets":[]}""")?.allowUserDefined)
+        assertNull(FrameParser.parseNetworkPresets("not json"))
+    }
+
+    @Test
     fun testALockedDownInstanceOffersOnlyItsOwnNetworks() {
         // ⚠⚠ The policy is an allowlist of hosts: with `allowUserDefined` off, the enabled
         // presets are the entire allowed set. Every builtin would be a row whose only outcome
@@ -154,7 +182,4 @@ class NetworkPresetTests {
         val offered = NetworkPresets(instance = listOf(libera), allowUserDefined = true).offered
         assertEquals(listOf(libera), offered.filter { it.host == "irc.libera.chat" })
     }
-
-    // Waiting on FrameParser: testPresetsParseWithTheirChannelsAndPolicy,
-    // testAnOlderServerIsNotTreatedAsLockedDown
 }

@@ -3,6 +3,8 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.ComposerDraft
 import net.amiantos.lurkerkit.model.DraftEntry
@@ -22,6 +24,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /** Composer drafts that follow you across devices, their pending reply included (lurker-ios#188). */
 class DraftsTests {
@@ -29,7 +32,60 @@ class DraftsTests {
     private val chat = BufferKey(networkId = 1, target = "#chat")
     private val alice = ReplyParent(id = 7, nick = "alice", type = EventType.Message, text = "lunch?", userhost = "alice!a@host")
 
+    private fun entry(
+        key: BufferKey? = null,
+        body: String = "half a thought",
+        reply: DraftReply? = null,
+        carriesReply: Boolean = true,
+    ): DraftEntry {
+        val resolved = key ?: chat
+        return DraftEntry(
+            networkId = resolved.networkId!!, target = resolved.target, body = body, reply = reply, carriesReply = carriesReply,
+        )
+    }
+
     // MARK: - Wire
+
+    @Test
+    fun testParsesTheSnapshotWithItsReplies() {
+        val frame = FrameParser.parseWs(
+            """
+            {"kind":"draft-snapshot","drafts":[
+              {"networkId":1,"target":"#chat","bufferId":4,"body":"alice: sure","updatedAt":"2026-10-01 10:00:00",
+               "reply":{"messageId":7,"addressed":true,"parent":{"id":7,"nick":"alice","type":"message","text":"lunch?","userhost":"alice!a@host","self":false}}},
+              {"networkId":1,"target":"bob","body":"","reply":{"messageId":9,"addressed":false,"parent":null}},
+              {"networkId":2,"target":"#x","body":"plain","reply":null},
+              {"target":"#nowhere","body":"no network"}
+            ]}
+            """.trimIndent(),
+        )
+        if (frame !is ServerFrame.DraftSnapshot) fail("$frame")
+        assertEquals(
+            listOf(
+                DraftEntry(
+                    networkId = 1, target = "#chat", body = "alice: sure",
+                    reply = DraftReply(messageId = 7, addressed = true, parent = alice),
+                ),
+                DraftEntry(
+                    networkId = 1, target = "bob", body = "",
+                    reply = DraftReply(messageId = 9, addressed = false, parent = null),
+                ),
+                DraftEntry(networkId = 2, target = "#x", body = "plain", reply = null),
+            ),
+            frame.entries,
+            "an entry with no network is a draft for nowhere",
+        )
+    }
+
+    @Test
+    fun testAnUpdateWithoutAReplyKeyIsNotOneThatClearsIt() {
+        // ⚠⚠ `has` reads a null as absent; this is the one place the two mean different things.
+        val cleared = FrameParser.parseWs("""{"kind":"draft-updated","networkId":1,"target":"#chat","body":"x","reply":null}""")
+        val silent = FrameParser.parseWs("""{"kind":"draft-updated","networkId":1,"target":"#chat","body":"x"}""")
+        assertEquals(ServerFrame.DraftUpdated(entry(body = "x", reply = null, carriesReply = true)), cleared)
+        assertEquals(ServerFrame.DraftUpdated(entry(body = "x", reply = null, carriesReply = false)), silent)
+        assertEquals(ServerFrame.Ignored, FrameParser.parseWs("""{"kind":"draft-updated","networkId":1,"body":"x"}"""))
+    }
 
     // MARK: - The store
 
@@ -299,22 +355,19 @@ class DraftsTests {
 
     // MARK: - The view model
 
-    // Waiting on FrameParser, ServerFrame (and the private `entry` helper):
-    // testParsesTheSnapshotWithItsReplies, testAnUpdateWithoutAReplyKeyIsNotOneThatClearsIt
-    //
-    // Waiting on ChatState (and the private `entry` helper):
+    // Waiting on ChatState:
     // testTheSnapshotResolvesRepliesAndSkipsEmptyDrafts, testAReplyWithNothingTypedIsADraft,
     // testTheSnapshotLeavesWhatThisDeviceIsHolding, testTheSnapshotIsAuthoritativeForWhatItLeavesOut,
     // testAnUpdateFromAnOlderServerKeepsTheReply, testARelayedLineIsRepliedToAsThePersonInside,
     // testALineFromSomeoneIgnoredSinceIsStillTheReplyWithoutTheirWords,
     // testADeletedNetworkTakesItsDraftsAndOnlyItsDrafts
     //
-    // Waiting on ChatState, LurkerStore, ServerFrame: testAClosedBufferTakesItsDraft,
+    // Waiting on ChatState, LurkerStore: testAClosedBufferTakesItsDraft,
     // testARenameCarriesTheDraft, testARenameCarriesADraftWhoseRowHasntArrived,
     // testAMergeKeepsTheSurvivorsDraft, testAMergeAdoptsTheAbsorbedDraftWhenTheSurvivorHasNone
     //
-    // Waiting on ChatViewModel, SessionStore, SettingsCache, ServerFrame (and the private
-    // `viewModel` and `entry` helpers): testAMergeDropsTheAbsorbedEditInTheViewModelToo,
+    // Waiting on ChatViewModel, SessionStore, SettingsCache (and the private `viewModel` helper):
+    // testAMergeDropsTheAbsorbedEditInTheViewModelToo,
     // testAnEditOutranksTheServerUntilItGoesOut, testAFlushWithNoSocketKeepsTheEditForTheNextConnect,
     // testAnotherDevicesWriteLandsWhenNothingHereIsNewer, testTheSystemBufferAndServerLogsKeepNoDraft,
     // testClosingABufferDropsItsWaitingEdit, testARenameCarriesTheWaitingEdit

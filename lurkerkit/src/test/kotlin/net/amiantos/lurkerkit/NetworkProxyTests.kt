@@ -5,9 +5,13 @@ package net.amiantos.lurkerkit
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.model.CertificateSource
+import net.amiantos.lurkerkit.model.NetworkConfig
 import net.amiantos.lurkerkit.model.NetworkDraft
+import net.amiantos.lurkerkit.model.NetworkProxy
 import net.amiantos.lurkerkit.model.ProxyDraft
 import net.amiantos.lurkerkit.model.ProxyType
 import net.amiantos.lurkerkit.model.SecretEdit
@@ -23,20 +27,86 @@ import kotlin.test.assertTrue
  */
 class NetworkProxyTests {
 
-    /**
-     * A fresh network.
-     *
-     * Port note: in LurkerKit this helper is `draft(editing json: String? = nil)` and, given a
-     * `proxy` JSON, returns a draft of a row read through `FrameParser.parseNetworkReply`. Only
-     * the fresh half is here; the editing half, and the `row(proxy:)`, `saved` and `proxyKeys`
-     * helpers beside it, come back with the tests that wait on `FrameParser`.
-     */
-    private fun draft(): NetworkDraft =
-        NetworkDraft(name = "Libera", host = "irc.libera.chat", port = 6697, tls = true, nick = "me")
+    private fun row(proxy: String): NetworkConfig? =
+        FrameParser.parseNetworkReply(
+            """{"network":{"id":1,"name":"n","host":"h","tls":true,"nick":"me","proxy":$proxy}}""",
+        )
+
+    private val saved =
+        """{"enabled":true,"type":"http","host":"127.0.0.1","port":3128,"username":"me","has_password":true}"""
+
+    /** A fresh network, or one being edited whose `proxy` is `json`. */
+    private fun draft(editing: String? = null): NetworkDraft {
+        val config = editing?.let { row(proxy = it) }
+            ?: return NetworkDraft(name = "Libera", host = "irc.libera.chat", port = 6697, tls = true, nick = "me")
+        return NetworkDraft(editing = config)
+    }
+
+    private fun proxyKeys(body: JsonObject): Set<String> = body.keys.filter { it.startsWith("proxy_") }.toSet()
 
     // MARK: - Reading a row
 
+    @Test
+    fun testASavedProxyReadsEveryPart() {
+        assertEquals(
+            NetworkProxy(enabled = true, type = ProxyType.Http, host = "127.0.0.1", port = 3128, username = "me", hasPassword = true),
+            row(proxy = saved)?.proxy,
+        )
+    }
+
+    @Test
+    fun testNullAndAbsentBothMeanNoProxy() {
+        assertNull(row(proxy = "null")?.proxy)
+        val absent = FrameParser.parseNetworkReply("""{"network":{"id":1,"name":"n","host":"h"}}""")
+        assertNotNull(absent)
+        assertNull(absent.proxy)
+    }
+
+    @Test
+    fun testASwitchedOffProxyIsStillASavedOne() {
+        // `enabled` is the only part the dial reads; the details stay saved while it's off.
+        val proxy = row(
+            proxy = """{"enabled":false,"type":"socks5","host":"127.0.0.1","port":9050,"username":null,"has_password":false}""",
+        )?.proxy
+        assertNotNull(proxy)
+        assertEquals(false, proxy.enabled)
+        assertEquals(9050, proxy.port)
+    }
+
+    @Test
+    fun testAnImpossiblePortReadsAsTheTypesDefault() {
+        assertEquals(3128, row(proxy = """{"enabled":false,"type":"http","host":"h","port":null}""")?.proxy?.port)
+    }
+
     // MARK: - What a draft sends
+
+    @Test
+    fun testEditingStartsFromTheSavedProxyButNotItsPassword() {
+        val d = draft(editing = saved)
+        assertNotNull(d.savedProxy)
+        assertEquals(row(proxy = saved)?.proxy, d.savedProxy)
+        assertEquals(ProxyDraft(enabled = true, type = ProxyType.Http, host = "127.0.0.1", port = 3128, username = "me"), d.proxy)
+        assertEquals(SecretEdit.Unchanged, d.proxy.password)
+    }
+
+    @Test
+    fun testAnOrdinaryNetworkSendsNoProxyKeys() {
+        // ⚠ Not even `proxy_enabled: false`. A save with nothing to say about a proxy says nothing,
+        // so a rename carries nothing for a locked-down instance's proxy rule to weigh.
+        assertEquals(emptySet(), proxyKeys(draft().jsonBody(creating = true)))
+        assertEquals(emptySet(), proxyKeys(draft(editing = "null").jsonBody(creating = false)))
+    }
+
+    @Test
+    fun testSwitchingASavedProxyOffSendsOnlyTheSwitch() {
+        // Turning a proxy off must always be possible, so it's sent on its own — nothing else in
+        // the body for the server to refuse.
+        var d = draft(editing = saved)
+        d = d.copy(proxy = d.proxy.edited(enabled = false))
+        val body = d.jsonBody(creating = false)
+        assertEquals(setOf("proxy_enabled"), proxyKeys(body))
+        assertEquals(JsonPrimitive(false), body["proxy_enabled"])
+    }
 
     @Test
     fun testAnEnabledProxySendsTheWholeSet() {
@@ -49,6 +119,52 @@ class NetworkProxyTests {
         // Null rather than "", matching the other optional text columns.
         assertTrue(body["proxy_username"] is JsonNull)
         assertNull(body["proxy_password"])
+    }
+
+    @Test
+    fun testAnUntouchedProxyIsNotSent() {
+        // ⚠⚠ Not even resent as read. The form shows the columns normalized — trimmed, and an
+        // unknown type or impossible port read as a default — so resending what's shown would
+        // rewrite whatever archive import left there, on a rename, which a locked-down instance
+        // then refuses as a proxy change.
+        assertEquals(emptySet(), proxyKeys(draft(editing = saved).jsonBody(creating = false)))
+        val odd = """{"enabled":true,"type":"socks4","host":" 127.0.0.1 ","port":99999,"username":" me "}"""
+        assertEquals(emptySet(), proxyKeys(draft(editing = odd).jsonBody(creating = false)))
+    }
+
+    @Test
+    fun testAnUntouchedProxyIsNotValidated() {
+        // Nothing of it is sent, so whatever the columns hold mustn't block saving the rest.
+        assertNull(draft(editing = """{"enabled":true,"type":"socks5","host":"","port":1080}""").validationError)
+    }
+
+    @Test
+    fun testEditingASavedProxySendsTheWholeSetAsShown() {
+        var d = draft(editing = """{"enabled":true,"type":"socks5","host":" 127.0.0.1 ","port":9050,"username":" me "}""")
+        d = d.copy(proxy = d.proxy.edited(port = 9150))
+        val body = d.jsonBody(creating = false)
+        assertEquals(JsonPrimitive(true), body["proxy_enabled"])
+        assertEquals(JsonPrimitive("socks5"), body["proxy_type"])
+        assertEquals(JsonPrimitive("127.0.0.1"), body["proxy_host"])
+        assertEquals(JsonPrimitive(9150), body["proxy_port"])
+        assertEquals(JsonPrimitive("me"), body["proxy_username"])
+    }
+
+    @Test
+    fun testTurningAProxyOffAndOnAgainIsNoChange() {
+        var d = draft(editing = saved)
+        d = d.copy(proxy = d.proxy.edited(enabled = false))
+        d = d.copy(proxy = d.proxy.edited(enabled = true))
+        assertEquals(emptySet(), proxyKeys(d.jsonBody(creating = false)))
+    }
+
+    @Test
+    fun testTheProxyPasswordFollowsSecretEdit() {
+        var d = draft(editing = saved)
+        d = d.copy(proxy = d.proxy.edited(password = SecretEdit.Set("hunter2")))
+        assertEquals(JsonPrimitive("hunter2"), d.jsonBody(creating = false)["proxy_password"])
+        d = d.copy(proxy = d.proxy.edited(password = SecretEdit.Cleared))
+        assertTrue(d.jsonBody(creating = false)["proxy_password"] is JsonNull)
     }
 
     @Test
@@ -106,14 +222,6 @@ class NetworkProxyTests {
         assertEquals(ProxyType.Http, proxy.type)
         assertEquals(9050, proxy.port)
     }
-
-    // Waiting on FrameParser (every one reads a row through `parseNetworkReply`):
-    // testASavedProxyReadsEveryPart, testNullAndAbsentBothMeanNoProxy,
-    // testASwitchedOffProxyIsStillASavedOne, testAnImpossiblePortReadsAsTheTypesDefault,
-    // testEditingStartsFromTheSavedProxyButNotItsPassword, testAnOrdinaryNetworkSendsNoProxyKeys,
-    // testSwitchingASavedProxyOffSendsOnlyTheSwitch, testAnUntouchedProxyIsNotSent,
-    // testAnUntouchedProxyIsNotValidated, testEditingASavedProxySendsTheWholeSetAsShown,
-    // testTurningAProxyOffAndOnAgainIsNoChange, testTheProxyPasswordFollowsSecretEdit
 
     // Port-only: Swift's `mutating func` on a `var` copy gets this for free. Here `setType`
     // returns the changed draft and must leave the one it was called on alone — a form holding
