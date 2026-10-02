@@ -9,11 +9,14 @@ import net.amiantos.lurkerkit.commands.CommandEffect
 import net.amiantos.lurkerkit.commands.CommandParser
 import net.amiantos.lurkerkit.commands.ParsedInput
 import net.amiantos.lurkerkit.model.Buffer
+import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageRow
 import net.amiantos.lurkerkit.model.MessageRows
+import net.amiantos.lurkerkit.store.ChatState
+import net.amiantos.lurkerkit.store.LurkerStore
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -95,6 +98,66 @@ class ClearMarkerTests {
     }
 
     // MARK: - The store
+
+    private fun clearedBuffer(): ChatState {
+        val buffer = Buffer(networkId = 1, target = "#lurker", kind = BufferKind.Channel)
+        var state = LurkerStore.reduce(
+            ChatState(),
+            ServerFrame.Backlog(buffer = buffer, messages = emptyList(), hydrated = true, append = false, speakers = null),
+        )
+        state = LurkerStore.reduce(
+            state,
+            ServerFrame.BufferCleared(networkId = 1, target = "#lurker", clearedBeforeId = 42, clearedAt = clearedAt),
+        )
+        return state
+    }
+
+    // "the fan-out moves the marker on a buffer we hold"
+    @Test
+    fun fanOutMovesTheMarker() {
+        val buffer = clearedBuffer().buffers["1::#lurker"]
+        assertEquals(42L, buffer?.clearedBeforeId)
+        assertEquals(clearedAt, buffer?.clearedAt)
+    }
+
+    // "an undo drops both halves together"
+    @Test
+    fun undoDropsBothHalves() {
+        // A boundary with no instant would hide rows and draw no divider — the one state that
+        // leaves the user with no way back — so the two always move together.
+        val state = LurkerStore.reduce(
+            clearedBuffer(),
+            ServerFrame.BufferCleared(networkId = 1, target = "#lurker", clearedBeforeId = 0, clearedAt = null),
+        )
+        assertEquals(0L, state.buffers["1::#lurker"]?.clearedBeforeId)
+        assertNull(state.buffers["1::#lurker"]?.clearedAt)
+    }
+
+    // "a clear for a buffer we don't hold conjures nothing"
+    @Test
+    fun aClearForAnUnknownBufferIsIgnored() {
+        val state = LurkerStore.reduce(
+            ChatState(),
+            ServerFrame.BufferCleared(networkId = 1, target = "#nope", clearedBeforeId = 42, clearedAt = clearedAt),
+        )
+        assertNull(state.buffers["1::#nope"])
+    }
+
+    // "⚠ a later backlog is authoritative and can retract the marker"
+    @Test
+    fun aBacklogRetractsTheMarker() {
+        // Every backlog frame states the marker — the server's `bufferStateFields` is shared by
+        // the shell builder and the snapshot loop too — so rescuing a prior value the way
+        // `topic` is rescued would keep a marker an unclear elsewhere had already dropped.
+        val state = LurkerStore.reduce(
+            clearedBuffer(),
+            ServerFrame.Backlog(
+                buffer = Buffer(networkId = 1, target = "#lurker", kind = BufferKind.Channel),
+                messages = emptyList(), hydrated = true, append = false, speakers = null,
+            ),
+        )
+        assertEquals(0L, state.buffers["1::#lurker"]?.clearedBeforeId)
+    }
 
     // MARK: - The rows
 
@@ -214,6 +277,45 @@ class ClearMarkerTests {
         assertFalse(noBoundary.any { it is MessageRow.ClearedDivider })
     }
 
+    // "⚠ a clear drops the local lines it predates"
+    @Test
+    fun aClearDropsLocalLines() {
+        // `appendLocal` rows carry neither an id nor a date, so the row filter has nothing to
+        // judge them by; left alone they outlive a clear and render UNDER the divider as though
+        // they had arrived after it. They are ephemeral anyway, so the marker takes them.
+        val store = LurkerStore()
+        val key = BufferKey(networkId = 1, target = "#lurker")
+        store.apply(
+            ServerFrame.Backlog(
+                buffer = Buffer(networkId = 1, target = "#lurker", kind = BufferKind.Channel, hydrated = true),
+                messages = listOf(msg(10)), hydrated = true, append = false, speakers = null,
+            ),
+        )
+        store.appendLocal(key, text = "unknown command")
+        assertEquals(2, store.state.messages[key.id]?.size)
+
+        store.apply(
+            ServerFrame.BufferCleared(networkId = 1, target = "#lurker", clearedBeforeId = 10, clearedAt = clearedAt),
+        )
+        assertEquals(listOf(10L), store.state.messages[key.id]?.map { it.id }, "the local line went with it")
+    }
+
+    // "an undo leaves local lines alone"
+    @Test
+    fun anUndoKeepsLocalLines() {
+        val store = LurkerStore()
+        val key = BufferKey(networkId = 1, target = "#lurker")
+        store.apply(
+            ServerFrame.Backlog(
+                buffer = Buffer(networkId = 1, target = "#lurker", kind = BufferKind.Channel, hydrated = true),
+                messages = listOf(msg(10)), hydrated = true, append = false, speakers = null,
+            ),
+        )
+        store.appendLocal(key, text = "unknown command")
+        store.apply(ServerFrame.BufferCleared(networkId = 1, target = "#lurker", clearedBeforeId = 0, clearedAt = null))
+        assertEquals(2, store.state.messages[key.id]?.size, "nothing was hidden, so nothing goes")
+    }
+
     // MARK: - Paging past the boundary
 
     private fun cleared(beforeId: Long, detached: Boolean = false): Buffer =
@@ -281,6 +383,19 @@ class ClearMarkerTests {
         )
     }
 
+    // "⚠⚠ the marker itself is untouched by a reveal, so a reopen is cleared again"
+    @Test
+    fun aRevealNeverTouchesTheMarker() {
+        // The reveal is SCREEN state (on iOS, `ChatViewController.showsClearedHistory`), which
+        // is why nothing here can express it: `BufferNavigation` builds a fresh screen per open,
+        // so it retires itself. A flag on the buffer had no natural retirement — one jump peeled
+        // the buffer open for good and reopening never restored the clear, which is the bug
+        // that moved it out of the store.
+        val state = clearedBuffer()
+        assertEquals(42L, state.buffers["1::#lurker"]?.clearedBeforeId)
+        assertEquals(false, state.buffers["1::#lurker"]?.hasMoreNewer, "and paging state is its own")
+    }
+
     // MARK: - The command
 
     // Port note: `CommandParser.parse` takes the expiry's formatter here (see
@@ -315,9 +430,4 @@ class ClearMarkerTests {
         // would decline the thing they asked for on the grounds that they were too specific.
         assertEquals(listOf<CommandEffect>(CommandEffect.Clear(target = "#lurker", undo = false)), parse("/clear all"))
     }
-
-    // Waiting on LurkerStore, ChatState (and the private `clearedBuffer` helper):
-    // fanOutMovesTheMarker, undoDropsBothHalves, aClearForAnUnknownBufferIsIgnored,
-    // aBacklogRetractsTheMarker, aClearDropsLocalLines, anUndoKeepsLocalLines,
-    // aRevealNeverTouchesTheMarker
 }

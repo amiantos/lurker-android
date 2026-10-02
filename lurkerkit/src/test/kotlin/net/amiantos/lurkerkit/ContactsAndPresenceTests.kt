@@ -4,9 +4,13 @@
 package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.FavoriteEntry
+import net.amiantos.lurkerkit.model.FriendPresence
 import net.amiantos.lurkerkit.model.PresenceState
+import net.amiantos.lurkerkit.store.LurkerStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -102,17 +106,231 @@ class ContactsAndPresenceTests {
 
     // MARK: - Store: favorites
 
+    private fun entry(id: Int, target: String, net: Int = 2): FavoriteEntry =
+        FavoriteEntry(networkId = net, target = target, bufferId = id)
+
+    @Test
+    fun testFavoritesChangedReplacesWholesaleKeepingServerOrder() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.FavoritesChanged(listOf(entry(1, "zed"), entry(2, "#alpha"), entry(3, "bob"))))
+        // NOT re-sorted: the server's global order is user-controlled.
+        assertEquals(listOf("zed", "#alpha", "bob"), store.state.favorites.map { it.target })
+        // A later frame replaces, never merges — removal and reorder are the same op.
+        store.apply(ServerFrame.FavoritesChanged(listOf(entry(3, "bob"))))
+        assertEquals(listOf("bob"), store.state.favorites.map { it.target })
+    }
+
+    @Test
+    fun testFavoriteEntryFollowsAPlainBufferRename() {
+        // The server only republishes favorites after MERGES, so a plain
+        // nick-follow rename must rewrite the entry locally — by bufferId, the
+        // identity the frame proves — or the Friends chip ghosts under the dead
+        // nick while the renamed DM leaks back into its network roster.
+        val store = LurkerStore()
+        store.apply(ServerFrame.FavoritesChanged(listOf(entry(41, "zed", net = 2), entry(7, "#alpha", net = 2))))
+        store.apply(
+            ServerFrame.BufferRenamed(
+                networkId = 2, from = "zed", to = "zed_", bufferId = 41, merged = false,
+                mergedFromBufferId = null,
+            ),
+        )
+        assertEquals(listOf("zed_", "#alpha"), store.state.favorites.map { it.target })
+        assertEquals(listOf(41, 7), store.state.favorites.map { it.bufferId }, "identity untouched")
+    }
+
     // MARK: - Store: presence derivation
 
-    // Waiting on LurkerStore, ChatState (and the private `entry`, `connectedNetwork` and
-    // `connectedStore` helpers): testFavoritesChangedReplacesWholesaleKeepingServerOrder,
-    // testFavoriteEntryFollowsAPlainBufferRename, testPresenceOfflineWhileClientIsDisconnected,
-    // testPresenceOfflineWhenDeviceUnreachable, testRowPresenceIsUnknownWhileClientIsDisconnected,
-    // testRowPresenceIsUnknownWhenDeviceUnreachable,
-    // testRowPresenceStillReadsAPeerOnADisconnectedNetworkAsOffline,
-    // testRowPresenceWaitsForTheReconnectSnapshot, testPresenceUnknownForNetworkWeDoNotHave,
-    // testPresenceUnknownForConnectedNetworkWithNoRow, testPresenceReadsStoredRowCaseInsensitively,
-    // testBackReadsAsOnline, testDisconnectedNetworkReadsOfflineRegardlessOfRow,
-    // testLivePeerPresenceUpdatesAndNullClears, testPresenceIsPerNetwork,
-    // testSnapshotReplacesPeerPresenceWholesale
+    private fun connectedNetwork(id: Int, presence: Map<String, PresenceState> = emptyMap()): ServerFrame =
+        ServerFrame.Snapshot(
+            listOf(
+                NetworkSnapshot(
+                    id = id, state = ConnectionState.Connected, nick = "me", channels = emptyList(), peerPresence = presence,
+                ),
+            ),
+            globalIgnores = emptyList(), maxUploadBytes = null,
+        )
+
+    /**
+     * A store with a live socket. presence() now gates on the client's own link, so a test
+     * asserting a specific peer status must first be "connected" or every dot reads offline.
+     */
+    private fun connectedStore(): LurkerStore {
+        val store = LurkerStore()
+        store.apply(ServerFrame.SocketOpen)
+        return store
+    }
+
+    @Test
+    fun testPresenceOfflineWhileClientIsDisconnected() {
+        val store = connectedStore()
+        store.apply(connectedNetwork(2, presence = mapOf("darc" to PresenceState.Online)))
+        assertEquals(FriendPresence.Online, store.state.presence(networkId = 2, nick = "darc"))
+        // Socket drops → reconnecting: the cached row is stale, so the dot must not claim online
+        // even though the network's own state is still .connected from the last snapshot.
+        store.apply(ServerFrame.SocketClosed(reason = null, code = null))
+        assertEquals(FriendPresence.Offline, store.state.presence(networkId = 2, nick = "darc"))
+    }
+
+    @Test
+    fun testPresenceOfflineWhenDeviceUnreachable() {
+        val store = connectedStore()
+        store.apply(connectedNetwork(2, presence = mapOf("darc" to PresenceState.Online)))
+        store.setReachable(false)
+        assertEquals(FriendPresence.Offline, store.state.presence(networkId = 2, nick = "darc"))
+    }
+
+    /**
+     * A DM row claims nothing while we can't see the server (lurker-ios#167): `offline` would put
+     * every DM in italics under the "Connecting…" banner. The profile keeps `presence`'s
+     * `offline`, which is what stops it falling back to a WHOIS reply cached before the drop.
+     */
+    @Test
+    fun testRowPresenceIsUnknownWhileClientIsDisconnected() {
+        val store = connectedStore()
+        store.apply(connectedNetwork(2, presence = mapOf("darc" to PresenceState.Online)))
+        assertEquals(FriendPresence.Online, store.state.rowPresence(networkId = 2, nick = "darc"))
+
+        store.apply(ServerFrame.SocketClosed(reason = null, code = null))
+        assertEquals(FriendPresence.Unknown, store.state.rowPresence(networkId = 2, nick = "darc"))
+        assertEquals(FriendPresence.Offline, store.state.presence(networkId = 2, nick = "darc"), "the profile's answer stands")
+    }
+
+    @Test
+    fun testRowPresenceIsUnknownWhenDeviceUnreachable() {
+        val store = connectedStore()
+        store.apply(connectedNetwork(2, presence = mapOf("darc" to PresenceState.Online)))
+        store.setReachable(false)
+        assertEquals(FriendPresence.Unknown, store.state.rowPresence(networkId = 2, nick = "darc"))
+    }
+
+    @Test
+    fun testRowPresenceStillReadsAPeerOnADisconnectedNetworkAsOffline() {
+        // The case lurker-ios#167 was filed for: our own connection is fine, the network's isn't.
+        val store = connectedStore()
+        store.apply(
+            ServerFrame.Snapshot(
+                listOf(
+                    NetworkSnapshot(
+                        id = 2, state = ConnectionState.Disconnected, nick = "me", channels = emptyList(),
+                        peerPresence = mapOf("darc" to PresenceState.Online),
+                    ),
+                ),
+                globalIgnores = emptyList(), maxUploadBytes = null,
+            ),
+        )
+        assertEquals(FriendPresence.Offline, store.state.rowPresence(networkId = 2, nick = "darc"))
+    }
+
+    /**
+     * `socketOpen` reads `.connected` before the reconnect's snapshot replaces the cached rows, so
+     * passing `presence` through in that window put last session's away or offline back on a row
+     * for a moment — the flash `rowPresence` exists to prevent.
+     */
+    @Test
+    fun testRowPresenceWaitsForTheReconnectSnapshot() {
+        val store = connectedStore()
+        store.apply(connectedNetwork(2, presence = mapOf("darc" to PresenceState.Offline)))
+        assertEquals(FriendPresence.Offline, store.state.rowPresence(networkId = 2, nick = "darc"))
+
+        store.apply(ServerFrame.SocketClosed(reason = null, code = null))
+        store.apply(ServerFrame.SocketOpen)
+        assertEquals(
+            FriendPresence.Unknown, store.state.rowPresence(networkId = 2, nick = "darc"),
+            "reconnected, but the cache from before the drop hasn't been replaced yet",
+        )
+
+        store.apply(connectedNetwork(2, presence = mapOf("darc" to PresenceState.Online)))
+        assertEquals(FriendPresence.Online, store.state.rowPresence(networkId = 2, nick = "darc"))
+    }
+
+    @Test
+    fun testPresenceUnknownForNetworkWeDoNotHave() {
+        val store = connectedStore()
+        assertEquals(FriendPresence.Unknown, store.state.presence(networkId = 99, nick = "darc"))
+    }
+
+    @Test
+    fun testPresenceUnknownForConnectedNetworkWithNoRow() {
+        val store = connectedStore()
+        store.apply(connectedNetwork(2))
+        assertEquals(FriendPresence.Unknown, store.state.presence(networkId = 2, nick = "darc"))
+    }
+
+    @Test
+    fun testPresenceReadsStoredRowCaseInsensitively() {
+        val store = connectedStore()
+        store.apply(connectedNetwork(2, presence = mapOf("darc" to PresenceState.Online)))
+        assertEquals(FriendPresence.Online, store.state.presence(networkId = 2, nick = "Darc"))
+    }
+
+    @Test
+    fun testBackReadsAsOnline() {
+        val store = connectedStore()
+        store.apply(connectedNetwork(2, presence = mapOf("darc" to PresenceState.Back)))
+        assertEquals(FriendPresence.Online, store.state.presence(networkId = 2, nick = "darc"))
+    }
+
+    @Test
+    fun testDisconnectedNetworkReadsOfflineRegardlessOfRow() {
+        val store = connectedStore()
+        // A network we hold but that isn't connected: its cached rows are stale, so a friend
+        // there is unreachable → offline, even if a stale row said otherwise.
+        store.apply(
+            ServerFrame.Snapshot(
+                listOf(
+                    NetworkSnapshot(
+                        id = 2, state = ConnectionState.Reconnecting, nick = "me", channels = emptyList(),
+                        peerPresence = mapOf("darc" to PresenceState.Online),
+                    ),
+                ),
+                globalIgnores = emptyList(), maxUploadBytes = null,
+            ),
+        )
+        assertEquals(FriendPresence.Offline, store.state.presence(networkId = 2, nick = "darc"))
+    }
+
+    @Test
+    fun testLivePeerPresenceUpdatesAndNullClears() {
+        val store = connectedStore()
+        store.apply(connectedNetwork(2, presence = mapOf("darc" to PresenceState.Online)))
+        store.apply(ServerFrame.PeerPresence(networkId = 2, nick = "Darc", state = PresenceState.Away))
+        assertEquals(FriendPresence.Away, store.state.presence(networkId = 2, nick = "darc"))
+        // A null state clears the row → unknown (network is still connected).
+        store.apply(ServerFrame.PeerPresence(networkId = 2, nick = "darc", state = null))
+        assertEquals(FriendPresence.Unknown, store.state.presence(networkId = 2, nick = "darc"))
+    }
+
+    @Test
+    fun testPresenceIsPerNetwork() {
+        val store = connectedStore()
+        store.apply(
+            ServerFrame.Snapshot(
+                listOf(
+                    NetworkSnapshot(
+                        id = 2, state = ConnectionState.Connected, nick = "me", channels = emptyList(),
+                        peerPresence = mapOf("darc" to PresenceState.Away),
+                    ),
+                    NetworkSnapshot(
+                        id = 3, state = ConnectionState.Connected, nick = "me", channels = emptyList(),
+                        peerPresence = mapOf("darc" to PresenceState.Online),
+                    ),
+                ),
+                globalIgnores = emptyList(), maxUploadBytes = null,
+            ),
+        )
+        // A Friends chip reads the presence of ITS network's peer — the same nick elsewhere
+        // is a different person as far as the dot is concerned.
+        assertEquals(FriendPresence.Away, store.state.presence(networkId = 2, nick = "darc"))
+        assertEquals(FriendPresence.Online, store.state.presence(networkId = 3, nick = "darc"))
+    }
+
+    @Test
+    fun testSnapshotReplacesPeerPresenceWholesale() {
+        val store = connectedStore()
+        store.apply(connectedNetwork(2, presence = mapOf("darc" to PresenceState.Online, "naia" to PresenceState.Away)))
+        // A fresh snapshot for the network is authoritative — a peer no longer watched drops out.
+        store.apply(connectedNetwork(2, presence = mapOf("darc" to PresenceState.Online)))
+        assertEquals(FriendPresence.Online, store.state.presence(networkId = 2, nick = "darc"))
+        assertEquals(FriendPresence.Unknown, store.state.presence(networkId = 2, nick = "naia"))
+    }
 }

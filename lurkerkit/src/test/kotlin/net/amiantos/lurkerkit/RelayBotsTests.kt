@@ -4,15 +4,18 @@
 package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.commands.CommandEffect
 import net.amiantos.lurkerkit.commands.CommandParser
 import net.amiantos.lurkerkit.commands.ParsedInput
+import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageGrouping
 import net.amiantos.lurkerkit.model.RelayBot
 import net.amiantos.lurkerkit.model.RelayBotSet
+import net.amiantos.lurkerkit.store.LurkerStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -294,6 +297,44 @@ class RelayBotsTests {
     // MARK: - The wire
 
     @Test
+    fun testTheSnapshotSeedsMarksAndReplacesThemWholesale() {
+        val store = LurkerStore()
+        store.apply(
+            ServerFrame.Snapshot(
+                listOf(
+                    NetworkSnapshot(
+                        id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList(),
+                        relayBots = listOf(RelayBot(nick = "bridge", pattern = "{nick}: {message}")),
+                    ),
+                ),
+                globalIgnores = emptyList(), maxUploadBytes = null,
+            ),
+        )
+        assertEquals(listOf("bridge"), store.state.relayBots.listing(1).map { it.nick })
+
+        // A bot unmarked while this device was away has to disappear, not survive as a leftover
+        // that keeps rewriting its lines' authors.
+        store.apply(
+            ServerFrame.Snapshot(
+                listOf(NetworkSnapshot(id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList())),
+                globalIgnores = emptyList(), maxUploadBytes = null,
+            ),
+        )
+        assertTrue(store.state.relayBots.listing(1).isEmpty())
+    }
+
+    @Test
+    fun testTheUpdateFramePatchesOneNick() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.RelayBotUpdated(networkId = 1, nick = "bridge", marked = true, pattern = ""))
+        store.apply(ServerFrame.RelayBotUpdated(networkId = 1, nick = "other", marked = true, pattern = "p"))
+        assertEquals(listOf("bridge", "other"), store.state.relayBots.listing(1).map { it.nick })
+
+        store.apply(ServerFrame.RelayBotUpdated(networkId = 1, nick = "bridge", marked = false, pattern = ""))
+        assertEquals(listOf("other"), store.state.relayBots.listing(1).map { it.nick })
+    }
+
+    @Test
     fun testParsesTheSnapshotAndUpdateFrames() {
         val frame = FrameParser.parseWs(
             """
@@ -512,9 +553,6 @@ class RelayBotsTests {
             ?: fail("expected a note")
         assertTrue(text.contains("needs an active network"), text)
     }
-
-    // Waiting on LurkerStore: testTheSnapshotSeedsMarksAndReplacesThemWholesale,
-    // testTheUpdateFramePatchesOneNick
 
     // Port-only: equality. LurkerKit's `RelayBotSet` is a reference type compared by identity;
     // here it sits in published state and compares every mark it holds (see its port note).

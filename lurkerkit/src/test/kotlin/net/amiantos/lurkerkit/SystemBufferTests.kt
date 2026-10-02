@@ -11,6 +11,7 @@ import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.SystemLevel
+import net.amiantos.lurkerkit.store.LurkerStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -312,6 +313,26 @@ class SystemBufferTests {
         assertFalse(frame.append, "reset:true means the gap overflowed — replace or splice a hole")
     }
 
+    @Test
+    fun testALiveSystemLineBeatingTheBacklogDoesNotShoveHistoryBelowIt() {
+        // The bug this guards: a system line logged at connect ("connecting to libera")
+        // can land before the backlog. Appending the backlog then renders the entire
+        // history *underneath* a line that came after all of it.
+        val store = LurkerStore()
+        store.apply(
+            FrameParser.parseWs(
+                """{"kind":"irc","networkId":null,"target":":system:","type":"system","id":101,"text":"connecting"}""",
+            ),
+        )
+        store.apply(
+            FrameParser.parseWs(
+                """{"kind":"backlog","networkId":null,"target":":system:","reset":false,"hasMoreOlder":false,"events":[{"id":51,"type":"system","text":"older"},{"id":52,"type":"system","text":"newer"}]}""",
+            ),
+        )
+        val ids = store.state.messages[Buffer.system.key.id]?.map { it.id } ?: emptyList()
+        assertEquals(listOf(51L, 52L, 101L), ids, "history first, then the live line that outran it")
+    }
+
     // MARK: - What the server will actually answer
 
     @Test
@@ -403,6 +424,4 @@ class SystemBufferTests {
         // …and it is the id that folds, never the key: the key keeps the casing it was given.
         assertNotEquals(BufferKey(networkId = 1, target = "#Chan"), BufferKey(networkId = 1, target = "#chan"))
     }
-
-    // Waiting on LurkerStore: testALiveSystemLineBeatingTheBacklogDoesNotShoveHistoryBelowIt
 }

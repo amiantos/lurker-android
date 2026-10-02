@@ -4,10 +4,16 @@
 package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.HistoryMode
+import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.commands.CommandEffect
 import net.amiantos.lurkerkit.commands.CommandParser
 import net.amiantos.lurkerkit.commands.ParsedInput
+import net.amiantos.lurkerkit.model.Buffer
+import net.amiantos.lurkerkit.model.BufferKey
+import net.amiantos.lurkerkit.model.BufferKind
+import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.FeedCursor
 import net.amiantos.lurkerkit.model.FeedReaction
@@ -20,10 +26,12 @@ import net.amiantos.lurkerkit.model.MessageReaction
 import net.amiantos.lurkerkit.model.ReactionChange
 import net.amiantos.lurkerkit.model.ReactionGroup
 import net.amiantos.lurkerkit.model.Reactions
+import net.amiantos.lurkerkit.store.LurkerStore
 import net.amiantos.lurkerkit.support.Result
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -31,6 +39,9 @@ import kotlin.test.fail
 
 /** IRCv3 reactions (lurker-ios#183): the wire, the side map, and the gates. */
 class ReactionsTests {
+
+    @Suppress("unused") // As in LurkerKit, where nothing reads it either.
+    private val chanKey = "1::#lurker"
 
     private fun line(
         id: Long,
@@ -43,6 +54,26 @@ class ReactionsTests {
         Message(
             id = id, type = type, nick = "alice", text = "hi", isSelf = isSelf,
             msgid = msgid, isE2E = isE2E, reactions = reactions,
+        )
+
+    private fun backlog(messages: List<Message>, networkId: Int? = 1, target: String = "#lurker"): ServerFrame =
+        ServerFrame.Backlog(
+            buffer = Buffer(networkId = networkId, target = target, kind = BufferKind.Channel, hydrated = true),
+            messages = messages, hydrated = true, append = false, speakers = null,
+        )
+
+    private fun change(
+        messageId: Long,
+        nick: String,
+        value: String,
+        isSelf: Boolean = false,
+        remove: Boolean = false,
+    ): ServerFrame =
+        ServerFrame.Reaction(
+            ReactionChange(
+                networkId = 1, target = "#lurker", messageId = messageId, nick = nick, value = value,
+                isSelf = isSelf, remove = remove, toSelf = false,
+            ),
         )
 
     private val thumbs = MessageReaction(nick = "bob", value = "👍", isSelf = false)
@@ -129,6 +160,47 @@ class ReactionsTests {
     // MARK: - Side map
 
     @Test
+    fun testARowIsAuthoritativeForItselfInBothDirections() {
+        val store = LurkerStore()
+        store.apply(backlog(listOf(line(1, reactions = listOf(thumbs)), line(2))))
+        assertEquals(listOf("👍"), store.state.reactionGroups(1).map { it.value })
+        val key = BufferKey(networkId = 1, target = "#lurker")
+        val before = store.state.reactionsRevision(key)
+
+        // The same line again with nothing on it: taken back while we weren't listening.
+        store.apply(backlog(listOf(line(1))))
+        assertTrue(store.state.reactionGroups(1).isEmpty())
+        assertNotEquals(before, store.state.reactionsRevision(key))
+    }
+
+    @Test
+    fun testSilenceAboutALineIsNotARemoval() {
+        val store = LurkerStore()
+        store.apply(backlog(listOf(line(1, reactions = listOf(thumbs)))))
+        store.apply(
+            ServerFrame.History(
+                networkId = 1, target = "#lurker", events = listOf(line(5)), mode = HistoryMode.Before,
+                hasMoreOlder = true, hasMoreNewer = false, speakers = null,
+            ),
+        )
+        assertEquals(1, store.state.reactionGroups(1).size)
+    }
+
+    @Test
+    fun testSystemRowsNeverTouchTheMap() {
+        val store = LurkerStore()
+        store.apply(backlog(listOf(line(1, reactions = listOf(thumbs)))))
+        // A system-buffer row sharing the id, carrying nothing.
+        store.apply(
+            ServerFrame.Backlog(
+                buffer = Buffer(networkId = null, target = ":system:", kind = BufferKind.System, hydrated = true),
+                messages = listOf(line(1)), hydrated = true, append = false, speakers = null,
+            ),
+        )
+        assertEquals(1, store.state.reactionGroups(1).size)
+    }
+
+    @Test
     fun testGroupsKeepFirstReactedOrderAndMarkOurs() {
         val groups = Reactions.groups(
             listOf(
@@ -146,7 +218,189 @@ class ReactionsTests {
         )
     }
 
+    @Test
+    fun testLiveReactionsAddDedupeAndRemove() {
+        val store = LurkerStore()
+        store.apply(backlog(listOf(line(1))))
+        store.apply(change(1, "bob", "👍"))
+        store.apply(change(1, "Bob", "👍")) // same person, server-cased differently
+        store.apply(change(1, "carol", "👍"))
+        assertEquals(
+            listOf(ReactionGroup(value = "👍", nicks = listOf("bob", "carol"), mine = false)),
+            store.state.reactionGroups(1),
+        )
+
+        store.apply(change(1, "bob", "👍", remove = true))
+        assertEquals(listOf("carol"), store.state.reactionGroups(1).firstOrNull()?.nicks)
+        store.apply(change(1, "carol", "👍", remove = true))
+        assertNull(store.state.reactions[1], "an emptied line leaves no entry behind")
+    }
+
+    /**
+     * ⚠⚠ Our own unreact matches by `self`, never by nick: a reaction given under an older nick
+     * is still ours, and matching the nick would leave it standing forever.
+     */
+    @Test
+    fun testOurUnreactMatchesSelfNotNick() {
+        val store = LurkerStore()
+        store.apply(
+            backlog(listOf(line(1, reactions = listOf(MessageReaction(nick = "oldme", value = "👍", isSelf = true), thumbs)))),
+        )
+        store.apply(change(1, "newme", "👍", isSelf = true, remove = true))
+        assertEquals(
+            listOf(ReactionGroup(value = "👍", nicks = listOf("bob"), mine = false)),
+            store.state.reactionGroups(1),
+        )
+    }
+
+    @Test
+    fun testAReactionWeAlreadyHoldChangesNothing() {
+        val store = LurkerStore()
+        store.apply(backlog(listOf(line(1, reactions = listOf(thumbs)))))
+        val key = BufferKey(networkId = 1, target = "#lurker")
+        val revision = store.state.reactionsRevision(key)
+        store.apply(change(1, "bob", "👍"))
+        store.apply(change(1, "nobody", "x", remove = true))
+        assertEquals(revision, store.state.reactionsRevision(key), "no change, no redraw")
+    }
+
+    @Test
+    fun testSyncIsAuthoritativeForEveryIdItNames() {
+        val store = LurkerStore()
+        store.apply(backlog(listOf(line(1, reactions = listOf(thumbs)), line(2, reactions = listOf(thumbs)), line(3))))
+        val lol = MessageReaction(nick = "carol", value = "lol", isSelf = false)
+        store.apply(ServerFrame.ReactionsSync(messageIds = listOf(1, 3), reactions = mapOf(3L to listOf(lol))))
+        assertTrue(store.state.reactionGroups(1).isEmpty(), "named, absent = none now")
+        assertEquals(1, store.state.reactionGroups(2).size, "not named = untouched")
+        assertEquals(listOf("lol"), store.state.reactionGroups(3).map { it.value })
+    }
+
+    @Test
+    fun testClosingABufferDropsItsLinesReactions() {
+        val store = LurkerStore()
+        store.apply(backlog(listOf(line(1, reactions = listOf(thumbs)))))
+        store.apply(ServerFrame.BufferClosed(networkId = 1, target = "#lurker"))
+        assertNull(store.state.reactions[1])
+    }
+
+    @Test
+    fun testSyncIdsAreTheNewestOfEachNetworkBuffer() {
+        val store = LurkerStore()
+        store.apply(backlog((1..(Reactions.syncPerBuffer + 10)).map { line(it.toLong()) }))
+        store.apply(
+            ServerFrame.Backlog(
+                buffer = Buffer(networkId = null, target = ":system:", kind = BufferKind.System, hydrated = true),
+                messages = listOf(line(9999)), hydrated = true, append = false, speakers = null,
+            ),
+        )
+        val ids = store.state.reactionSyncIds()
+        assertEquals(Reactions.syncPerBuffer, ids.size)
+        assertEquals((Reactions.syncPerBuffer + 10).toLong(), ids.firstOrNull(), "newest first")
+        assertFalse(ids.contains(9999), "system lines are another id space")
+    }
+
     // MARK: - canReact
+
+    @Test
+    fun testCanReactNeedsTheFlagAndALiveLink() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.SocketOpen)
+        store.apply(
+            ServerFrame.Snapshot(
+                listOf(NetworkSnapshot(id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList())),
+                globalIgnores = emptyList(), maxUploadBytes = null,
+            ),
+        )
+        assertFalse(store.state.canReact(networkId = 1), "false until the burst says otherwise")
+        store.apply(ServerFrame.ReactSupport(networkId = 1, canReact = true))
+        assertTrue(store.state.canReact(networkId = 1))
+
+        // The link drops: whatever the last registration allowed is no answer now…
+        store.apply(ServerFrame.NetworkState(networkId = 1, state = ConnectionState.Reconnecting, nick = null))
+        assertFalse(store.state.canReact(networkId = 1))
+        // …and coming back isn't one either until the new burst re-announces it.
+        store.apply(ServerFrame.NetworkState(networkId = 1, state = ConnectionState.Connected, nick = null))
+        assertFalse(store.state.canReact(networkId = 1))
+        assertFalse(store.state.canReact(networkId = null))
+        assertFalse(store.state.canReact(networkId = 99))
+    }
+
+    /**
+     * While our own socket is down, the network's last-known state says nothing: whatever we
+     * send goes nowhere.
+     */
+    @Test
+    fun testCanReactNeedsOurOwnSocket() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.SocketOpen)
+        store.apply(
+            ServerFrame.Snapshot(
+                listOf(
+                    NetworkSnapshot(
+                        id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList(), canReact = true,
+                    ),
+                ),
+                globalIgnores = emptyList(), maxUploadBytes = null,
+            ),
+        )
+        assertTrue(store.state.canReact(networkId = 1))
+        store.apply(ServerFrame.SocketClosed(reason = null, code = null))
+        assertFalse(store.state.canReact(networkId = 1))
+    }
+
+    /**
+     * ⚠⚠ Someone who takes the nick we reacted under is not us: their reaction is theirs, and
+     * taking theirs back must not take ours.
+     */
+    @Test
+    fun testANickCollisionNeverFoldsIntoOurReaction() {
+        val store = LurkerStore()
+        store.apply(backlog(listOf(line(1, reactions = listOf(MessageReaction(nick = "alice", value = "👍", isSelf = true))))))
+        store.apply(change(1, "alice", "👍"))
+        assertEquals(
+            listOf(ReactionGroup(value = "👍", nicks = listOf("alice", "alice"), mine = true)),
+            store.state.reactionGroups(1),
+        )
+        store.apply(change(1, "alice", "👍", remove = true))
+        assertEquals(
+            listOf(ReactionGroup(value = "👍", nicks = listOf("alice"), mine = true)),
+            store.state.reactionGroups(1),
+        )
+    }
+
+    @Test
+    fun testAReactionToALineNobodyLoadedIsDropped() {
+        val store = LurkerStore()
+        store.apply(backlog(listOf(line(1))))
+        store.apply(change(77, "bob", "👍"))
+        assertNull(store.state.reactions[77], "its row brings its reactions when it's fetched")
+        assertEquals(0, store.state.reactionsRevision(BufferKey(networkId = 1, target = "#lurker")))
+    }
+
+    @Test
+    fun testARevisionIsPerBuffer() {
+        val store = LurkerStore()
+        store.apply(backlog(listOf(line(1))))
+        store.apply(backlog(listOf(line(2)), target = "#other"))
+        store.apply(change(1, "bob", "👍"))
+        assertEquals(1, store.state.reactionsRevision(BufferKey(networkId = 1, target = "#lurker")))
+        assertEquals(0, store.state.reactionsRevision(BufferKey(networkId = 1, target = "#other")))
+    }
+
+    /** System-buffer ids are another sequence: dropping that buffer must not free network lines'. */
+    @Test
+    fun testDroppingTheSystemBufferLeavesNetworkReactionsAlone() {
+        val store = LurkerStore()
+        store.apply(backlog(listOf(line(1, reactions = listOf(thumbs)))))
+        store.apply(
+            ServerFrame.Backlog(
+                buffer = Buffer(networkId = null, target = ":system:", kind = BufferKind.System, hydrated = true),
+                messages = listOf(line(1)), hydrated = true, append = false, speakers = null,
+            ),
+        )
+        store.apply(ServerFrame.BufferClosed(networkId = null, target = ":system:"))
+        assertEquals(1, store.state.reactionGroups(1).size)
+    }
 
     // MARK: - Gates
 
@@ -230,16 +484,6 @@ class ReactionsTests {
         assertTrue(Reactions.isValidValue("x".repeat(63) + family))
         assertFalse(Reactions.isValidValue("x".repeat(64) + family))
     }
-
-    // Waiting on LurkerStore, ChatState (and the private `backlog`/`change` helpers and
-    // `chanKey`): testARowIsAuthoritativeForItselfInBothDirections,
-    // testSilenceAboutALineIsNotARemoval, testSystemRowsNeverTouchTheMap,
-    // testLiveReactionsAddDedupeAndRemove, testOurUnreactMatchesSelfNotNick,
-    // testAReactionWeAlreadyHoldChangesNothing, testSyncIsAuthoritativeForEveryIdItNames,
-    // testClosingABufferDropsItsLinesReactions, testSyncIdsAreTheNewestOfEachNetworkBuffer,
-    // testCanReactNeedsTheFlagAndALiveLink, testCanReactNeedsOurOwnSocket,
-    // testANickCollisionNeverFoldsIntoOurReaction, testAReactionToALineNobodyLoadedIsDropped,
-    // testARevisionIsPerBuffer, testDroppingTheSystemBufferLeavesNetworkReactionsAlone
 }
 
 /** `GET /api/activity` (lurker-ios#183): two sources merged, a cursor per source. */
@@ -347,5 +591,31 @@ class ReactCommandTests {
     }
 }
 
-// Waiting on LurkerStore: the whole `ReactionRenameTests` suite —
-// testARenameCarriesTheRevision
+class ReactionRenameTests {
+    @Test
+    fun testARenameCarriesTheRevision() {
+        val store = LurkerStore()
+        store.apply(
+            ServerFrame.Backlog(
+                buffer = Buffer(networkId = 1, target = "bob", kind = BufferKind.Dm, hydrated = true),
+                messages = listOf(Message(id = 1, type = EventType.Message, nick = "bob", text = "hi", msgid = "m")),
+                hydrated = true, append = false, speakers = null,
+            ),
+        )
+        store.apply(
+            ServerFrame.Reaction(
+                ReactionChange(
+                    networkId = 1, target = "bob", messageId = 1, nick = "me", value = "👍", isSelf = true,
+                    remove = false, toSelf = false,
+                ),
+            ),
+        )
+        store.apply(
+            ServerFrame.BufferRenamed(
+                networkId = 1, from = "bob", to = "bobby", bufferId = null, merged = false, mergedFromBufferId = null,
+            ),
+        )
+        assertEquals(1, store.state.reactionsRevision(BufferKey(networkId = 1, target = "bobby")))
+        assertNull(store.state.reactionsRevisions["1::bob"])
+    }
+}

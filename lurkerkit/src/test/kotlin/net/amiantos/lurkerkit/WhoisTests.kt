@@ -4,15 +4,21 @@
 package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.MemberPrefix
 import net.amiantos.lurkerkit.model.NickNote
 import net.amiantos.lurkerkit.model.NickNoteSet
 import net.amiantos.lurkerkit.model.WhoisResult
+import net.amiantos.lurkerkit.store.ChatState
+import net.amiantos.lurkerkit.store.LurkerStore
+import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
@@ -235,6 +241,118 @@ class WhoisTests {
         }
     }
 
+    // MARK: - The store
+
+    @Test
+    fun testAReplyIsCachedUnderTheServersCasingAndFoundUnderAnyOther() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.WhoisResult(networkId = 1, whois = WhoisResult(nick = "Alice", account = "alice")))
+        assertEquals("alice", store.state.whoisResult(networkId = 1, nick = "ALICE")?.account)
+        assertEquals("Alice", store.state.whoisResult(networkId = 1, nick = "Alice")?.nick)
+        // Network-scoped, like every other per-nick fact here.
+        assertNull(store.state.whoisResult(networkId = 2, nick = "Alice"))
+    }
+
+    @Test
+    fun testAReplyFreesTheInFlightSlot() {
+        val store = LurkerStore()
+        store.markWhoisPending(networkId = 1, nick = "alice")
+        assertTrue(store.state.isWhoisPending(networkId = 1, nick = "alice"))
+        store.apply(ServerFrame.WhoisResult(networkId = 1, whois = WhoisResult(nick = "Alice")))
+        assertFalse(store.state.isWhoisPending(networkId = 1, nick = "alice"))
+    }
+
+    @Test
+    fun testANotFoundFreesTheSlotToo() {
+        // ⚠⚠ lurker#818 itself. A miss IS an answer; leaving the slot claimed kept the slot
+        // held for the session, so reopening that nick declined to retry forever.
+        val store = LurkerStore()
+        store.markWhoisPending(networkId = 1, nick = "ghost")
+        store.apply(ServerFrame.WhoisResult(networkId = 1, whois = WhoisResult(nick = "ghost", error = "not_found")))
+        assertFalse(store.state.isWhoisPending(networkId = 1, nick = "ghost"))
+        // And the miss is cached, so a screen can render it rather than sitting blank.
+        assertEquals(true, store.state.whoisResult(networkId = 1, nick = "ghost")?.isNotFound)
+    }
+
+    @Test
+    fun testAReplyForOneNickLeavesAnotherLookupPending() {
+        val store = LurkerStore()
+        store.markWhoisPending(networkId = 1, nick = "alice")
+        store.markWhoisPending(networkId = 1, nick = "bob")
+        store.apply(ServerFrame.WhoisResult(networkId = 1, whois = WhoisResult(nick = "alice")))
+        assertFalse(store.state.isWhoisPending(networkId = 1, nick = "alice"))
+        assertTrue(store.state.isWhoisPending(networkId = 1, nick = "bob"))
+    }
+
+    @Test
+    fun testTheSameNickOnTwoNetworksIsTwoLookups() {
+        val store = LurkerStore()
+        store.markWhoisPending(networkId = 1, nick = "alice")
+        store.apply(ServerFrame.WhoisResult(networkId = 2, whois = WhoisResult(nick = "alice")))
+        assertTrue(store.state.isWhoisPending(networkId = 1, nick = "alice"))
+    }
+
+    @Test
+    fun testDroppingANetworkForgetsItsRepliesNotesAndPendingLookups() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.WhoisResult(networkId = 1, whois = WhoisResult(nick = "alice")))
+        store.apply(ServerFrame.WhoisResult(networkId = 2, whois = WhoisResult(nick = "alice")))
+        store.apply(ServerFrame.NickNoteUpdated(networkId = 1, nick = "alice", note = "n1", updatedAt = null))
+        store.apply(ServerFrame.NickNoteUpdated(networkId = 2, nick = "alice", note = "n2", updatedAt = null))
+        store.markWhoisPending(networkId = 1, nick = "bob")
+        store.markWhoisPending(networkId = 2, nick = "bob")
+
+        var next = store.state
+        next = next.dropNetwork(1)
+
+        assertNull(next.whoisResult(networkId = 1, nick = "alice"))
+        assertNull(next.nickNotes.note(networkId = 1, nick = "alice"))
+        // Nothing is coming back to free this one — the connection it was asked over is gone.
+        assertFalse(next.isWhoisPending(networkId = 1, nick = "bob"))
+        // And the other network is untouched.
+        assertNotNull(next.whoisResult(networkId = 2, nick = "alice"))
+        assertEquals("n2", next.nickNotes.note(networkId = 2, nick = "alice")?.note)
+        assertTrue(next.isWhoisPending(networkId = 2, nick = "bob"))
+    }
+
+    // MARK: - Asking
+
+    @Test
+    fun testAPaddedNickIsKeyedTheWayTheServerWillAnswerIt() {
+        // ⚠⚠ The reply names the bare nick, so keying the slot on the padded form would free
+        // a slot nobody claimed and leave the claimed one held forever — the wedge again,
+        // reachable with no malformed input at all. Asserted at the store, since the send that
+        // would claim it needs a socket.
+        val store = LurkerStore()
+        store.markWhoisPending(networkId = 1, nick = "alice")
+        store.apply(ServerFrame.WhoisResult(networkId = 1, whois = WhoisResult(nick = "alice")))
+        assertTrue(store.state.whoisPending.isEmpty())
+        // And the trimmed spelling is what `requestWhois` would have keyed.
+        assertEquals(
+            ChatState.whoisKey(networkId = 1, nick = "alice"),
+            ChatState.whoisKey(networkId = 1, nick = "  Alice  ".trimmingWhitespacesAndNewlines()),
+        )
+    }
+
+    @Test
+    fun testASocketDropFreesEveryLookupThatWasOutOverIt() {
+        // ⚠⚠ The most ordinary route to the wedge: a reconnect between asking and
+        // RPL_ENDOFWHOIS. No reply is coming over the socket that closed, so a slot left
+        // claimed here would make `requestWhois` refuse that nick for the rest of the session —
+        // profile stuck on "waiting…", Refresh inert. `typing` is cleared beside it for the
+        // same reason.
+        val store = LurkerStore()
+        store.markWhoisPending(networkId = 1, nick = "alice")
+        store.markWhoisPending(networkId = 2, nick = "bob")
+        store.apply(ServerFrame.SocketClosed(reason = null, code = null))
+        assertTrue(store.state.whoisPending.isEmpty())
+        // Cached replies survive: they're answers we already have, not requests waiting on a
+        // socket. The screen re-asks on open anyway.
+        store.apply(ServerFrame.WhoisResult(networkId = 1, whois = WhoisResult(nick = "alice")))
+        store.apply(ServerFrame.SocketClosed(reason = null, code = null))
+        assertNotNull(store.state.whoisResult(networkId = 1, nick = "alice"))
+    }
+
     // MARK: - Nick notes
 
     @Test
@@ -366,6 +484,16 @@ class WhoisTests {
     }
 
     @Test
+    fun testTheNoteUpdateFramePatchesOneNick() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.NickNoteUpdated(networkId = 1, nick = "alice", note = "a", updatedAt = null))
+        store.apply(ServerFrame.NickNoteUpdated(networkId = 1, nick = "bob", note = "b", updatedAt = null))
+        store.apply(ServerFrame.NickNoteUpdated(networkId = 1, nick = "alice", note = "", updatedAt = null))
+        assertNull(store.state.nickNotes.note(networkId = 1, nick = "alice"))
+        assertEquals("b", store.state.nickNotes.note(networkId = 1, nick = "bob")?.note)
+    }
+
+    @Test
     fun testTheSnapshotSeedsNotesAndDropsUnusableRows() {
         val frame = FrameParser.parseWs(
             """
@@ -382,13 +510,21 @@ class WhoisTests {
         )
     }
 
-    // Waiting on LurkerStore, ChatState, ChatViewModel (and the `viewModel()` helper):
-    // testAReplyIsCachedUnderTheServersCasingAndFoundUnderAnyOther, testAReplyFreesTheInFlightSlot,
-    // testANotFoundFreesTheSlotToo, testAReplyForOneNickLeavesAnotherLookupPending,
-    // testTheSameNickOnTwoNetworksIsTwoLookups,
-    // testDroppingANetworkForgetsItsRepliesNotesAndPendingLookups,
-    // testRequestingAWhoisWithNoSocketClaimsNothing, testRequestingAWhoisForNobodyDoesNothing,
-    // testAPaddedNickIsKeyedTheWayTheServerWillAnswerIt,
-    // testASocketDropFreesEveryLookupThatWasOutOverIt, testTheNoteUpdateFramePatchesOneNick,
-    // testTheSnapshotReplacesNotesWholesale
+    @Test
+    fun testTheSnapshotReplacesNotesWholesale() {
+        // A note cleared on the web while this device was away has to be GONE here, not survive
+        // as a leftover the profile screen keeps showing.
+        val store = LurkerStore()
+        store.apply(ServerFrame.NickNoteUpdated(networkId = 7, nick = "alice", note = "stale", updatedAt = null))
+        store.apply(
+            ServerFrame.Snapshot(
+                listOf(NetworkSnapshot(id = 7, state = ConnectionState.Connected, nick = "me", channels = emptyList())),
+                globalIgnores = emptyList(), maxUploadBytes = null,
+            ),
+        )
+        assertNull(store.state.nickNotes.note(networkId = 7, nick = "alice"))
+    }
+
+    // Waiting on ChatViewModel, SessionStore (and the `viewModel()` helper):
+    // testRequestingAWhoisWithNoSocketClaimsNothing, testRequestingAWhoisForNobodyDoesNothing
 }

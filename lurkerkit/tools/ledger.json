@@ -149,7 +149,7 @@
     "Client/OAuth.swift": "Leaf, but builds `URLRequest`s — waits for the client's request conventions.",
     "Session/SessionStore.swift": "Keychain → interface here, Keystore in `:app`.",
     "Session/OAuthClients.swift": "`UserDefaults` → interface here.",
-    "Store/SettingsCache.swift": "`UserDefaults` → interface here.",
+    "Store/SettingsCache.swift": "`UserDefaults` → `SettingsCacheStorage` (`dictionary`, `set`, `removeObject`, mirroring the three calls), implemented by `:app`; no default storage. Values travel as `JsonObject`.",
     "Client/Uploads.swift": "All but `UploadProgressDelegate` (a `URLSessionTaskDelegate`), which becomes a counting OkHttp `RequestBody` in T6. `assemble` deletes its partial file on failure, which LurkerKit leaves to iOS.",
     "Model/Typing.swift": "`OutgoingTyping` is a mutable class (PORTING.md, structs that mutate, case 3). No Kotlin test until `TypingTests` can run against the store.",
     "Session/NewestAnswer.swift": "A mutable class (case 3).",
@@ -163,7 +163,7 @@
     "Rendering/IRCFormatting.swift": "`rawIndex` is tested from `RelayEnvelopeTests` (T3); checked against the Swift meanwhile.",
     "Client/NotificationTap.swift": "Input is a `Map<String, Any?>`; FCM's all-strings data map is the shape Android will hand it.",
     "Model/Settings.swift": "`SettingValue.Int` is 32-bit; a wire number past that is skipped rather than wrapped.",
-    "Model/ChannelModes.swift": "All but the `extension ChatState` at the end, which arrives with the store. `topicSetterLine` takes the date formatter from the app. `ChannelRefusals` and `ChannelModeDrafts` compare all their state, not just what is on screen.",
+    "Model/ChannelModes.swift": "Complete with T5: `channelAccess` is an extension on `ChatState`. `topicSetterLine` takes the date formatter from the app. `ChannelRefusals` and `ChannelModeDrafts` compare all their state, not just what is on screen.",
     "Model/Replies.swift": "`shown` returns `Replies.Shown(quote, text)` for the named tuple.",
     "Model/Reactions.swift": "Grapheme counting through `BreakIterator`: matches Swift on JDK 21 for emoji sequences, not for Indic conjuncts; verify on a device.",
     "Model/Buffer.swift": "`BufferKey.id` folds with `lowercase()`, which applies final sigma where Swift does not.",
@@ -196,18 +196,14 @@
     "Model/PreviewSelection.swift": "`looksLikeMedia` reads the path by hand to Foundation's rules rather than through `HttpUrl`; pinned by a port-only test.",
     "Model/AwayStrip.swift": "Chooses how much of the date to show (`Since`, carrying the ICU skeleton); the app formats it. \"This year\" is the ISO year, where LurkerKit asks the user's calendar.",
     "Client/ServerFrame.swift": "`ServerFrame` is a sealed interface of 50 cases, Swift order. Three cases share a name with a model type (`AwayState`, `WhoisResult`, `ModeSpec`); the model type is written fully qualified there. Every type is an immutable data class.",
-    "Client/FrameParser.swift": "Reads through kotlinx.serialization where LurkerKit reads through `JSONSerialization`; kotlinx’s answer is kept and every difference is pinned port-only in `FrameParserTests` — see `object`’s Port note (PORTING.md, JSON). Reachable from the wire: a lone-surrogate escape drops the frame on iOS and reads here; a string beginning with U+FEFF loses it on iOS and keeps it here. The parser never throws and bounds nesting at Foundation’s 512 containers (kotlinx would overflow the stack). `channelKeys` and `peerPresence` fold nicks with `lowercase()`, which applies final sigma. `WhoisResult.signedOn` beyond `Instant` is null."
+    "Client/FrameParser.swift": "Reads through kotlinx.serialization where LurkerKit reads through `JSONSerialization`; kotlinx’s answer is kept and every difference is pinned port-only in `FrameParserTests` — see `object`’s Port note (PORTING.md, JSON). Reachable from the wire: a lone-surrogate escape drops the frame on iOS and reads here; a string beginning with U+FEFF loses it on iOS and keeps it here. The parser never throws and bounds nesting at Foundation’s 512 containers (kotlinx would overflow the stack). `channelKeys` and `peerPresence` fold nicks with `lowercase()`, which applies final sigma. `WhoisResult.signedOn` beyond `Instant` is null.",
+    "Store/LurkerStore.swift": "`ChatState` is an immutable data class (case 2): its thirteen mutators return the updated copy, and it compares all its state. `LurkerStore` publishes through a `MutableStateFlow` exposed as `statePublisher: StateFlow` and assigns once per method; ⚠ a StateFlow conflates, so an inert frame (`joinError`, `sendResult`, `unauthorized`, `ignored`, a patch for an unknown row) publishes nothing where `CurrentValueSubject` republished — T7 must not read \"state fired\" as \"a frame arrived\". `clock: () -> Instant` is injected for the tests. `applyBufferRenamed` is lifted out of `reduce` for readability, body unchanged. `visibleMembers` matches your nick with `IgnoreMatch.FoldedLiteral` in place of `caseInsensitiveCompare`; `typists` tie-breaks by UTF-16 unit, Swift by scalar.",
+    "Session/AppBadge.swift": "The badge write is an injected `(Int) -> Unit`, as the Swift’s `write` closure. `follow(states: Flow<ChatState>, scope)` collects in the given scope; calling it again cancels the previous collection, as replacing the `AnyCancellable` does. No `[weak self]`.",
+    "Model/NetworkRow.swift": "`NetworkRow` and `NetworkAction`.",
+    "Model/StatusLight.swift": "A plain value.",
+    "Model/ConnectionBannerState.swift": "`incompatible`’s unlabelled value is named `incompatibility`."
   },
   "testNotes": {
-    "BufferListPlaceholderTests.swift": {
-      "waiting": [
-        "testASnapshotAloneDoesNotMeanTheRosterLanded",
-        "testBacklogCompleteLatchesTheRoster",
-        "testBacklogCompleteSurvivesAReconnect",
-        "testResetClearsBacklogComplete"
-      ],
-      "note": "Waiting on LurkerStore."
-    },
     "LinkPreviewStoreTests.swift": {
       "waiting": [
         "resolves",
@@ -256,43 +252,6 @@
       ],
       "note": "Waiting on LurkerClient (`parseConfig`, `socketURL`, `closeFrame`)."
     },
-    "SettingsTests.swift": {
-      "waiting": [
-        "testEmptyChangeFrameIsANoOp",
-        "testStoredValueWins",
-        "testUnsetKeyFallsThroughToTheRegistryDefault",
-        "testCallerFallbackAppliesBeforeBootstrap",
-        "testUnknownKeyFallsBackToTheCaller",
-        "testTypeMismatchFallsBackRatherThanCoercing",
-        "testChangeFramePatchesOneKeyAndLeavesTheRest",
-        "testChangeFrameCanSetAPreviouslyUnsetKey",
-        "testBootstrapReplacesRatherThanMerges",
-        "testRestValuesRemoveAKeyThatIsNoLongerStored",
-        "testEchoAfterReplaceIsIdempotent",
-        "testReplaceLeavesTheRegistryAlone",
-        "testCacheRoundTripsEveryValueKind",
-        "testCacheStartsEmptyAndClears",
-        "testCacheSaveReplacesRatherThanMerges",
-        "testCachedValueOverridesTheFallbackWithNoRegistry",
-        "testSeedingFromCacheLeavesLoadedFalse",
-        "testParsesChoiceLabelsAndFallsBackToTheRawValue",
-        "testParsesDependsOnFromTheRegistry",
-        "testSettingsWithoutDependenciesAreAlwaysActive",
-        "testClausesAreOred",
-        "testResolutionIsTransitive"
-      ],
-      "note": "Waiting on LurkerStore/ChatState, SettingsCache."
-    },
-    "UploadCapTests.swift": {
-      "waiting": [
-        "snapshotSeedsTheStore",
-        "aSnapshotWithoutACapClearsIt",
-        "aSettingsFrameRaisesTheCap",
-        "anUnrelatedSettingsFrameLeavesTheCapAlone",
-        "aFreshStateHasNoCap"
-      ],
-      "note": "Waiting on LurkerStore/ChatState."
-    },
     "UploadContentTypesTests.swift": {
       "dropped": [
         "dialectsDeriveTheRightMime",
@@ -302,91 +261,17 @@
     },
     "WhoisTests.swift": {
       "waiting": [
-        "testAReplyIsCachedUnderTheServersCasingAndFoundUnderAnyOther",
-        "testAReplyFreesTheInFlightSlot",
-        "testANotFoundFreesTheSlotToo",
-        "testAReplyForOneNickLeavesAnotherLookupPending",
-        "testTheSameNickOnTwoNetworksIsTwoLookups",
-        "testDroppingANetworkForgetsItsRepliesNotesAndPendingLookups",
         "testRequestingAWhoisWithNoSocketClaimsNothing",
-        "testRequestingAWhoisForNobodyDoesNothing",
-        "testAPaddedNickIsKeyedTheWayTheServerWillAnswerIt",
-        "testASocketDropFreesEveryLookupThatWasOutOverIt",
-        "testTheNoteUpdateFramePatchesOneNick",
-        "testTheSnapshotReplacesNotesWholesale"
+        "testRequestingAWhoisForNobodyDoesNothing"
       ],
-      "note": "Waiting on LurkerStore, ChatViewModel."
-    },
-    "BufferOrderTests.swift": {
-      "waiting": [
-        "testTheSnapshotSeedsPinsAndReplacesThemWholesale",
-        "testPinsChangedReplacesOneNetworksList",
-        "testDeletingANetworkTakesItsPinsWithIt",
-        "testTheRosterMergeCarriesThePositionOntoAnExistingNetwork"
-      ],
-      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+      "note": "Waiting on ChatViewModel."
     },
     "ChannelModesTests.swift": {
       "waiting": [
         "testVerbReplyCarriesItsData",
         "testVerbErrorsAreWorded",
         "testLiveLinesAndResyncsReachChannelEvents",
-        "testSnapshotSeedsSpecAndChannelState",
-        "testChannelModesFrameReplacesModesButKeepsTheTopicSetter",
-        "testATopicLineNamesItsSetter",
-        "testChannelTopicMetaReplacesOnlyWhenStated",
-        "testSpecIsForgottenWhenTheLinkDropsAndRestatedByTheFrame",
-        "testSpecIsForgottenWhenOurSocketDrops",
-        "testChannelStateFollowsARenameAndGoesWithAClose",
-        "testAnOpEditsEverything",
-        "testPlusTGatesTheTopicOnHalfopAndAVoiceEditsNoModes",
-        "testAnUnknownSpecOpensNoRankGate",
-        "testNothingIsEditableOutOfTheChannel",
         "testASaveFailureSaysWhetherAnythingCanHaveGoneOut"
-      ],
-      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
-    },
-    "ClearMarkerTests.swift": {
-      "waiting": [
-        "fanOutMovesTheMarker",
-        "undoDropsBothHalves",
-        "aClearForAnUnknownBufferIsIgnored",
-        "aBacklogRetractsTheMarker",
-        "aClearDropsLocalLines",
-        "anUndoKeepsLocalLines",
-        "aRevealNeverTouchesTheMarker"
-      ],
-      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
-    },
-    "DccChatTests.swift": {
-      "waiting": [
-        "testTheLightFollowsTheSessionNotTheNetwork",
-        "testAChatIsLiveWhateverTheNetworkIsDoing",
-        "testLiveStateFollowsTheEvents",
-        "testTheSnapshotReplacesLiveChatsWholesale",
-        "testAnOfferWaitsUntilTheServerClosesIt",
-        "testAnOfferMadeAgainReplacesTheOldOneWithANewId",
-        "testASnapshotKeepsAnOfferWeAlreadyHold",
-        "testASnapshotSurfacesAnOfferWeMissed",
-        "testASnapshotRetiresAnOfferItNoLongerLists",
-        "testASessionIsUnknownUntilThisSocketsSnapshot",
-        "testDroppingANetworkForgetsItsChatsAndOffers",
-        "testSignOutForgetsOffersAndChats"
-      ],
-      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
-    },
-    "NetworkConfigTests.swift": {
-      "waiting": [
-        "testTheStoreAppliesTheStateAndTheNick",
-        "testADisconnectKeepsTheNick",
-        "testTheRosterNameSurvivesAStateEvent",
-        "testASnapshotForAnUnknownNetworkLeavesItNameless",
-        "testTheRosterFillsInANamelessNetwork",
-        "testAStateEventMaterializesANetworkCreatedSinceWeConnected",
-        "testTheRosterRemovesANetworkItNoLongerNames",
-        "testRemovingANetworkTakesItsBuffersWithIt",
-        "testAnUnreadableRosterDoesNotWipeTheNetworks",
-        "testAnEmptyRosterIsStillAnAnswer"
       ],
       "note": "What each waits on is in the comment at the bottom of the Kotlin class."
     },
@@ -403,63 +288,8 @@
       ],
       "note": "What each waits on is in the comment at the bottom of the Kotlin class."
     },
-    "ReactionsTests.swift": {
-      "waiting": [
-        "testARowIsAuthoritativeForItselfInBothDirections",
-        "testSilenceAboutALineIsNotARemoval",
-        "testSystemRowsNeverTouchTheMap",
-        "testLiveReactionsAddDedupeAndRemove",
-        "testOurUnreactMatchesSelfNotNick",
-        "testAReactionWeAlreadyHoldChangesNothing",
-        "testSyncIsAuthoritativeForEveryIdItNames",
-        "testClosingABufferDropsItsLinesReactions",
-        "testSyncIdsAreTheNewestOfEachNetworkBuffer",
-        "testCanReactNeedsTheFlagAndALiveLink",
-        "testCanReactNeedsOurOwnSocket",
-        "testANickCollisionNeverFoldsIntoOurReaction",
-        "testAReactionToALineNobodyLoadedIsDropped",
-        "testARevisionIsPerBuffer",
-        "testDroppingTheSystemBufferLeavesNetworkReactionsAlone",
-        "testARenameCarriesTheRevision"
-      ],
-      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
-    },
-    "RepliesTests.swift": {
-      "waiting": [
-        "testARefusedLineComesHomeWithItsReply"
-      ],
-      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
-    },
-    "SystemBufferTests.swift": {
-      "waiting": [
-        "testALiveSystemLineBeatingTheBacklogDoesNotShoveHistoryBelowIt"
-      ],
-      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
-    },
-    "UnsentSendTests.swift": {
-      "waiting": [
-        "takeIsReadAndClear",
-        "holdsQueueRatherThanClobber",
-        "renameMovesTheHold",
-        "sendResultIsSilent"
-      ],
-      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
-    },
     "DraftsTests.swift": {
       "waiting": [
-        "testTheSnapshotResolvesRepliesAndSkipsEmptyDrafts",
-        "testAReplyWithNothingTypedIsADraft",
-        "testTheSnapshotLeavesWhatThisDeviceIsHolding",
-        "testTheSnapshotIsAuthoritativeForWhatItLeavesOut",
-        "testAnUpdateFromAnOlderServerKeepsTheReply",
-        "testARelayedLineIsRepliedToAsThePersonInside",
-        "testALineFromSomeoneIgnoredSinceIsStillTheReplyWithoutTheirWords",
-        "testAClosedBufferTakesItsDraft",
-        "testADeletedNetworkTakesItsDraftsAndOnlyItsDrafts",
-        "testARenameCarriesTheDraft",
-        "testARenameCarriesADraftWhoseRowHasntArrived",
-        "testAMergeKeepsTheSurvivorsDraft",
-        "testAMergeAdoptsTheAbsorbedDraftWhenTheSurvivorHasNone",
         "testAMergeDropsTheAbsorbedEditInTheViewModelToo",
         "testAnEditOutranksTheServerUntilItGoesOut",
         "testAFlushWithNoSocketKeepsTheEditForTheNextConnect",
@@ -477,90 +307,11 @@
       ],
       "note": "What each waits on is in the comment at the bottom of the Kotlin class."
     },
-    "IgnoreScopeTests.swift": {
-      "waiting": [
-        "testTheSnapshotSeedsBothBucketsAndReplacesThemWholesale",
-        "testIgnoreListUpdatedReplacesOnlyTheScopeItNames",
-        "testAnIgnoredPeerIsNotReportedAsTyping",
-        "testVisibleMembersDropsIgnoredPeopleButNeverYou"
-      ],
-      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
-    },
-    "RelayBotsTests.swift": {
-      "waiting": [
-        "testTheSnapshotSeedsMarksAndReplacesThemWholesale",
-        "testTheUpdateFramePatchesOneNick"
-      ],
-      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
-    },
     "AwayStripTests.swift": {
       "note": "Three assertions about what `DateFormatter` writes for a template are left to the app's formatter, on a device."
-    },
-    "AwayStateTests.swift": {
-      "waiting": [
-        "testTheSnapshotSeedsTheNetworksAwayState",
-        "testALiveFramePatchesIt",
-        "testANullFrameClearsIt",
-        "testASnapshotWithNoAwayClearsAStaleOne",
-        "testAFrameForAnUnknownNetworkMaterializesNothing",
-        "testTheRestRosterDoesNotClobberIt"
-      ],
-      "note": "Waiting on LurkerStore/ChatState; the frame-parsing cases are ported."
-    },
-    "ContactsAndPresenceTests.swift": {
-      "waiting": [
-        "testFavoritesChangedReplacesWholesaleKeepingServerOrder",
-        "testFavoriteEntryFollowsAPlainBufferRename",
-        "testPresenceOfflineWhileClientIsDisconnected",
-        "testPresenceOfflineWhenDeviceUnreachable",
-        "testRowPresenceIsUnknownWhileClientIsDisconnected",
-        "testRowPresenceIsUnknownWhenDeviceUnreachable",
-        "testRowPresenceStillReadsAPeerOnADisconnectedNetworkAsOffline",
-        "testRowPresenceWaitsForTheReconnectSnapshot",
-        "testPresenceUnknownForNetworkWeDoNotHave",
-        "testPresenceUnknownForConnectedNetworkWithNoRow",
-        "testPresenceReadsStoredRowCaseInsensitively",
-        "testBackReadsAsOnline",
-        "testDisconnectedNetworkReadsOfflineRegardlessOfRow",
-        "testLivePeerPresenceUpdatesAndNullClears",
-        "testPresenceIsPerNetwork",
-        "testSnapshotReplacesPeerPresenceWholesale"
-      ],
-      "note": "Waiting on LurkerStore/ChatState; the frame-parsing cases are ported."
-    },
-    "TypingTests.swift": {
-      "waiting": [
-        "testActiveTypingSurfacesTheTypist",
-        "testDoneRemovesTheTypist",
-        "testUnrecognizedStateClearsRatherThanStranding",
-        "testCaseVariantTagsCollapseToOneEntry",
-        "testTargetCaseFoldsOntoTheOpenBuffer",
-        "testTypingForAnUnknownBufferIsDropped",
-        "testAMessageFromTheTypistClearsThem",
-        "testAMessageClearsAPausedTypist",
-        "testAMessageFromSomeoneElseLeavesTheTypist",
-        "testACaseVariantMessageStillClearsTheTypist",
-        "testAPartFromTheTypistClearsThem",
-        "testClearingTheLastTypistDropsTheBufferEntry",
-        "testAMessageLeavesTheOtherTypists",
-        "testActiveEntryExpiresAfterItsLease",
-        "testPausedOutlivesActive",
-        "testRefreshExtendsTheLease",
-        "testReadTimeExpiryDoesNotMutateState",
-        "testMultipleTypistsAreOrderedByWhenTheyStarted",
-        "testRefreshDoesNotReorderTheList",
-        "testResumingAfterALapseStartsANewRun",
-        "testTypistsExpireIndependently",
-        "testOneTypistStoppingLeavesTheOthers",
-        "testTypingIsScopedToItsBuffer",
-        "testTypistsForABufferWithNoEntriesIsEmpty",
-        "testSocketCloseClearsTypists"
-      ],
-      "note": "Waiting on LurkerStore/ChatState; the frame-parsing cases are ported."
     }
   },
   "partial": {
-    "Client/Uploads.swift": "T6",
-    "Model/ChannelModes.swift": "T5"
+    "Client/Uploads.swift": "T6"
   }
 }

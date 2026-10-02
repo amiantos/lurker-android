@@ -7,6 +7,8 @@ import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.client.Uploads
 import net.amiantos.lurkerkit.model.SettingValue
+import net.amiantos.lurkerkit.store.ChatState
+import net.amiantos.lurkerkit.store.LurkerStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -104,6 +106,64 @@ class UploadCapTests {
 
     // MARK: - Reaching the store
 
-    // Waiting on LurkerStore, ChatState: snapshotSeedsTheStore, aSnapshotWithoutACapClearsIt,
-    // aSettingsFrameRaisesTheCap, anUnrelatedSettingsFrameLeavesTheCapAlone, aFreshStateHasNoCap
+    /** the snapshot seeds the cap */
+    @Test
+    fun snapshotSeedsTheStore() {
+        val state = LurkerStore.reduce(
+            ChatState(), ServerFrame.Snapshot(emptyList(), globalIgnores = emptyList(), maxUploadBytes = 26_214_400),
+        )
+        assertEquals(26_214_400L, state.maxUploadBytes)
+    }
+
+    /** a reconnect to an instance that no longer advertises returns to the fallback */
+    @Test
+    fun aSnapshotWithoutACapClearsIt() {
+        // The snapshot is the cap's refresh point. Leaving the last server's number in force
+        // would compress against a limit this one never claimed.
+        var state = LurkerStore.reduce(
+            ChatState(), ServerFrame.Snapshot(emptyList(), globalIgnores = emptyList(), maxUploadBytes = 26_214_400),
+        )
+        state = LurkerStore.reduce(state, ServerFrame.Snapshot(emptyList(), globalIgnores = emptyList(), maxUploadBytes = null))
+        assertNull(state.maxUploadBytes)
+        assertEquals(Uploads.fallbackMaxBytes, Uploads.compressionTarget(advertised = state.maxUploadBytes))
+    }
+
+    /** a settings frame that carries a cap updates it */
+    @Test
+    fun aSettingsFrameRaisesTheCap() {
+        var state = LurkerStore.reduce(
+            ChatState(), ServerFrame.Snapshot(emptyList(), globalIgnores = emptyList(), maxUploadBytes = 26_214_400),
+        )
+        state = LurkerStore.reduce(
+            state,
+            ServerFrame.SettingsChanged(
+                mapOf("uploads.image.max_upload_mb" to SettingValue.Int(50)), maxUploadBytes = 52_428_800,
+            ),
+        )
+        assertEquals(52_428_800L, state.maxUploadBytes)
+    }
+
+    /** ⚠⚠ a settings frame about anything else must not clear the cap */
+    @Test
+    fun anUnrelatedSettingsFrameLeavesTheCapAlone() {
+        // The trap this whole optional exists for. The cap rides the settings frame ONLY when
+        // it was the thing that changed, so assigning it unconditionally would put the
+        // compressor back on the 90 MiB guess every time the user flipped an unrelated switch
+        // — and it would stay there until the next reconnect.
+        var state = LurkerStore.reduce(
+            ChatState(), ServerFrame.Snapshot(emptyList(), globalIgnores = emptyList(), maxUploadBytes = 209_715_200),
+        )
+        state = LurkerStore.reduce(
+            state,
+            ServerFrame.SettingsChanged(mapOf("chat.consolidate_joins" to SettingValue.Bool(true)), maxUploadBytes = null),
+        )
+        assertEquals(209_715_200L, state.maxUploadBytes)
+    }
+
+    /** a fresh state has no cap, and compresses to the fallback */
+    @Test
+    fun aFreshStateHasNoCap() {
+        assertNull(ChatState().maxUploadBytes)
+        assertEquals(Uploads.fallbackMaxBytes, Uploads.compressionTarget(advertised = ChatState().maxUploadBytes))
+    }
 }

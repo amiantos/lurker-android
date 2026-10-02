@@ -8,6 +8,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NetworkConfig
@@ -15,6 +16,7 @@ import net.amiantos.lurkerkit.model.NetworkDraft
 import net.amiantos.lurkerkit.model.NetworkProxy
 import net.amiantos.lurkerkit.model.ProxyType
 import net.amiantos.lurkerkit.model.SecretEdit
+import net.amiantos.lurkerkit.store.LurkerStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -71,7 +73,65 @@ class NetworkConfigTests {
         if (frame !is ServerFrame.NetworkState) fail("expected networkState, got $frame")
     }
 
+    @Test
+    fun testTheStoreAppliesTheStateAndTheNick() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.Networks(listOf(Network(id = 2, name = "Libera"))))
+        store.apply(ServerFrame.NetworkState(networkId = 2, state = ConnectionState.Connected, nick = "me"))
+        assertEquals(ConnectionState.Connected, store.state.networks[2]?.state)
+        assertEquals("me", store.state.networks[2]?.nick)
+    }
+
+    @Test
+    fun testADisconnectKeepsTheNick() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.Networks(listOf(Network(id = 2, name = "Libera"))))
+        store.apply(ServerFrame.NetworkState(networkId = 2, state = ConnectionState.Connected, nick = "me"))
+        store.apply(ServerFrame.NetworkState(networkId = 2, state = ConnectionState.Disconnected, nick = null))
+        assertEquals(ConnectionState.Disconnected, store.state.networks[2]?.state)
+        assertEquals("me", store.state.networks[2]?.nick)
+    }
+
+    @Test
+    fun testTheRosterNameSurvivesAStateEvent() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.Networks(listOf(Network(id = 2, name = "Libera"))))
+        store.apply(ServerFrame.NetworkState(networkId = 2, state = ConnectionState.Connected, nick = "me"))
+        assertEquals("Libera", store.state.networks[2]?.name)
+    }
+
     // MARK: - Nameless networks (lurker-ios#136)
+
+    @Test
+    fun testASnapshotForAnUnknownNetworkLeavesItNameless() {
+        // ⚠⚠ The whole of lurker-ios#136. The snapshot carries no names, so a network the
+        // roster hasn't named arrives with nothing to call it. It used to arrive called
+        // "network" — a placeholder nothing downstream could tell from a real name, which is
+        // why the app displayed it for the life of the process instead of re-fetching.
+        val store = LurkerStore()
+        store.apply(
+            FrameParser.parseWs(
+                """{"kind":"snapshot","networks":[{"networkId":7,"state":"connected","nick":"me","channels":[]}]}""",
+            ),
+        )
+        assertNotNull(store.state.networks[7])
+        assertNull(store.state.networks[7]?.name)
+    }
+
+    @Test
+    fun testTheRosterFillsInANamelessNetwork() {
+        val store = LurkerStore()
+        store.apply(
+            FrameParser.parseWs(
+                """{"kind":"snapshot","networks":[{"networkId":7,"state":"connected","nick":"me","channels":[]}]}""",
+            ),
+        )
+        store.apply(ServerFrame.Networks(listOf(Network(id = 7, name = "Libera"))))
+        assertEquals("Libera", store.state.networks[7]?.name)
+        // And the live state the snapshot set is still there — the roster carries none of it.
+        assertEquals(ConnectionState.Connected, store.state.networks[7]?.state)
+        assertEquals("me", store.state.networks[7]?.nick)
+    }
 
     @Test
     fun testARosterRowWithNoNameParsesAsNameless() {
@@ -88,7 +148,65 @@ class NetworkConfigTests {
         assertEquals("Libera", Network(id = 1, name = "Libera").displayName)
     }
 
+    @Test
+    fun testAStateEventMaterializesANetworkCreatedSinceWeConnected() {
+        // ⚠⚠ `POST /api/networks` starts the connection BEFORE it answers, so the new
+        // network's `connecting` can beat the roster re-read that would otherwise create its
+        // row. Dropped, the network then appeared at `ConnectionState`'s default and read
+        // "offline" while genuinely connected, with no further transition coming to fix it.
+        val store = LurkerStore()
+        store.apply(ServerFrame.NetworkState(networkId = 12, state = ConnectionState.Connecting, nick = null))
+        assertEquals(ConnectionState.Connecting, store.state.networks[12]?.state)
+        assertNull(store.state.networks[12]?.name)
+    }
+
     // MARK: - Roster membership
+
+    @Test
+    fun testTheRosterRemovesANetworkItNoLongerNames() {
+        // The roster is the whole set, so it decides membership too. Without this a deleted
+        // network kept its section header, its join-menu entry and its `on:` name for the
+        // life of the process — `pruneToBurst` prunes buffers only, and the snapshot merges.
+        val store = LurkerStore()
+        store.apply(ServerFrame.Networks(listOf(Network(id = 1, name = "Libera"), Network(id = 2, name = "OFTC"))))
+        store.apply(ServerFrame.Networks(listOf(Network(id = 1, name = "Libera"))))
+        assertNotNull(store.state.networks[1])
+        assertNull(store.state.networks[2])
+    }
+
+    @Test
+    fun testRemovingANetworkTakesItsBuffersWithIt() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.Networks(listOf(Network(id = 2, name = "OFTC"))))
+        store.apply(FrameParser.parseWs("""{"kind":"backlog","networkId":2,"target":"#chan","joined":true,"events":[]}"""))
+        val key = BufferKey(networkId = 2, target = "#chan").id
+        assertNotNull(store.state.buffers[key])
+        store.apply(ServerFrame.Networks(emptyList()))
+        assertNull(store.state.networks[2])
+        // A buffer whose network is gone has no section to sit under and nothing to send to.
+        assertNull(store.state.buffers[key])
+        assertNull(store.state.messages[key])
+    }
+
+    @Test
+    fun testAnUnreadableRosterDoesNotWipeTheNetworks() {
+        // ⚠⚠ The hazard the removal above creates. "We couldn't read the answer" is not "you
+        // have no networks", and reading it that way would delete every network and buffer
+        // the user has on one malformed response.
+        val store = LurkerStore()
+        store.apply(ServerFrame.Networks(listOf(Network(id = 1, name = "Libera"))))
+        store.apply(FrameParser.parseNetworks("not json"))
+        assertEquals("Libera", store.state.networks[1]?.name)
+    }
+
+    @Test
+    fun testAnEmptyRosterIsStillAnAnswer() {
+        // A user who deleted their last network really does have none.
+        val store = LurkerStore()
+        store.apply(ServerFrame.Networks(listOf(Network(id = 1, name = "Libera"))))
+        store.apply(FrameParser.parseNetworks("""{"networks":[]}"""))
+        assertTrue(store.state.networks.isEmpty())
+    }
 
     // MARK: - Config rows
 
@@ -304,13 +422,6 @@ class NetworkConfigTests {
         // Create-only, and this draft is for an edit.
         assertNull(d.defaultChannel)
     }
-
-    // Waiting on LurkerStore, Network:
-    // testTheStoreAppliesTheStateAndTheNick, testADisconnectKeepsTheNick,
-    // testTheRosterNameSurvivesAStateEvent, testASnapshotForAnUnknownNetworkLeavesItNameless,
-    // testTheRosterFillsInANamelessNetwork, testAStateEventMaterializesANetworkCreatedSinceWeConnected,
-    // testTheRosterRemovesANetworkItNoLongerNames, testRemovingANetworkTakesItsBuffersWithIt,
-    // testAnUnreadableRosterDoesNotWipeTheNetworks, testAnEmptyRosterIsStillAnAnswer
 
     // Port-only: the whole body, key for key, as LurkerKit builds it (the expected JSON is the
     // Swift's own output for the same draft). The suite above reads a body one key at a time,

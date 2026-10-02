@@ -5,6 +5,7 @@ package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.model.IgnoreSet
@@ -14,10 +15,14 @@ import net.amiantos.lurkerkit.model.MessageActionKey
 import net.amiantos.lurkerkit.model.MessageActionScope
 import net.amiantos.lurkerkit.model.MessageActions
 import net.amiantos.lurkerkit.model.NickCompletion
+import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.RelayBotSet
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.ReplyContext
 import net.amiantos.lurkerkit.model.ReplyParent
+import net.amiantos.lurkerkit.model.UnsentCorrelator
+import net.amiantos.lurkerkit.store.LurkerStore
+import net.amiantos.lurkerkit.store.UnsentLine
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -223,7 +228,21 @@ class RepliesTests {
 
     // MARK: - Refusals give the reply back
 
-    // Waiting on UnsentLine, LurkerStore: testARefusedLineComesHomeWithItsReply
+    @Test
+    fun testARefusedLineComesHomeWithItsReply() {
+        val correlator = UnsentCorrelator()
+        val key = BufferKey(networkId = 1, target = "#c")
+        val pending = PendingReply(
+            messageId = 7, nick = "alice", type = EventType.Message, text = "x", isSelf = false, addressed = true,
+        )
+        val id = correlator.track(key, line = "alice: yes", reply = pending)
+        val origin = correlator.resolve(clientId = id, ok = false)
+        assertEquals(pending, origin?.reply)
+
+        val store = LurkerStore()
+        store.holdUnsent(key, text = "alice: yes", reply = pending)
+        assertEquals(UnsentLine(text = "alice: yes", reply = pending), store.takeUnsentLine(key))
+    }
 }
 
 class ReplyPresentingTests {

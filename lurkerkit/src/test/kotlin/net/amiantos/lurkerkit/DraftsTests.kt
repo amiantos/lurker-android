@@ -5,7 +5,9 @@ package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
+import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.ComposerDraft
 import net.amiantos.lurkerkit.model.DraftEntry
 import net.amiantos.lurkerkit.model.DraftReply
@@ -17,6 +19,8 @@ import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.RelayBotSet
 import net.amiantos.lurkerkit.model.ReplyParent
+import net.amiantos.lurkerkit.store.ChatState
+import net.amiantos.lurkerkit.store.LurkerStore
 import java.time.Duration
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -88,6 +92,192 @@ class DraftsTests {
     }
 
     // MARK: - The store
+
+    @Test
+    fun testTheSnapshotResolvesRepliesAndSkipsEmptyDrafts() {
+        var state = ChatState()
+        state = state.seedDrafts(
+            listOf(
+                entry(body = "alice: sure", reply = DraftReply(messageId = 7, addressed = true, parent = alice)),
+                entry(BufferKey(networkId = 1, target = "#empty"), body = ""),
+                entry(BufferKey(networkId = 1, target = "#gone"), body = "", reply = DraftReply(messageId = 3, addressed = false, parent = null)),
+            ),
+        )
+        assertEquals(
+            ComposerDraft(
+                body = "alice: sure",
+                reply = PendingReply(
+                    messageId = 7, nick = "alice", type = EventType.Message, text = "lunch?", isSelf = false, addressed = true,
+                ),
+            ),
+            state.drafts[chat.id],
+        )
+        assertFalse(state.hasDraft(BufferKey(networkId = 1, target = "#empty")))
+        assertFalse(
+            state.hasDraft(BufferKey(networkId = 1, target = "#gone")),
+            "a reply to a line that's gone is no reply, and with no text there's nothing left",
+        )
+        assertTrue(state.hasDraft(BufferKey(networkId = 1, target = "#CHAT")), "keys fold case")
+    }
+
+    @Test
+    fun testAReplyWithNothingTypedIsADraft() {
+        var state = ChatState()
+        state = state.seedDrafts(listOf(entry(body = "", reply = DraftReply(messageId = 7, addressed = false, parent = alice))))
+        assertTrue(state.hasDraft(chat))
+    }
+
+    @Test
+    fun testTheSnapshotLeavesWhatThisDeviceIsHolding() {
+        val mine = ComposerDraft(body = "mine, newer")
+        val other = BufferKey(networkId = 1, target = "#other")
+        val unlisted = BufferKey(networkId = 1, target = "#unlisted")
+        var state = ChatState(
+            drafts = mapOf(
+                chat.id to mine,
+                other.id to ComposerDraft(body = "stale"),
+                unlisted.id to ComposerDraft(body = "typed before the server ever heard"),
+            ),
+        )
+        state = state.seedDrafts(listOf(entry(body = "older"), entry(other, body = "fresh")), keeping = setOf(chat.id, unlisted.id))
+        assertEquals(mine, state.drafts[chat.id])
+        assertEquals(ComposerDraft(body = "fresh"), state.drafts[other.id])
+        assertEquals("typed before the server ever heard", state.drafts[unlisted.id]?.body)
+    }
+
+    @Test
+    fun testTheSnapshotIsAuthoritativeForWhatItLeavesOut() {
+        var state = ChatState(drafts = mapOf(chat.id to ComposerDraft(body = "sent from the browser since")))
+        state = state.seedDrafts(emptyList())
+        assertNull(state.drafts[chat.id])
+    }
+
+    @Test
+    fun testAnUpdateFromAnOlderServerKeepsTheReply() {
+        var state = ChatState()
+        state = state.seedDrafts(listOf(entry(body = "alice: ", reply = DraftReply(messageId = 7, addressed = true, parent = alice))))
+        state = state.applyDraftUpdate(entry(body = "alice: on my way", carriesReply = false))
+        assertEquals("alice: on my way", state.drafts[chat.id]?.body)
+        assertEquals(7L, state.drafts[chat.id]?.reply?.messageId)
+
+        state = state.applyDraftUpdate(entry(body = "alice: on my way", reply = null, carriesReply = true))
+        assertNull(state.drafts[chat.id]?.reply, "reply: null clears it")
+        state = state.applyDraftUpdate(entry(body = ""))
+        assertNull(state.drafts[chat.id], "emptied on another device")
+    }
+
+    @Test
+    fun testARelayedLineIsRepliedToAsThePersonInside() {
+        // The strip and a cancel's `nick: ` both name who the Reply addressed — carol, not the bot.
+        var state = ChatState(relayBots = RelayBotSet.empty.applying(networkId = 1, nick = "bridge", marked = true, pattern = ""))
+        val relayed = ReplyParent(id = 8, nick = "bridge", type = EventType.Message, text = "<carol> hello there")
+        state = state.seedDrafts(listOf(entry(body = "carol: hi", reply = DraftReply(messageId = 8, addressed = true, parent = relayed))))
+        assertEquals("carol", state.drafts[chat.id]?.reply?.nick)
+        assertEquals("hello there", state.drafts[chat.id]?.reply?.text)
+    }
+
+    @Test
+    fun testALineFromSomeoneIgnoredSinceIsStillTheReplyWithoutTheirWords() {
+        var state = ChatState(
+            ignores = IgnoreSet(global = listOf(IgnoreRule(id = 1, mask = "alice!*@*")), byNetwork = emptyMap()),
+        )
+        state = state.seedDrafts(listOf(entry(body = "", reply = DraftReply(messageId = 7, addressed = false, parent = alice))))
+        assertEquals(7L, state.drafts[chat.id]?.reply?.messageId)
+        assertEquals("alice", state.drafts[chat.id]?.reply?.nick)
+        assertEquals("", state.drafts[chat.id]?.reply?.text)
+    }
+
+    @Test
+    fun testAClosedBufferTakesItsDraft() {
+        var state = ChatState(drafts = mapOf(chat.id to ComposerDraft(body = "x")))
+        state = LurkerStore.reduce(state, ServerFrame.BufferClosed(networkId = 1, target = "#chat"))
+        assertNull(state.drafts[chat.id])
+    }
+
+    @Test
+    fun testADeletedNetworkTakesItsDraftsAndOnlyItsDrafts() {
+        val eleven = BufferKey(networkId = 11, target = "#chat")
+        var state = ChatState(drafts = mapOf(chat.id to ComposerDraft(body = "x"), eleven.id to ComposerDraft(body = "y")))
+        state = state.dropNetwork(1)
+        assertNull(state.drafts[chat.id])
+        assertNotNull(state.drafts[eleven.id], "network 11 is not network 1")
+    }
+
+    @Test
+    fun testARenameCarriesTheDraft() {
+        val old = BufferKey(networkId = 1, target = "bob")
+        var state = ChatState(
+            buffers = mapOf(old.id to Buffer(networkId = 1, target = "bob", kind = BufferKind.Dm)),
+            drafts = mapOf(old.id to ComposerDraft(body = "you there?")),
+        )
+        state = LurkerStore.reduce(
+            state,
+            ServerFrame.BufferRenamed(
+                networkId = 1, from = "bob", to = "bobby", bufferId = null, merged = false, mergedFromBufferId = null,
+            ),
+        )
+        assertNull(state.drafts[old.id])
+        assertEquals("you there?", state.drafts[BufferKey(networkId = 1, target = "bobby").id]?.body)
+    }
+
+    @Test
+    fun testARenameCarriesADraftWhoseRowHasntArrived() {
+        val old = BufferKey(networkId = 1, target = "bob")
+        var state = ChatState(drafts = mapOf(old.id to ComposerDraft(body = "seeded before the backlog")))
+        state = LurkerStore.reduce(
+            state,
+            ServerFrame.BufferRenamed(
+                networkId = 1, from = "bob", to = "bob_", bufferId = 5, merged = false, mergedFromBufferId = null,
+            ),
+        )
+        assertNull(state.drafts[old.id])
+        assertEquals("seeded before the backlog", state.drafts[BufferKey(networkId = 1, target = "bob_").id]?.body)
+    }
+
+    @Test
+    fun testAMergeKeepsTheSurvivorsDraft() {
+        // The renamed buffer survives; the one that already held the name is absorbed. The server
+        // keeps the survivor's draft and sends a draft-updated if that changed anything.
+        val survivor = BufferKey(networkId = 1, target = "bob")
+        val absorbed = BufferKey(networkId = 1, target = "bobby")
+        var state = ChatState(
+            buffers = mapOf(
+                survivor.id to Buffer(networkId = 1, target = "bob", kind = BufferKind.Dm),
+                absorbed.id to Buffer(networkId = 1, target = "bobby", kind = BufferKind.Dm),
+            ),
+            drafts = mapOf(
+                survivor.id to ComposerDraft(body = "survivor's"),
+                absorbed.id to ComposerDraft(body = "absorbed"),
+            ),
+        )
+        state = LurkerStore.reduce(
+            state,
+            ServerFrame.BufferRenamed(
+                networkId = 1, from = "bob", to = "bobby", bufferId = 5, merged = true, mergedFromBufferId = 6,
+            ),
+        )
+        assertEquals("survivor's", state.drafts[absorbed.id]?.body)
+    }
+
+    @Test
+    fun testAMergeAdoptsTheAbsorbedDraftWhenTheSurvivorHasNone() {
+        val survivor = BufferKey(networkId = 1, target = "bob")
+        val absorbed = BufferKey(networkId = 1, target = "bobby")
+        var state = ChatState(
+            buffers = mapOf(
+                survivor.id to Buffer(networkId = 1, target = "bob", kind = BufferKind.Dm),
+                absorbed.id to Buffer(networkId = 1, target = "bobby", kind = BufferKind.Dm),
+            ),
+            drafts = mapOf(absorbed.id to ComposerDraft(body = "absorbed")),
+        )
+        state = LurkerStore.reduce(
+            state,
+            ServerFrame.BufferRenamed(
+                networkId = 1, from = "bob", to = "bobby", bufferId = 5, merged = true, mergedFromBufferId = 6,
+            ),
+        )
+        assertEquals("absorbed", state.drafts[absorbed.id]?.body)
+    }
 
     // MARK: - DraftSync
 
@@ -355,18 +545,7 @@ class DraftsTests {
 
     // MARK: - The view model
 
-    // Waiting on ChatState:
-    // testTheSnapshotResolvesRepliesAndSkipsEmptyDrafts, testAReplyWithNothingTypedIsADraft,
-    // testTheSnapshotLeavesWhatThisDeviceIsHolding, testTheSnapshotIsAuthoritativeForWhatItLeavesOut,
-    // testAnUpdateFromAnOlderServerKeepsTheReply, testARelayedLineIsRepliedToAsThePersonInside,
-    // testALineFromSomeoneIgnoredSinceIsStillTheReplyWithoutTheirWords,
-    // testADeletedNetworkTakesItsDraftsAndOnlyItsDrafts
-    //
-    // Waiting on ChatState, LurkerStore: testAClosedBufferTakesItsDraft,
-    // testARenameCarriesTheDraft, testARenameCarriesADraftWhoseRowHasntArrived,
-    // testAMergeKeepsTheSurvivorsDraft, testAMergeAdoptsTheAbsorbedDraftWhenTheSurvivorHasNone
-    //
-    // Waiting on ChatViewModel, SessionStore, SettingsCache (and the private `viewModel` helper):
+    // Waiting on ChatViewModel, SessionStore (and the private `viewModel` helper):
     // testAMergeDropsTheAbsorbedEditInTheViewModelToo,
     // testAnEditOutranksTheServerUntilItGoesOut, testAFlushWithNoSocketKeepsTheEditForTheNextConnect,
     // testAnotherDevicesWriteLandsWhenNothingHereIsNewer, testTheSystemBufferAndServerLogsKeepNoDraft,

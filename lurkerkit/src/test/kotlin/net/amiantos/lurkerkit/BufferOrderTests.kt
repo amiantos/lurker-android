@@ -9,7 +9,9 @@ import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.BufferOrder
+import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.Network
+import net.amiantos.lurkerkit.store.LurkerStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -262,6 +264,36 @@ class BufferOrderTests {
     // MARK: - Store
 
     @Test
+    fun testTheSnapshotSeedsPinsAndReplacesThemWholesale() {
+        val store = LurkerStore()
+        store.apply(
+            FrameParser.parseWs(
+                """{"kind":"snapshot","networks":[{"networkId":2,"state":"connected","nick":"me","channels":[],"pinned":["#a","#b"]}]}""",
+            ),
+        )
+        assertEquals(listOf("#a", "#b"), store.state.pinned[2])
+        // A pin dropped from the web while this device was away has to disappear here rather
+        // than survive as a leftover.
+        store.apply(
+            FrameParser.parseWs(
+                """{"kind":"snapshot","networks":[{"networkId":2,"state":"connected","nick":"me","channels":[],"pinned":["#b"]}]}""",
+            ),
+        )
+        assertEquals(listOf("#b"), store.state.pinned[2])
+    }
+
+    @Test
+    fun testPinsChangedReplacesOneNetworksList() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.PinsChanged(networkId = 1, pinned = listOf("#a")))
+        store.apply(ServerFrame.PinsChanged(networkId = 2, pinned = listOf("#b")))
+        store.apply(ServerFrame.PinsChanged(networkId = 1, pinned = emptyList()))
+        assertEquals(emptyList(), store.state.pinned[1])
+        // Sent per network, so it says nothing about the others.
+        assertEquals(listOf("#b"), store.state.pinned[2])
+    }
+
+    @Test
     fun testPinsChangedParsesItsOrderedList() {
         val frame = FrameParser.parseWs(
             """{"kind":"pins-changed","networkId":4,"pinned":["#b","#a"],"pinnedIds":[7,3]}""",
@@ -270,6 +302,35 @@ class BufferOrderTests {
         val (networkId, pinned) = frame
         assertEquals(4, networkId)
         assertEquals(listOf("#b", "#a"), pinned)
+    }
+
+    @Test
+    fun testDeletingANetworkTakesItsPinsWithIt() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.Networks(listOf(Network(id = 1, name = "Libera", position = 0))))
+        store.apply(ServerFrame.PinsChanged(networkId = 1, pinned = listOf("#a")))
+        store.apply(ServerFrame.Networks(emptyList()))
+        assertNull(store.state.pinned[1])
+    }
+
+    @Test
+    fun testTheRosterMergeCarriesThePositionOntoAnExistingNetwork() {
+        // ⚠ `position` is REST-only data exactly like `name`, so the merge has to take both.
+        // Taking only the name left every network the snapshot materialized stuck at the
+        // default — sorting by id for the life of the process, on any launch where the roster
+        // read lost its race with the socket.
+        val store = LurkerStore()
+        store.apply(
+            FrameParser.parseWs(
+                """{"kind":"snapshot","networks":[{"networkId":7,"state":"connected","nick":"me","channels":[]}]}""",
+            ),
+        )
+        assertEquals(Int.MAX_VALUE, store.state.networks[7]?.position)
+        store.apply(ServerFrame.Networks(listOf(Network(id = 7, name = "Libera", position = 2))))
+        assertEquals(2, store.state.networks[7]?.position)
+        assertEquals("Libera", store.state.networks[7]?.name)
+        // …and the live state the snapshot set is still there.
+        assertEquals(ConnectionState.Connected, store.state.networks[7]?.state)
     }
 
     @Test
@@ -285,9 +346,4 @@ class BufferOrderTests {
         if (frame !is ServerFrame.Networks) fail("expected networks, got $frame")
         assertEquals(Int.MAX_VALUE, frame.networks.firstOrNull()?.position)
     }
-
-    // Waiting on LurkerStore, ChatState:
-    // testTheSnapshotSeedsPinsAndReplacesThemWholesale, testPinsChangedReplacesOneNetworksList,
-    // testDeletingANetworkTakesItsPinsWithIt,
-    // testTheRosterMergeCarriesThePositionOntoAnExistingNetwork
 }

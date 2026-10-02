@@ -703,4 +703,27 @@ data class ChannelAccess internal constructor(
     val canSetTopic: Boolean,
 )
 
-// extension ChatState: waits for the store port (see LEDGER).
+/**
+ * Who may do what in `key`'s channel. The server has the last word — its refusal shows on
+ * the screen — so this only decides which controls are offered.
+ *
+ * Port note: an extension on `ChatState` here as in LurkerKit; the receiver is written out in
+ * full so this file's imports stay as they were before the store was ported.
+ */
+fun net.amiantos.lurkerkit.store.ChatState.channelAccess(key: BufferKey): ChannelAccess {
+    val network = key.networkId?.let { networks[it] }
+    val spec = network?.modeSpec
+    val joined = buffers[key.id]?.joined == true
+    val mine = members[key.id]?.member(named = network?.nick ?: "")?.modes ?: emptyList()
+    // ⚠ No rank gate opens before the vocabulary arrives. A conventional ladder in its place
+    // would rank letters this network may not have, and offer a +t topic edit to someone
+    // below the rank it actually needs. A -t topic needs no rank, so it stays editable.
+    val modes = channelModes[key.id]?.modes ?: ""
+    val atLeast = { letter: String -> spec?.let { ChannelRank.atLeast(mine, prefix = it.prefix, letter = letter) } ?: false }
+    return ChannelAccess(
+        spec = spec,
+        joined = joined,
+        canEditModes = joined && atLeast("o"),
+        canSetTopic = joined && (!modes.contains("t") || atLeast("h")),
+    )
+}

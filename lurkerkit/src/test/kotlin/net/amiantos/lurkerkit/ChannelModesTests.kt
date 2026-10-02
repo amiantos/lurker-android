@@ -3,15 +3,23 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.ChannelSnapshot
 import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.client.TopicMeta
+import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.ChannelModeDrafts
 import net.amiantos.lurkerkit.model.ChannelModeForm
+import net.amiantos.lurkerkit.model.ChannelModeState
 import net.amiantos.lurkerkit.model.ChannelRank
 import net.amiantos.lurkerkit.model.ChannelRefusals
+import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.EventType
+import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.channelAccess
+import net.amiantos.lurkerkit.store.LurkerStore
 import net.amiantos.lurkerkit.model.ModeChange
 import net.amiantos.lurkerkit.model.ModeChangeKind
 import net.amiantos.lurkerkit.model.ModeListEntry
@@ -148,7 +156,165 @@ class ChannelModesTests {
 
     // MARK: - Store
 
+    private fun storeWithChannel(modes: String = "nt", selfModes: List<String> = listOf("o")): LurkerStore {
+        val store = LurkerStore()
+        store.apply(ServerFrame.SocketOpen)
+        store.apply(
+            ServerFrame.Snapshot(
+                listOf(
+                    NetworkSnapshot(
+                        id = 1, state = ConnectionState.Connected, nick = "me",
+                        channels = listOf(
+                            ChannelSnapshot(
+                                name = "#c", topic = "hi",
+                                members = listOf(Member(nick = "Me", modes = selfModes), Member(nick = "bob")),
+                                modeState = ChannelModeState(modes = modes, topicSetBy = "alice"),
+                            ),
+                        ),
+                        modeSpec = spec,
+                    ),
+                ),
+                globalIgnores = emptyList(), maxUploadBytes = null,
+            ),
+        )
+        return store
+    }
+
+    private val key = BufferKey(networkId = 1, target = "#c")
+
+    @Test
+    fun testSnapshotSeedsSpecAndChannelState() {
+        val store = storeWithChannel()
+        assertEquals(spec, store.state.networks[1]?.modeSpec)
+        assertEquals("nt", store.state.channelModes[key.id]?.modes)
+        assertEquals("alice", store.state.channelModes[key.id]?.topicSetBy)
+    }
+
+    @Test
+    fun testChannelModesFrameReplacesModesButKeepsTheTopicSetter() {
+        val store = storeWithChannel()
+        store.apply(
+            ServerFrame.ChannelModes(networkId = 1, target = "#C", modes = "ntl", params = mapOf("l" to "9"), createdAt = null),
+        )
+        assertEquals("ntl", store.state.channelModes[key.id]?.modes)
+        assertEquals(mapOf("l" to "9"), store.state.channelModes[key.id]?.params)
+        assertEquals("alice", store.state.channelModes[key.id]?.topicSetBy)
+
+        store.apply(
+            ServerFrame.ChannelModes(networkId = 1, target = "#elsewhere", modes = "n", params = emptyMap(), createdAt = null),
+        )
+        assertNull(store.state.channelModes[BufferKey(networkId = 1, target = "#elsewhere").id], "never materializes")
+    }
+
+    @Test
+    fun testATopicLineNamesItsSetter() {
+        val store = storeWithChannel()
+        val `when` = Instant.ofEpochSecond(1_000)
+        store.apply(
+            ServerFrame.Live(
+                networkId = 1, target = "#c",
+                message = Message(id = 5, type = EventType.Topic, nick = "carol", text = "new", date = `when`),
+            ),
+        )
+        assertEquals("new", store.state.buffers[key.id]?.topic)
+        assertEquals("carol", store.state.channelModes[key.id]?.topicSetBy)
+        assertEquals(`when`, store.state.channelModes[key.id]?.topicSetAt)
+    }
+
+    @Test
+    fun testChannelTopicMetaReplacesOnlyWhenStated() {
+        val store = storeWithChannel()
+        store.apply(ServerFrame.ChannelTopic(networkId = 1, target = "#c", topic = "x"))
+        assertEquals("alice", store.state.channelModes[key.id]?.topicSetBy, "no meta: the held setter stands")
+        store.apply(
+            ServerFrame.ChannelTopic(networkId = 1, target = "#c", topic = "x", meta = TopicMeta(setBy = null, setAt = null)),
+        )
+        assertNull(store.state.channelModes[key.id]?.topicSetBy)
+    }
+
+    @Test
+    fun testSpecIsForgottenWhenTheLinkDropsAndRestatedByTheFrame() {
+        val store = storeWithChannel()
+        store.apply(ServerFrame.NetworkState(networkId = 1, state = ConnectionState.Reconnecting, nick = null))
+        assertNull(store.state.networks[1]?.modeSpec)
+        store.apply(ServerFrame.NetworkState(networkId = 1, state = ConnectionState.Connected, nick = null))
+        assertNull(store.state.networks[1]?.modeSpec, "unknown until the new burst says")
+        store.apply(ServerFrame.ModeSpec(networkId = 1, spec = spec))
+        assertEquals(spec, store.state.networks[1]?.modeSpec)
+        store.apply(ServerFrame.ModeSpec(networkId = 9, spec = spec))
+        assertNull(store.state.networks[9], "never materializes a network")
+    }
+
+    /**
+     * A dropped socket can't hear the `state` frame that would retire the vocabulary, so the
+     * drop itself does — until the next snapshot restates it.
+     */
+    @Test
+    fun testSpecIsForgottenWhenOurSocketDrops() {
+        val store = storeWithChannel()
+        store.apply(ServerFrame.SocketClosed(reason = null, code = null))
+        assertNull(store.state.networks[1]?.modeSpec)
+    }
+
+    @Test
+    fun testChannelStateFollowsARenameAndGoesWithAClose() {
+        val store = storeWithChannel()
+        store.apply(
+            ServerFrame.BufferRenamed(
+                networkId = 1, from = "#c", to = "#d", bufferId = null, merged = false, mergedFromBufferId = null,
+            ),
+        )
+        assertNull(store.state.channelModes[key.id])
+        assertEquals("nt", store.state.channelModes[BufferKey(networkId = 1, target = "#d").id]?.modes)
+        store.apply(ServerFrame.BufferClosed(networkId = 1, target = "#d"))
+        assertNull(store.state.channelModes[BufferKey(networkId = 1, target = "#d").id])
+    }
+
     // MARK: - Access
+
+    @Test
+    fun testAnOpEditsEverything() {
+        val access = storeWithChannel().state.channelAccess(key)
+        assertTrue(access.joined)
+        assertTrue(access.canEditModes, "our own row found case-insensitively")
+        assertTrue(access.canSetTopic)
+    }
+
+    @Test
+    fun testPlusTGatesTheTopicOnHalfopAndAVoiceEditsNoModes() {
+        val voiced = storeWithChannel(modes = "nt", selfModes = listOf("v")).state.channelAccess(key)
+        assertFalse(voiced.canEditModes)
+        assertFalse(voiced.canSetTopic, "+t, and this network has no halfop: the gate rounds UP to op")
+        val open = storeWithChannel(modes = "n", selfModes = emptyList()).state.channelAccess(key)
+        assertTrue(open.canSetTopic, "-t: anyone in the channel")
+    }
+
+    /**
+     * ⚠ No rank gate opens on a guessed ladder: until the network's PREFIX arrives, a +t topic
+     * and the modes are read-only — even for someone holding `o`. A -t topic needs no rank.
+     */
+    @Test
+    fun testAnUnknownSpecOpensNoRankGate() {
+        val store = storeWithChannel(modes = "nt", selfModes = listOf("o"))
+        store.apply(ServerFrame.ModeSpec(networkId = 1, spec = null))
+        val keyed = store.state.channelAccess(key)
+        assertNull(keyed.spec)
+        assertFalse(keyed.canEditModes)
+        assertFalse(keyed.canSetTopic)
+
+        store.apply(ServerFrame.ChannelModes(networkId = 1, target = "#c", modes = "n", params = emptyMap(), createdAt = null))
+        assertTrue(store.state.channelAccess(key).canSetTopic, "-t: anyone in the channel")
+    }
+
+    @Test
+    fun testNothingIsEditableOutOfTheChannel() {
+        val store = storeWithChannel()
+        store.apply(ServerFrame.ChannelParted(networkId = 1, target = "#c"))
+        val access = store.state.channelAccess(key)
+        assertFalse(access.joined)
+        assertFalse(access.canEditModes)
+        assertFalse(access.canSetTopic)
+    }
 
     // MARK: - Rank
 
@@ -533,16 +699,7 @@ class ChannelModesTests {
         assertNotEquals(drafts, noted)
     }
 
-    // Waiting on ChatViewModel (and SessionStore, SettingsCache):
+    // Waiting on ChatViewModel (and SessionStore):
     // testVerbReplyCarriesItsData, testVerbErrorsAreWorded, testLiveLinesAndResyncsReachChannelEvents,
     // testASaveFailureSaysWhetherAnythingCanHaveGoneOut
-    //
-    // Waiting on LurkerStore, ChatState (and the private `storeWithChannel` helper and
-    // `key`): testSnapshotSeedsSpecAndChannelState,
-    // testChannelModesFrameReplacesModesButKeepsTheTopicSetter, testATopicLineNamesItsSetter,
-    // testChannelTopicMetaReplacesOnlyWhenStated,
-    // testSpecIsForgottenWhenTheLinkDropsAndRestatedByTheFrame, testSpecIsForgottenWhenOurSocketDrops,
-    // testChannelStateFollowsARenameAndGoesWithAClose, testAnOpEditsEverything,
-    // testPlusTGatesTheTopicOnHalfopAndAVoiceEditsNoModes, testAnUnknownSpecOpensNoRankGate,
-    // testNothingIsEditableOutOfTheChannel
 }

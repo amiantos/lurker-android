@@ -4,8 +4,14 @@
 package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.model.AwayState
+import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.ISOTime
+import net.amiantos.lurkerkit.model.Network
+import net.amiantos.lurkerkit.store.LurkerStore
+import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -110,8 +116,80 @@ class AwayStateTests {
 
     // MARK: - Store
 
-    // Waiting on LurkerStore, ChatState (and the private `snapshot` helper and `wentAway`):
-    // testTheSnapshotSeedsTheNetworksAwayState, testALiveFramePatchesIt, testANullFrameClearsIt,
-    // testASnapshotWithNoAwayClearsAStaleOne, testAFrameForAnUnknownNetworkMaterializesNothing,
-    // testTheRestRosterDoesNotClobberIt
+    private fun snapshot(away: AwayState?): ServerFrame =
+        ServerFrame.Snapshot(
+            listOf(
+                NetworkSnapshot(id = 2, state = ConnectionState.Connected, nick = "me", channels = emptyList(), away = away),
+            ),
+            globalIgnores = emptyList(), maxUploadBytes = null,
+        )
+
+    private val wentAway = AwayState(
+        active = true, message = "brb", since = Instant.ofEpochSecond(1_784_548_800),
+    )
+
+    @Test
+    fun testTheSnapshotSeedsTheNetworksAwayState() {
+        val store = LurkerStore()
+        store.apply(snapshot(wentAway))
+        assertEquals(wentAway, store.state.networks[2]?.away)
+    }
+
+    @Test
+    fun testALiveFramePatchesIt() {
+        val store = LurkerStore()
+        store.apply(snapshot(null))
+        store.apply(ServerFrame.AwayState(networkId = 2, away = wentAway))
+        assertEquals("brb", store.state.networks[2]?.away?.message)
+
+        val cameBack = AwayState(
+            active = false, message = "brb", since = wentAway.since,
+            backAt = Instant.ofEpochSecond(1_784_552_400),
+        )
+        store.apply(ServerFrame.AwayState(networkId = 2, away = cameBack))
+        assertEquals(cameBack.backAt, store.state.networks[2]?.away?.backAt)
+        assertEquals(
+            wentAway.since, store.state.networks[2]?.away?.since,
+            "since survives /back — the completed pair is what the dividers render",
+        )
+    }
+
+    @Test
+    fun testANullFrameClearsIt() {
+        val store = LurkerStore()
+        store.apply(snapshot(wentAway))
+        store.apply(ServerFrame.AwayState(networkId = 2, away = null))
+        assertNull(store.state.networks[2]?.away)
+    }
+
+    @Test
+    fun testASnapshotWithNoAwayClearsAStaleOne() {
+        // A reconnect after coming back on another device. The snapshot is this network's whole
+        // live state, so keeping the old value would strand an "away" marker in every buffer.
+        val store = LurkerStore()
+        store.apply(snapshot(wentAway))
+        store.apply(snapshot(null))
+        assertNull(store.state.networks[2]?.away)
+    }
+
+    @Test
+    fun testAFrameForAnUnknownNetworkMaterializesNothing() {
+        // The away stream is broadcast from a live connection, so its network is in the
+        // snapshot by definition. Creating a row here would invent a network with no name and
+        // no state, which the roster would then render.
+        val store = LurkerStore()
+        store.apply(ServerFrame.AwayState(networkId = 99, away = wentAway))
+        assertNull(store.state.networks[99])
+    }
+
+    @Test
+    fun testTheRestRosterDoesNotClobberIt() {
+        // `GET /api/networks` carries no live state — it merges a name in. An away lost to it
+        // would vanish every time the roster refreshed.
+        val store = LurkerStore()
+        store.apply(snapshot(wentAway))
+        store.apply(ServerFrame.Networks(listOf(Network(id = 2, name = "Libera"))))
+        assertEquals("Libera", store.state.networks[2]?.name)
+        assertEquals(wentAway, store.state.networks[2]?.away)
+    }
 }

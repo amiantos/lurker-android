@@ -27,10 +27,11 @@ kotlin {
 
 dependencies {
     // `api`: these appear in the kit's own signatures — `JsonElement` (settings values),
-    // `HttpUrl` and `okio.ByteString` — so a consumer has to be able to name them.
+    // `HttpUrl` and `okio.ByteString`, `Flow`/`StateFlow` (the store and the badge) — so a
+    // consumer has to be able to name them.
     api(libs.kotlinx.serialization.json)
     api(libs.okhttp)
-    implementation(libs.kotlinx.coroutines.core)
+    api(libs.kotlinx.coroutines.core)
     testImplementation(libs.kotlin.test.junit)
     testImplementation(libs.kotlinx.coroutines.test)
 }

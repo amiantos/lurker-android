@@ -4,6 +4,7 @@
 package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.commands.ArgKind
 import net.amiantos.lurkerkit.commands.CommandCompletion
@@ -15,15 +16,21 @@ import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.BufferOrder
+import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.DccChat
 import net.amiantos.lurkerkit.model.DccOpens
 import net.amiantos.lurkerkit.model.EventType
+import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.PendingDccOpen
 import net.amiantos.lurkerkit.model.SearchQuery
+import net.amiantos.lurkerkit.model.StatusLight
+import net.amiantos.lurkerkit.store.LurkerStore
+import net.amiantos.lurkerkit.store.SocketStatus
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -241,6 +248,23 @@ class DccChatTests {
 
     // MARK: - Status light
 
+    /** The chat's session, never the network's state: the chat works while the IRC link is down. */
+    @Test
+    fun testTheLightFollowsTheSessionNotTheNetwork() {
+        assertEquals(StatusLight.Good, StatusLight.ofDccChat(reachable = true, connection = SocketStatus.Connected, live = true))
+        assertEquals(StatusLight.Bad, StatusLight.ofDccChat(reachable = true, connection = SocketStatus.Connected, live = false))
+        assertEquals(
+            StatusLight.Warn, StatusLight.ofDccChat(reachable = true, connection = SocketStatus.Connected, live = null),
+            "not known until this socket's snapshot lands",
+        )
+        // The outer layers still win: a live chat is out of reach from a phone with no path.
+        assertEquals(StatusLight.Bad, StatusLight.ofDccChat(reachable = false, connection = SocketStatus.Connected, live = true))
+        assertEquals(
+            StatusLight.Warn,
+            StatusLight.ofDccChat(reachable = true, connection = SocketStatus.Reconnecting, live = true),
+        )
+    }
+
     // MARK: - Wire
 
     @Test
@@ -275,6 +299,156 @@ class DccChatTests {
     }
 
     // MARK: - Store
+
+    private fun snapshot(
+        id: Int = 1,
+        state: ConnectionState = ConnectionState.Connected,
+        chats: List<String> = emptyList(),
+        offers: List<String> = emptyList(),
+    ): ServerFrame =
+        ServerFrame.Snapshot(
+            listOf(
+                NetworkSnapshot(
+                    id = id, state = state, nick = "me", channels = emptyList(), dccChats = chats, dccChatOffers = offers,
+                ),
+            ),
+            globalIgnores = emptyList(), maxUploadBytes = null,
+        )
+
+    private val bob = BufferKey(networkId = 1, target = "=bob")
+
+    /**
+     * The reverse of a DM: the chat is a socket straight to the peer, so a dropped network says
+     * nothing about it.
+     */
+    @Test
+    fun testAChatIsLiveWhateverTheNetworkIsDoing() {
+        val store = LurkerStore()
+        store.apply(snapshot(state = ConnectionState.Disconnected, chats = listOf("Bob")))
+        assertTrue(store.state.isDccChatLive(bob), "listed live, and case-folded")
+        assertFalse(store.state.isDccChatLive(BufferKey(networkId = 1, target = "=carol")))
+        assertFalse(store.state.isDccChatLive(BufferKey(networkId = 1, target = "bob")), "a DM is not a chat")
+    }
+
+    @Test
+    fun testLiveStateFollowsTheEvents() {
+        val store = LurkerStore()
+        store.apply(snapshot())
+        store.apply(ServerFrame.DccChatState(networkId = 1, nick = "bob", live = true))
+        assertTrue(store.state.isDccChatLive(bob))
+        store.apply(ServerFrame.DccChatState(networkId = 1, nick = "BOB", live = false))
+        assertFalse(store.state.isDccChatLive(bob))
+    }
+
+    @Test
+    fun testTheSnapshotReplacesLiveChatsWholesale() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.DccChatState(networkId = 1, nick = "bob", live = true))
+        // The chat ended while this device was away: only the snapshot can say so.
+        store.apply(snapshot(chats = emptyList()))
+        assertFalse(store.state.isDccChatLive(bob))
+    }
+
+    @Test
+    fun testAnOfferWaitsUntilTheServerClosesIt() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.DccChatOffer(networkId = 1, nick = "bob", passive = true))
+        assertEquals(listOf("bob"), store.state.dccChatOffers.map { it.nick })
+        assertEquals(true, store.state.dccChatOffers.firstOrNull()?.passive)
+        assertEquals(bob, store.state.dccChatOffers.firstOrNull()?.key)
+        store.apply(ServerFrame.DccChatOfferClosed(networkId = 1, nick = "Bob"))
+        assertEquals(emptyList(), store.state.dccChatOffers)
+    }
+
+    /** Offering again is a new question, so it gets a new id — which is what makes the app ask it. */
+    @Test
+    fun testAnOfferMadeAgainReplacesTheOldOneWithANewId() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.DccChatOffer(networkId = 1, nick = "bob", passive = false))
+        val first = store.state.dccChatOffers[0].id
+        store.apply(ServerFrame.DccChatOffer(networkId = 1, nick = "bob", passive = false))
+        assertEquals(1, store.state.dccChatOffers.size)
+        assertNotEquals(first, store.state.dccChatOffers[0].id)
+    }
+
+    /**
+     * A reconnect re-lists an offer still pending. It must stay the SAME offer, or the app would
+     * ask about it again on every reconnect.
+     */
+    @Test
+    fun testASnapshotKeepsAnOfferWeAlreadyHold() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.DccChatOffer(networkId = 1, nick = "bob", passive = true))
+        val held = store.state.dccChatOffers[0]
+        store.apply(snapshot(offers = listOf("Bob")))
+        assertEquals(listOf(held), store.state.dccChatOffers, "same id, and `passive` survives")
+    }
+
+    /** The case the snapshot exists for: the offer came in while the phone's socket was asleep. */
+    @Test
+    fun testASnapshotSurfacesAnOfferWeMissed() {
+        val store = LurkerStore()
+        store.apply(snapshot(offers = listOf("carol")))
+        assertEquals(listOf("carol"), store.state.dccChatOffers.map { it.nick })
+        assertEquals(false, store.state.dccChatOffers.firstOrNull()?.passive, "the snapshot doesn't say")
+    }
+
+    /**
+     * …and the other half: the offer was answered or expired while we weren't listening, so the
+     * closing event never reached us.
+     */
+    @Test
+    fun testASnapshotRetiresAnOfferItNoLongerLists() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.DccChatOffer(networkId = 1, nick = "bob", passive = false))
+        store.apply(snapshot(offers = emptyList()))
+        assertEquals(emptyList(), store.state.dccChatOffers)
+    }
+
+    /**
+     * ⚠ The list survives a reconnect until the new snapshot replaces it, so until then nobody may
+     * read it as an answer — the info sheet offered End or Start off the last session's list.
+     */
+    @Test
+    fun testASessionIsUnknownUntilThisSocketsSnapshot() {
+        val store = LurkerStore()
+        assertNull(store.state.dccChatSession(bob), "nothing heard yet")
+        store.apply(ServerFrame.SocketOpen)
+        store.apply(snapshot(chats = listOf("bob")))
+        assertEquals(true, store.state.dccChatSession(bob))
+        assertEquals(false, store.state.dccChatSession(BufferKey(networkId = 1, target = "=carol")))
+
+        store.apply(ServerFrame.SocketClosed(reason = null, code = null))
+        assertNull(store.state.dccChatSession(bob), "the socket is down; the list is last session's")
+        store.apply(ServerFrame.SocketOpen)
+        assertNull(store.state.dccChatSession(bob), "back, but the snapshot hasn't landed")
+        store.apply(snapshot(chats = emptyList()))
+        assertEquals(false, store.state.dccChatSession(bob))
+    }
+
+    /** A deleted network's chats end with it, and its offers can't be answered any more. */
+    @Test
+    fun testDroppingANetworkForgetsItsChatsAndOffers() {
+        val store = LurkerStore()
+        store.apply(
+            ServerFrame.Snapshot(
+                listOf(
+                    NetworkSnapshot(
+                        id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList(),
+                        dccChats = listOf("bob"), dccChatOffers = listOf("carol"),
+                    ),
+                    NetworkSnapshot(
+                        id = 2, state = ConnectionState.Connected, nick = "me", channels = emptyList(),
+                        dccChatOffers = listOf("dave"),
+                    ),
+                ),
+                globalIgnores = emptyList(), maxUploadBytes = null,
+            ),
+        )
+        store.apply(ServerFrame.Networks(listOf(Network(id = 2, name = "Other"))))
+        assertFalse(store.state.isDccChatLive(bob))
+        assertEquals(listOf("dave"), store.state.dccChatOffers.map { it.nick }, "the other network's offer stays")
+    }
 
     // MARK: - Going to a chat once its buffer exists
 
@@ -422,13 +596,12 @@ class DccChatTests {
         assertNull(opens.waiting)
     }
 
-    // Waiting on StatusLight: testTheLightFollowsTheSessionNotTheNetwork
-    //
-    // Waiting on LurkerStore, ChatState (and the private `snapshot` helper and `bob`):
-    // testAChatIsLiveWhateverTheNetworkIsDoing, testLiveStateFollowsTheEvents,
-    // testTheSnapshotReplacesLiveChatsWholesale, testAnOfferWaitsUntilTheServerClosesIt,
-    // testAnOfferMadeAgainReplacesTheOldOneWithANewId, testASnapshotKeepsAnOfferWeAlreadyHold,
-    // testASnapshotSurfacesAnOfferWeMissed, testASnapshotRetiresAnOfferItNoLongerLists,
-    // testASessionIsUnknownUntilThisSocketsSnapshot, testDroppingANetworkForgetsItsChatsAndOffers,
-    // testSignOutForgetsOffersAndChats
+    @Test
+    fun testSignOutForgetsOffersAndChats() {
+        val store = LurkerStore()
+        store.apply(snapshot(chats = listOf("bob"), offers = listOf("carol")))
+        store.reset()
+        assertEquals(emptyList(), store.state.dccChatOffers)
+        assertFalse(store.state.isDccChatLive(bob))
+    }
 }

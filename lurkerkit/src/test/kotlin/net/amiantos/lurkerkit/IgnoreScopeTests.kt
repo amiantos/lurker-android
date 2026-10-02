@@ -4,7 +4,12 @@
 package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.model.Buffer
+import net.amiantos.lurkerkit.model.BufferKey
+import net.amiantos.lurkerkit.model.BufferKind
+import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.ISOTime
 import net.amiantos.lurkerkit.model.IgnoreInput
@@ -13,7 +18,12 @@ import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NickCompletion
+import net.amiantos.lurkerkit.model.TypingActivity
+import net.amiantos.lurkerkit.model.TypingEntry
+import net.amiantos.lurkerkit.store.ChatState
+import net.amiantos.lurkerkit.store.LurkerStore
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -145,6 +155,59 @@ class IgnoreScopeTests {
     // MARK: - Frames
 
     @Test
+    fun testTheSnapshotSeedsBothBucketsAndReplacesThemWholesale() {
+        val store = LurkerStore()
+        store.apply(
+            ServerFrame.Snapshot(
+                listOf(
+                    NetworkSnapshot(
+                        id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList(),
+                        ignoredMasks = listOf(rule(mask = "local")),
+                    ),
+                ),
+                globalIgnores = listOf(rule(mask = "spammer")), maxUploadBytes = null,
+            ),
+        )
+        assertTrue(store.state.ignores.isHidden(networkId = 1, input = input(nick = "spammer")))
+        assertTrue(store.state.ignores.isHidden(networkId = 1, input = input(nick = "local")))
+
+        // A reconnect re-sends the account's whole rule set, so a rule deleted while this
+        // device was away has to disappear rather than survive as a leftover.
+        store.apply(
+            ServerFrame.Snapshot(
+                listOf(NetworkSnapshot(id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList())),
+                globalIgnores = emptyList(), maxUploadBytes = null,
+            ),
+        )
+        assertTrue(store.state.ignores.isEmpty(1))
+    }
+
+    @Test
+    fun testIgnoreListUpdatedReplacesOnlyTheScopeItNames() {
+        val store = LurkerStore()
+        store.apply(
+            ServerFrame.Snapshot(
+                listOf(
+                    NetworkSnapshot(
+                        id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList(),
+                        ignoredMasks = listOf(rule(mask = "local")),
+                    ),
+                ),
+                globalIgnores = listOf(rule(mask = "spammer")), maxUploadBytes = null,
+            ),
+        )
+        // networkId null is the GLOBAL bucket here — not the system buffer, which is what a null
+        // networkId means on every other frame.
+        store.apply(ServerFrame.IgnoreListUpdated(networkId = null, rules = emptyList()))
+        assertFalse(store.state.ignores.isHidden(networkId = 1, input = input(nick = "spammer")))
+        assertTrue(store.state.ignores.isHidden(networkId = 1, input = input(nick = "local")))
+
+        store.apply(ServerFrame.IgnoreListUpdated(networkId = 1, rules = listOf(rule(mask = "someone-else"))))
+        assertFalse(store.state.ignores.isHidden(networkId = 1, input = input(nick = "local")))
+        assertTrue(store.state.ignores.isHidden(networkId = 1, input = input(nick = "someone-else")))
+    }
+
+    @Test
     fun testTheWireShapeParsesIntoARule() {
         val frame = FrameParser.parseWs(
             """
@@ -224,6 +287,73 @@ class IgnoreScopeTests {
     }
 
     // MARK: - Store-level readers
+
+    /**
+     * The typing filter lives in `typists(in:)` so every surface that shows composing peers
+     * gets it without asking. Only a whole-identity rule counts — a tag carries no body.
+     */
+    @Test
+    fun testAnIgnoredPeerIsNotReportedAsTyping() {
+        val key = BufferKey(networkId = 1, target = "#chan")
+        val now = Instant.ofEpochSecond(1_000_000)
+        var state = ChatState(
+            buffers = mapOf(key.id to Buffer(networkId = 1, target = "#chan", kind = BufferKind.Channel)),
+            typing = mapOf(
+                key.id to mapOf(
+                    "bob" to TypingEntry(
+                        nick = "bob", activity = TypingActivity.Active, startedAt = now,
+                        expiresAt = now.plusSeconds(6), userhost = "bob!u@h",
+                    ),
+                    "alice" to TypingEntry(
+                        nick = "alice", activity = TypingActivity.Active, startedAt = now.plusSeconds(1),
+                        expiresAt = now.plusSeconds(7), userhost = "alice!u@h",
+                    ),
+                ),
+            ),
+        )
+        assertEquals(listOf("bob", "alice"), state.typists(key, now = now))
+
+        state = state.copy(ignores = IgnoreSet(global = listOf(rule(mask = "bob"))))
+        assertEquals(listOf("alice"), state.typists(key, now = now))
+
+        // A level-scoped rule says nothing about a typing tag, so it leaves them showing.
+        state = state.copy(ignores = IgnoreSet(global = listOf(rule(mask = "bob", levels = listOf("JOINS")))))
+        assertEquals(listOf("bob", "alice"), state.typists(key, now = now))
+    }
+
+    /**
+     * The nicklist filter lives on `ChatState` for the same reason the typing one does: the
+     * member list, the buffer-info count and nick completion all read through it, and the
+     * info sheet used to report a count including people the nicklist beside it was hiding.
+     */
+    @Test
+    fun testVisibleMembersDropsIgnoredPeopleButNeverYou() {
+        val key = BufferKey(networkId = 1, target = "#chan")
+        var state = ChatState(
+            networks = mapOf(1 to Network(id = 1, name = "libera", state = ConnectionState.Connected, nick = "Me")),
+            buffers = mapOf(key.id to Buffer(networkId = 1, target = "#chan", kind = BufferKind.Channel)),
+            members = mapOf(
+                key.id to listOf(
+                    Member(nick = "me", user = "u", host = "shared.host"),
+                    Member(nick = "bob", user = "u", host = "shared.host"),
+                    Member(nick = "alice", user = "u", host = "elsewhere"),
+                ),
+            ),
+        )
+        assertEquals(listOf("me", "bob", "alice"), state.visibleMembers(key).map { it.nick })
+
+        state = state.copy(ignores = IgnoreSet(global = listOf(rule(mask = "bob"))))
+        assertEquals(listOf("me", "alice"), state.visibleMembers(key).map { it.nick })
+
+        // A mask broad enough to cover your own nick still can't remove you — and the compare
+        // folds case, since the roster's casing needn't match the nicklist's.
+        state = state.copy(ignores = IgnoreSet(global = listOf(rule(mask = "*!*@shared.host"))))
+        assertEquals(listOf("me", "alice"), state.visibleMembers(key).map { it.nick })
+
+        // A level-scoped rule leaves everyone listed: they're still in the channel.
+        state = state.copy(ignores = IgnoreSet(global = listOf(rule(mask = "bob", levels = listOf("PUBLIC")))))
+        assertEquals(listOf("me", "bob", "alice"), state.visibleMembers(key).map { it.nick })
+    }
 
     @Test
     fun testAMutedBufferIsReportedByTheSetTheBufferListReads() {
@@ -465,10 +595,24 @@ class IgnoreScopeTests {
         )
     }
 
-    // Waiting on LurkerStore:
-    // testTheSnapshotSeedsBothBucketsAndReplacesThemWholesale,
-    // testIgnoreListUpdatedReplacesOnlyTheScopeItNames
-    //
-    // Waiting on ChatState: testAnIgnoredPeerIsNotReportedAsTyping,
-    // testVisibleMembersDropsIgnoredPeopleButNeverYou
+    /**
+     * `visibleMembers` recognises you with `IgnoreMatch.FoldedLiteral`, the kit's stand-in for
+     * Foundation's `caseInsensitiveCompare`, so a nick outside ASCII still finds its own row
+     * whatever casing the roster and the nicklist each hold.
+     */
+    @Test
+    fun testVisibleMembersFindsANonAsciiOwnNickInAnyCasing() {
+        val key = BufferKey(networkId = 1, target = "#chan")
+        val state = ChatState(
+            networks = mapOf(1 to Network(id = 1, name = "libera", state = ConnectionState.Connected, nick = "ÄRGER")),
+            members = mapOf(
+                key.id to listOf(
+                    Member(nick = "ärger", user = "u", host = "shared.host"),
+                    Member(nick = "bob", user = "u", host = "shared.host"),
+                ),
+            ),
+            ignores = IgnoreSet(global = listOf(rule(mask = "*!*@shared.host"))),
+        )
+        assertEquals(listOf("ärger"), state.visibleMembers(key).map { it.nick })
+    }
 }
