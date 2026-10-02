@@ -37,3 +37,19 @@ fun String.trimmingWhitespacesAndNewlines(): String = trim { it.isInWhitespacesA
 
 /** `trimmingCharacters(in: .whitespaces)`. */
 fun String.trimmingWhitespaces(): String = trim { it.isInWhitespaces() }
+
+/** Swift's `split(whereSeparator: \.isWhitespace)`: the runs between whitespace, none empty. */
+fun String.splitOnSwiftWhitespace(): List<String> {
+    val tokens = mutableListOf<String>()
+    var start = -1
+    for ((index, character) in withIndex()) {
+        if (character.isSwiftWhitespace()) {
+            if (start >= 0) tokens.add(substring(start, index))
+            start = -1
+        } else if (start < 0) {
+            start = index
+        }
+    }
+    if (start >= 0) tokens.add(substring(start))
+    return tokens
+}
