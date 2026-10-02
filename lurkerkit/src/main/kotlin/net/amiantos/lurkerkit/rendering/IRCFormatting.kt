@@ -190,7 +190,7 @@ object IRCFormatting {
      * slice the original.
      *
      * The web's `rawIndexForVisibleOffset` (`shared/textMatch.ts`), ported for its one caller:
-     * relay re-attribution (lurker-ios#277) matches a bot's envelope against stripped text and
+     * relay re-attribution (lurker#277) matches a bot's envelope against stripped text and
      * then has to hand back the relayed message with its OWN colours and bold intact.
      *
      * Offsets in and out are UTF-16 units — `TextRange`'s currency, and JavaScript's, so a
