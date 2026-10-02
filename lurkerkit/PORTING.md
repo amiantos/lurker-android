@@ -96,7 +96,8 @@ publish nor compare as a change.
 2. `mutating func` returning `Void` → immutable `data class`; the method keeps its name and
    returns the updated copy (`progress = progress.apply(frame)`).
 3. `mutating func` that also returns a value (a small state machine: `OutgoingTyping`) →
-   a plain `class` with `private set` properties and the same signatures. It has one owner,
+   a plain `class` with `private set` properties and the same signatures. One value-returning
+   mutator makes the whole type case 3, its `Void` mutators included. It has one owner,
    it never goes into `ChatState`, and it never travels through a flow. **Note every one of
    these in the ledger.**
 
@@ -204,6 +205,11 @@ are good material for a `// Port-only:` test (see `ServerAddressTests`).
 - **Do not improve.** No renames, no restructuring, no "more idiomatic" rewrite of logic. An
   improvement worth making is made in LurkerKit and ported.
 - **Do not port from a feature branch.** The ledger's pin is a commit on lurker-ios `main`.
+  Read the Swift at the pin, not from whatever a lurker-ios checkout has out:
+  `git -C ../lurker-ios archive <pin> LurkerKit | tar -x -C <somewhere>`.
+- **Do not signal processes.** No `pkill`, `killall` or `kill` from a porting session, whatever
+  seems stuck. BSD `pkill` reads everything after its first pattern as more patterns, and
+  `-f cat` matches every path under `/Applications`.
 
 ## Running
 
