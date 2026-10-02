@@ -6,7 +6,6 @@ package net.amiantos.lurkerkit.client
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import net.amiantos.lurkerkit.model.AwayState
@@ -569,175 +568,75 @@ internal object FrameParser {
     // MARK: - Private
 
     /**
-     * Port note: LurkerKit reads through Foundation's `JSONSerialization` and this reads through
-     * kotlinx.serialization. They are not the same machine, and this function is where the gap
-     * is closed, or left open on purpose. Every answer below was taken from the real Swift over
-     * a corpus, and is pinned in `FrameParserTests` (port-only).
+     * Port note: LurkerKit reads through Foundation's `JSONSerialization`; this reads through
+     * kotlinx.serialization, and kotlinx's answer is the one kept. The two agree on every frame
+     * the server can write (`JSON.stringify`) and part company only on text that isn't JSON or
+     * sits at an edge of it. The differences are pinned in `FrameParserTests` (port-only), every
+     * Foundation answer there taken from the real Swift over the same text:
      *
-     * Made to match Foundation:
-     * - A byte-order mark before the document is stepped over. Foundation steps over two.
-     * - ⚠ One leading U+FEFF is dropped from every string — values and keys, at any depth.
-     *   Foundation does this to each string it decodes, so on iOS a message that begins with
-     *   one arrives without it. Ported as LurkerKit has it.
-     * - An unquoted token that is not `true`, `false`, `null` or a number in JSON's grammar
-     *   (`01`, `+1`, `1.`, `NaN`, `hello`) fails the document. kotlinx hands such a token back
-     *   as a literal, and `Json.kt` would then read `1d` as 1.
-     * - An unescaped control character inside a string fails the document.
-     * - ⚠ More than 512 containers deep fails the document — a 513th may open only to close
-     *   again, empty. That is Foundation's limit, and here it is also what keeps the frame from
-     *   being a crash: kotlinx reads nested arrays by plain recursion and overflows the stack
-     *   a few thousand deep.
-     *
-     * Left as kotlinx has it. The server writes its frames with `JSON.stringify`, which can
-     * produce only the first of these:
      * - ⚠ A lone surrogate written as an escape (`"\ud83d"`, which is what `JSON.stringify`
      *   writes for half an emoji left by a `slice`): Foundation fails the whole document, so on
      *   iOS the frame is dropped. Here the string keeps the lone unit and the frame is read.
-     * - A number no `Double` can hold (`1e400`): Foundation fails the document for most
-     *   spellings of one; kotlinx reads the frame, and the number is simply not an integer.
-     * - A trailing comma (`[1,]`, `{"a":1,}`): Foundation reads it, kotlinx fails the document.
-     * - A repeated key: Foundation keeps the first value, kotlinx the last. Two keys that are
-     *   canonically equivalent (`é` precomposed and decomposed) are one key to Foundation and
-     *   two here.
+     * - ⚠ Foundation drops one leading U+FEFF from every string it decodes, so on iOS a message
+     *   that begins with one arrives without it. Here it is kept, as the web and the server's
+     *   database keep it. That is the decoder's artefact, not LurkerKit's rule — nothing in
+     *   LurkerKit could fix it and send the fix here with a pin — so it is not reproduced.
+     * - A byte-order mark before the document: Foundation steps over one; kotlinx fails it.
+     * - A trailing comma (`[1,]`): Foundation reads past it; kotlinx fails the document.
+     * - A repeated key: Foundation keeps the first value, kotlinx the last.
+     * - An unquoted token that isn't JSON (`1d`, `hello`), or a raw control character inside a
+     *   string, fails the document in Foundation; kotlinx reads on, and `Json.kt` then sees a
+     *   literal that is not a number, or a string with the character in it.
+     * - A number no `Double` holds (`1e400`): Foundation fails the document for most spellings;
+     *   here the frame reads and the number is not an integer.
      *
-     * It never throws: a document kotlinx cannot read is null, as it is in LurkerKit — and so
-     * is one nested deeper than the thread's stack can follow, which Foundation has no notion of.
+     * Two things it does regardless: it never throws — a document kotlinx cannot read is null,
+     * as it is in LurkerKit — and it bounds the nesting, because kotlinx reads nested arrays by
+     * plain recursion and overflows the stack a few thousand deep. The bound is Foundation's own
+     * limit, 512 containers, so the two drop the same frames (bar a 513th that opens only to
+     * close again, which Foundation lets through); no real frame is deeper than six.
      */
     private fun `object`(text: String): JsonObject? {
-        var start = 0
-        while (start < 2 && start < text.length && text[start] == BYTE_ORDER_MARK) start += 1
-        if (foundationRefuses(text, start)) return null
+        if (nestsTooDeep(text)) return null
         return try {
-            val parsed = Json.parseToJsonElement(if (start == 0) text else text.substring(start))
-            if (parsed is JsonObject) asFoundationReads(parsed, 1) as? JsonObject else null
+            Json.parseToJsonElement(text) as? JsonObject
         } catch (_: IllegalArgumentException) {
             // `SerializationException` is one, and it is what every malformed document throws.
             null
         } catch (_: StackOverflowError) {
-            // The backstop. 512 deep is inside the limit and still a long way down for a
-            // recursive reader: on the host JVM it needs more than 256 KB of stack, and a
-            // thread with less drops the frame here rather than taking the app with it.
+            // The backstop: a thread whose stack cannot follow even 512 levels drops the frame
+            // here rather than taking the app with it.
             null
         }
     }
 
     /**
-     * The two refusals that have to be made on the text, before kotlinx sees it: a control
-     * character inside a string, which is gone from the parsed tree, and nesting past
-     * [MAX_DEPTH], which must never reach a recursive reader. See [object]. (The 513th container
-     * is let through here; [asFoundationReads] refuses it unless it is empty.)
-     *
-     * Only strings and brackets are followed, which is exact for any document that is JSON —
-     * and one that isn't is refused by the parser, whatever was counted here.
+     * Whether [text] has more than [MAX_DEPTH] containers open at once. Only strings and
+     * brackets are followed, which is exact for any document that is JSON — and one that isn't
+     * is refused by the parser, whatever was counted here.
      */
-    private fun foundationRefuses(text: String, start: Int): Boolean {
+    private fun nestsTooDeep(text: String): Boolean {
         var depth = 0
         var inString = false
-        var index = start
+        var index = 0
         while (index < text.length) {
             val unit = text[index]
             if (inString) {
-                when {
+                when (unit) {
                     // The escaped unit is not looked at: `\"` does not end the string.
-                    unit == '\\' -> index += 1
-                    unit == '"' -> inString = false
-                    unit < ' ' -> return true
+                    '\\' -> index += 1
+                    '"' -> inString = false
                 }
             } else {
                 when (unit) {
                     '"' -> inString = true
-                    '{', '[' -> {
-                        depth += 1
-                        if (depth > MAX_DEPTH + 1) return true
-                    }
+                    '{', '[' -> if (++depth > MAX_DEPTH) return true
                     '}', ']' -> depth -= 1
                 }
             }
             index += 1
         }
         return false
-    }
-
-    /**
-     * [element] as `JSONSerialization` would have handed it over, or null where it would have
-     * failed the document — see [object]. Returns the element itself, untouched, unless a string
-     * in it starts with U+FEFF; nearly every frame allocates nothing here.
-     */
-    private fun asFoundationReads(element: JsonElement, depth: Int): JsonElement? {
-        when (element) {
-            is JsonObject -> {
-                if (depth > MAX_DEPTH && element.isNotEmpty()) return null
-                var rewritten: LinkedHashMap<String, JsonElement>? = null
-                var index = 0
-                for ((key, value) in element) {
-                    val readKey = withoutLeadingMark(key)
-                    val readValue = asFoundationReads(value, depth + 1) ?: return null
-                    if (rewritten == null && (readKey !== key || readValue !== value)) {
-                        rewritten = LinkedHashMap(element.size)
-                        for ((earlierKey, earlierValue) in element.entries.take(index)) {
-                            rewritten[earlierKey] = earlierValue
-                        }
-                    }
-                    // Two keys that are one once the mark is gone: the first stands.
-                    rewritten?.putIfAbsent(readKey, readValue)
-                    index += 1
-                }
-                return if (rewritten == null) element else JsonObject(rewritten)
-            }
-            is JsonArray -> {
-                if (depth > MAX_DEPTH && element.isNotEmpty()) return null
-                var rewritten: ArrayList<JsonElement>? = null
-                for ((index, value) in element.withIndex()) {
-                    val readValue = asFoundationReads(value, depth + 1) ?: return null
-                    if (rewritten == null && readValue !== value) {
-                        rewritten = ArrayList(element.size)
-                        rewritten.addAll(element.subList(0, index))
-                    }
-                    rewritten?.add(readValue)
-                }
-                return if (rewritten == null) element else JsonArray(rewritten)
-            }
-            is JsonNull -> return element
-            is JsonPrimitive -> {
-                if (!element.isString) return if (isJsonLiteral(element.content)) element else null
-                val content = element.content
-                val read = withoutLeadingMark(content)
-                return if (read === content) element else JsonPrimitive(read)
-            }
-        }
-    }
-
-    private fun withoutLeadingMark(string: String): String =
-        if (string.isNotEmpty() && string[0] == BYTE_ORDER_MARK) string.substring(1) else string
-
-    /** Whether an unquoted token is one JSON has: `true`, `false`, or a number in its grammar. */
-    private fun isJsonLiteral(token: String): Boolean {
-        if (token == "true" || token == "false") return true
-        val length = token.length
-        var index = 0
-        if (index < length && token[index] == '-') index += 1
-        if (index >= length) return false
-        if (token[index] == '0') {
-            index += 1
-        } else if (token[index] in '1'..'9') {
-            while (index < length && token[index] in '0'..'9') index += 1
-        } else {
-            return false
-        }
-        if (index < length && token[index] == '.') {
-            index += 1
-            val digits = index
-            while (index < length && token[index] in '0'..'9') index += 1
-            if (index == digits) return false
-        }
-        if (index < length && (token[index] == 'e' || token[index] == 'E')) {
-            index += 1
-            if (index < length && (token[index] == '+' || token[index] == '-')) index += 1
-            val digits = index
-            while (index < length && token[index] in '0'..'9') index += 1
-            if (index == digits) return false
-        }
-        return index == length
     }
 
     private fun parseSnapshot(obj: JsonObject): ServerFrame {
@@ -1593,8 +1492,5 @@ internal object FrameParser {
         }
 }
 
-/** Foundation's nesting limit: a 513th container fails the document, unless it is empty. */
+/** Foundation's nesting limit, and the crash guard here — see [FrameParser.object]. */
 private const val MAX_DEPTH = 512
-
-/** U+FEFF, spelled as a number so no editor can lose it. */
-private const val BYTE_ORDER_MARK = 0xFEFF.toChar()

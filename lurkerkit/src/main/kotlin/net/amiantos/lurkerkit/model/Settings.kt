@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
+import net.amiantos.lurkerkit.client.asString
 
 /**
  * A stored setting value, in its decoded form. Mirrors the server's `SettingValue`
@@ -81,9 +82,7 @@ sealed interface SettingValue {
                     // coercion wearing a decode's clothing: the value we'd hold — and write back —
                     // would be a different list than the server sent. A key we can't represent
                     // exactly is one the caller should skip, which is what returning null gets it.
-                    val list = raw.map { element ->
-                        (element as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
-                    }
+                    val list = raw.map { element -> element.asString() ?: return null }
                     return StringList(list)
                 }
                 is JsonObject -> return null

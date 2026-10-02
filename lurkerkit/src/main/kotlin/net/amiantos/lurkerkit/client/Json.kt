@@ -25,13 +25,22 @@ import kotlinx.serialization.json.JsonPrimitive
 // iOS for that reason, and has to be one here. (Answers taken from Foundation, pinned in
 // `JsonTests`.)
 
+/** This element if it is a JSON string (quoted on the wire), else null — `as? String` on a value. */
+internal fun JsonElement?.asString(): String? =
+    (this as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+/** This element if it is an unquoted primitive — a number or a boolean — else null. */
+private fun JsonElement?.literal(): JsonPrimitive? =
+    (this as? JsonPrimitive)?.takeIf { !it.isString && it !is JsonNull }
+
+/** `as? Int` on a value rather than under a key, bridging a boolean the way the keyed read does. */
+internal fun JsonElement?.asLong(): Long? = literal()?.let(::integer)
+
 /** The value under [key] if it is a JSON string (quoted on the wire), else null. */
-private fun JsonObject.stringValue(key: String): String? =
-    (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+private fun JsonObject.stringValue(key: String): String? = this[key].asString()
 
 /** The value under [key] if it is an unquoted primitive — a number or a boolean — else null. */
-private fun JsonObject.literal(key: String): JsonPrimitive? =
-    (this[key] as? JsonPrimitive)?.takeIf { !it.isString && it !is JsonNull }
+private fun JsonObject.literal(key: String): JsonPrimitive? = this[key].literal()
 
 internal fun JsonObject.stringOrNull(key: String): String? =
     stringValue(key)?.takeIf { it.isNotEmpty() }
@@ -111,18 +120,8 @@ internal fun JsonElement.asObjects(): List<JsonObject>? {
  */
 internal fun JsonObject.strings(key: String): List<String>? {
     val array = this[key] as? JsonArray ?: return null
-    return array.map { element ->
-        (element as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
-    }
+    return array.map { element -> element.asString() ?: return null }
 }
-
-/** `as? String` on a value rather than under a key: the string, with no fallback and "" kept. */
-internal fun JsonElement?.asString(): String? =
-    (this as? JsonPrimitive)?.takeIf { it.isString }?.content
-
-/** `as? Int` on a value rather than under a key, bridging a boolean the way the keyed read does. */
-internal fun JsonElement?.asLong(): Long? =
-    (this as? JsonPrimitive)?.takeIf { !it.isString && it !is JsonNull }?.let(::integer)
 
 /**
  * The array of integers under [key], or null — `as? [Int]`. All-or-nothing, as `strings` is: one

@@ -152,6 +152,13 @@ This is where a faithful-looking translation goes wrong.
   ⚠ Never read `JsonPrimitive.content` or `.int` directly: both coerce (`"3"` → 3, `3` → "3").
 - A number and a boolean bridge into each other, as `NSNumber`s do: `true` reads as 1, `1`
   as `true`, `3.0` as 3. The helpers do this; a hand-rolled read must too.
+- ⚠ kotlinx is the decoder, not an emulation of `JSONSerialization`. The two agree on every
+  document `JSON.stringify` can write and differ at the edges (a lone-surrogate escape, a leading
+  BOM, a trailing comma, a repeated key, the one leading U+FEFF Foundation strips from every
+  string). The Kotlin keeps kotlinx's answer and pins each difference in a `// Port-only:` test
+  — see `FrameParser.object` — because a decoder's artefact is not LurkerKit's behaviour and no
+  fix made there would ever arrive here with a pin. What a parser here MUST do is never throw
+  and bound the nesting (kotlinx recurses; a few thousand `[` overflow the stack).
 - `Codable` → `@Serializable`.
 - A test that builds a dictionary literal → `Json.parseToJsonElement("""…""")` or
   `buildJsonObject { … }`.

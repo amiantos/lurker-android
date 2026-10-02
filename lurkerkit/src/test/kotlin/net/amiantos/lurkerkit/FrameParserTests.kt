@@ -644,9 +644,10 @@ class FrameParserTests {
     // What follows pins the seam between the two JSON decoders — Foundation's
     // `JSONSerialization` under LurkerKit, kotlinx.serialization here — on the inputs where they
     // part company. Every "Foundation …" below is the real Swift's answer, taken by running
-    // LurkerKit's `FrameParser` over the same text (see `FrameParser.object`'s Port note). The
-    // ones marked "matches" are made to agree by `FrameParser`; the ones marked "differs" are
-    // left as kotlinx has them, and this is where that is written down.
+    // LurkerKit's `FrameParser` over the same text. kotlinx's answer is the one kept (see
+    // `FrameParser.object`'s Port note), and this is where each difference is written down. None
+    // of these inputs can come from `JSON.stringify`, bar the lone surrogate and the string that
+    // begins with U+FEFF.
 
     /** U+FEFF, built from its number so no editor can quietly lose it from the source. */
     private val mark = 0xFEFF.toChar().toString()
@@ -654,89 +655,84 @@ class FrameParserTests {
     /** A JSON escape, as six characters of JSON text. */
     private fun escaped(hex: String): String = "\\" + "u" + hex
 
-    /** matches: a byte-order mark before the document is stepped over, as are two; never three */
+    /** differs: a byte-order mark before the document fails the frame here; Foundation steps over one (and fails two) */
     @Test
-    fun testABomBeforeTheDocumentIsSteppedOver() {
-        val error = ServerFrame.ServerError("x")
-        assertEquals(error, FrameParser.parseWs(mark + """{"kind":"error","text":"x"}"""))
-        assertEquals(error, FrameParser.parseWs(mark + mark + """{"kind":"error","text":"x"}"""))
-        assertEquals(error, FrameParser.parseWs(mark + " " + """{"kind":"error","text":"x"}"""))
-        assertEquals(ServerFrame.Ignored, FrameParser.parseWs(mark + mark + mark + """{"kind":"error","text":"x"}"""))
-        assertEquals(ServerFrame.Ignored, FrameParser.parseWs(" " + mark + """{"kind":"error","text":"x"}"""))
+    fun testABomBeforeTheDocumentFailsTheFrame() {
+        assertEquals(ServerFrame.Ignored, FrameParser.parseWs(mark + """{"kind":"error","text":"x"}"""))
+        assertEquals(ServerFrame.Ignored, FrameParser.parseWs(mark + mark + """{"kind":"error","text":"x"}"""))
         assertEquals(ServerFrame.Ignored, FrameParser.parseWs("""{"kind":"error","text":"x"}""" + mark))
+        // Ordinary whitespace around the document is fine on both.
+        assertEquals(ServerFrame.ServerError("ws"), FrameParser.parseWs("\n\t {\"kind\":\"error\",\"text\":\"ws\"}\r\n"))
     }
 
     /**
-     * matches: ⚠ one leading U+FEFF is dropped from every string — a value or a key, raw or
-     * escaped, at any depth — and only one. Foundation does this to each string it decodes, so
-     * on iOS a message that begins with one arrives without it; ported as LurkerKit has it.
+     * differs: ⚠ Foundation drops one leading U+FEFF from every string it decodes — a value or a
+     * key, raw or escaped, at any depth — so on iOS a message that begins with one arrives
+     * without it. Here the string is what the server sent.
      */
     @Test
-    fun testOneLeadingBomIsDroppedFromEveryString() {
-        assertEquals(ServerFrame.ServerError("bom"), FrameParser.parseWs("""{"kind":"error","text":"$mark""" + """bom"}"""))
-        assertEquals(ServerFrame.ServerError("bom"), FrameParser.parseWs("""{"kind":"error","text":"${escaped("feff")}bom"}"""))
-        assertEquals(ServerFrame.ServerError(""), FrameParser.parseWs("""{"kind":"error","text":"$mark"}"""))
-        assertEquals(ServerFrame.ServerError(mark + "x"), FrameParser.parseWs("""{"kind":"error","text":"$mark$mark""" + """x"}"""))
+    fun testALeadingBomInAStringIsKept() {
+        assertEquals(ServerFrame.ServerError("${mark}bom"), FrameParser.parseWs("""{"kind":"error","text":"$mark""" + """bom"}"""))
+        assertEquals(ServerFrame.ServerError("${mark}bom"), FrameParser.parseWs("""{"kind":"error","text":"${escaped("feff")}bom"}"""))
+        assertEquals(ServerFrame.ServerError(mark), FrameParser.parseWs("""{"kind":"error","text":"$mark"}"""))
         assertEquals(ServerFrame.ServerError("mid${mark}bom"), FrameParser.parseWs("""{"kind":"error","text":"mid${mark}bom"}"""))
-        assertEquals(ServerFrame.ServerError("trail$mark"), FrameParser.parseWs("""{"kind":"error","text":"trail$mark"}"""))
-        // A key too, which is how `kind` itself can be reached.
-        assertEquals(ServerFrame.ServerError("key"), FrameParser.parseWs("""{"${mark}kind":"error","text":"key"}"""))
-        assertEquals(ServerFrame.ServerError("kind"), FrameParser.parseWs("""{"kind":"${mark}error","text":"kind"}"""))
+        // A key too: on iOS `\ufeffkind` is `kind`; here it is a key nothing reads.
+        assertEquals(ServerFrame.Ignored, FrameParser.parseWs("""{"${mark}kind":"error","text":"key"}"""))
+        assertEquals(ServerFrame.Ignored, FrameParser.parseWs("""{"kind":"${mark}error","text":"kind"}"""))
         // Deep inside a frame: the nick, not just the text.
         val frame = FrameParser.parseWs(
             """{"kind":"irc","id":1,"networkId":1,"target":"#a","type":"message","nick":"${mark}alice","text":"$mark/me"}""",
         )
         if (frame !is ServerFrame.Live) fail("expected live, got $frame")
-        assertEquals("alice", frame.message.nick)
-        assertEquals("/me", frame.message.text)
-        // U+FFFE, the mark's mirror image, is an ordinary character.
-        assertEquals(ServerFrame.ServerError("${0xFFFE.toChar()}x"), FrameParser.parseWs("""{"kind":"error","text":"${0xFFFE.toChar()}x"}"""))
+        assertEquals("${mark}alice", frame.message.nick)
+        assertEquals("$mark/me", frame.message.text)
     }
 
     /**
-     * matches: an unquoted token that isn't JSON fails the frame. kotlinx hands these back as
-     * literals, and `Json.kt` would have read `1d` and `+1` as 1.
+     * differs: an unquoted token that isn't JSON fails the document in Foundation. kotlinx hands
+     * it back as a literal and reads on; `Json.kt` then sees a literal that is not a number.
      */
     @Test
-    fun testATokenThatIsNotJsonFailsTheFrame() {
+    fun testATokenThatIsNotJsonStillReadsTheFrame() {
         for (token in listOf("1d", "+1", "01", "1.", ".5", "-", "NaN", "Infinity", "0x10", "TRUE", "True", "nul", "hello", "1_000", "2.e3", "1e", "1e+")) {
-            assertEquals(ServerFrame.Ignored, FrameParser.parseWs("""{"kind":"error","text":"x","n":$token}"""), token)
+            assertEquals(ServerFrame.ServerError("x"), FrameParser.parseWs("""{"kind":"error","text":"x","n":$token}"""), token)
         }
-        // …and the tokens that are JSON still read.
+        // …and the tokens that are JSON read on both sides.
         for (token in listOf("0", "-0", "1", "1.5", "3.0", "1e3", "1E+5", "-0e-0", "0.1e1", "true", "false", "null", "9223372036854775807")) {
             assertEquals(ServerFrame.ServerError("x"), FrameParser.parseWs("""{"kind":"error","text":"x","n":$token}"""), token)
         }
+        // Read through a field, such a token is not a count — unless Java's number grammar
+        // happens to accept it: `Json.kt` trusts its token to be JSON, so `1d` reads as 1.
+        assertEquals(
+            ServerFrame.ReadState(networkId = 1, target = "#a", lastReadId = 0, unread = 0, highlights = 1),
+            FrameParser.parseWs("""{"kind":"read-state","networkId":1,"target":"#a","lastReadId":hello,"unread":NaN,"highlights":1d}"""),
+        )
     }
 
-    /** matches: an unescaped control character inside a string fails the frame; escaped, it reads */
+    /** differs: an unescaped control character inside a string fails the document in Foundation; here it is kept */
     @Test
-    fun testARawControlCharacterInAStringFailsTheFrame() {
+    fun testARawControlCharacterInAStringIsKept() {
         for (code in listOf(0x00, 0x01, 0x09, 0x0A, 0x0D, 0x1B, 0x1F)) {
             val raw = code.toChar().toString()
-            assertEquals(ServerFrame.Ignored, FrameParser.parseWs("""{"kind":"error","text":"a${raw}b"}"""), "U+%04X".format(code))
-            assertEquals(ServerFrame.Ignored, FrameParser.parseWs("""{"k${raw}ind":"error","text":"x"}"""), "U+%04X in a key".format(code))
+            assertEquals(ServerFrame.ServerError("a${raw}b"), FrameParser.parseWs("""{"kind":"error","text":"a${raw}b"}"""), "U+%04X".format(code))
         }
+        // Escaped, it reads on both.
         assertEquals(ServerFrame.ServerError("a\tb"), FrameParser.parseWs("""{"kind":"error","text":"a\tb"}"""))
         assertEquals(ServerFrame.ServerError("nul \u0000 x"), FrameParser.parseWs("""{"kind":"error","text":"nul ${escaped("0000")} x"}"""))
-        // DEL and the C1 range are not control characters to JSON.
+        // DEL and the C1 range are not control characters to JSON on either side.
         assertEquals(ServerFrame.ServerError("del ${0x7F.toChar()} x"), FrameParser.parseWs("""{"kind":"error","text":"del ${0x7F.toChar()} x"}"""))
         assertEquals(ServerFrame.ServerError("c1 ${0x85.toChar()} x"), FrameParser.parseWs("""{"kind":"error","text":"c1 ${0x85.toChar()} x"}"""))
-        // An escaped quote inside the string does not end it for the scan either.
-        assertEquals(ServerFrame.ServerError("q\"x"), FrameParser.parseWs("""{"kind":"error","text":"q\"x"}"""))
-        // Whitespace between tokens is only the four JSON names.
-        assertEquals(ServerFrame.ServerError("ws"), FrameParser.parseWs("\n\t {\"kind\":\"error\",\"text\":\"ws\"}\r\n"))
-        assertEquals(ServerFrame.Ignored, FrameParser.parseWs("{\"kind\":\"error\",${0x0C.toChar()}\"text\":\"x\"}"))
-        assertEquals(ServerFrame.Ignored, FrameParser.parseWs("{\"kind\":\"error\",${0xA0.toChar()}\"text\":\"x\"}"))
     }
 
     /**
-     * matches: 512 containers deep reads, a 513th may only open to close again empty, and
-     * anything deeper is dropped — Foundation's limit. ⚠ Here it is also the crash guard:
-     * kotlinx reads nested arrays by recursion, and 5,000 of them overflow the stack. Run on a
-     * thread with a stack of its own, so the answer does not depend on the test runner's.
+     * ⚠ The crash guard: kotlinx reads nested arrays by recursion, and 5,000 of them overflow
+     * the stack. The bound is Foundation's own limit, 512 containers, so the two sides drop the
+     * same frames — bar a 513th that opens only to close again, which Foundation reads and this
+     * does not. Run on a thread with a stack of its own, so the answer does not depend on the
+     * test runner's.
      */
     @Test
-    fun testNestingIsLimitedTheWayFoundationLimitsIt() {
+    fun testNestingIsBoundedAtFoundationsLimit() {
         fun frame(depth: Int, open: String, close: String, inner: String) =
             """{"kind":"error","text":"d$depth","j":""" + open.repeat(depth) + inner + close.repeat(depth) + "}"
         val results = mutableMapOf<String, ServerFrame>()
@@ -745,7 +741,6 @@ class FrameParserTests {
             results["arrays 511"] = FrameParser.parseWs(frame(511, "[", "]", "1"))
             results["arrays 512"] = FrameParser.parseWs(frame(512, "[", "]", "1"))
             results["arrays 512 empty"] = FrameParser.parseWs(frame(512, "[", "]", ""))
-            results["arrays 513 empty"] = FrameParser.parseWs(frame(513, "[", "]", ""))
             results["objects 511"] = FrameParser.parseWs(frame(511, """{"a":""", "}", "1"))
             results["objects 512"] = FrameParser.parseWs(frame(512, """{"a":""", "}", "1"))
             results["arrays 600"] = FrameParser.parseWs(frame(600, "[", "]", "1"))
@@ -759,8 +754,7 @@ class FrameParserTests {
         worker.join()
         assertEquals(ServerFrame.ServerError("d511"), results["arrays 511"])
         assertEquals(ServerFrame.Ignored, results["arrays 512"])
-        assertEquals(ServerFrame.ServerError("d512"), results["arrays 512 empty"])
-        assertEquals(ServerFrame.Ignored, results["arrays 513 empty"])
+        assertEquals(ServerFrame.Ignored, results["arrays 512 empty"])
         assertEquals(ServerFrame.ServerError("d511"), results["objects 511"])
         assertEquals(ServerFrame.Ignored, results["objects 512"])
         assertEquals(ServerFrame.Ignored, results["arrays 600"])
@@ -812,7 +806,8 @@ class FrameParserTests {
     fun testARepeatedKeyKeepsTheLastValue() {
         assertEquals(ServerFrame.ServerError("b"), FrameParser.parseWs("""{"kind":"error","text":"a","text":"b"}"""))
         assertEquals(ServerFrame.BacklogComplete, FrameParser.parseWs("""{"kind":"error","kind":"backlog-complete","text":"dup"}"""))
-        // Once the mark is gone two keys can collide that did not before; the first stands.
+        // Two keys that differ only by a leading mark are two keys here; Foundation strips the
+        // mark and keeps the first.
         assertEquals(ServerFrame.ServerError("a"), FrameParser.parseWs("""{"text":"a","${mark}text":"b","kind":"error"}"""))
     }
 
