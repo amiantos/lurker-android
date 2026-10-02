@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit.model
 
+import net.amiantos.lurkerkit.support.startOfDay
 import java.time.Instant
 import java.time.ZoneId
 
@@ -53,10 +54,6 @@ sealed interface HighlightDay {
                 On(dayStart)
             }
         }
-
-        /** `Calendar.startOfDay(for:)`: the first instant of `date`'s day in `zone`. Port-only. */
-        private fun startOfDay(date: Instant, zone: ZoneId): Instant =
-            date.atZone(zone).toLocalDate().atStartOfDay(zone).toInstant()
 
         /**
          * `Calendar.date(byAdding: .day, value: -1, to:)`: `date` moved back one calendar day,
