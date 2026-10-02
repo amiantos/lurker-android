@@ -3,6 +3,8 @@
 
 package net.amiantos.lurkerkit
 
+import kotlin.test.assertNull
+import net.amiantos.lurkerkit.model.member
 import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.MemberPrefix
 import kotlin.test.Test
@@ -27,6 +29,30 @@ class MemberPrefixTests {
         assertEquals("@", MemberPrefix.of(listOf("o")))
         assertEquals("%", MemberPrefix.of(listOf("h")))
         assertEquals("+", MemberPrefix.of(listOf("v")))
+    }
+
+    // MARK: - Your own glyph, for the composer's prompt (lurker-ios#135)
+
+    @Test
+    fun testFindingYourselfFoldsNickCase() {
+        val members = listOf(member("alice", listOf("o")), member("amiantos", listOf("v", "o")))
+        assertEquals(listOf("v", "o"), members.member(named = "Amiantos")?.modes)
+    }
+
+    @Test
+    fun testANickWhoseFoldChangesLengthIsStillFound() {
+        // "İ" is one UTF-16 unit and lowercases to two — a length check in front of the fold
+        // would turn this member away, for `channelAccess` as much as the prompt.
+        val members = listOf(member("alice"), member("İzmir", listOf("o")))
+        assertEquals(listOf("o"), members.member(named = "İzmir")?.modes)
+        assertEquals(listOf("o"), members.member(named = "i\u0307zmir")?.modes)
+    }
+
+    @Test
+    fun testNobodyIsYouBeforeNamesOrWithoutANick() {
+        // Another member's glyph would be a lie about you.
+        assertNull(listOf(member("alice", listOf("o"))).member(named = "amiantos"))
+        assertNull(listOf(member("", listOf("o"))).member(named = ""))
     }
 
     @Test

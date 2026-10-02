@@ -1,5 +1,5 @@
 {
-  "pin": "d3504789ccda48559fd12ce373dda8619256e3b9",
+  "pin": "6c903a5698ad8f57b13262f61f17544e98e634f9",
   "tranches": [
     {
       "id": "T1",
@@ -95,7 +95,8 @@
         "Model/Drafts.swift",
         "Model/PreviewText.swift",
         "Model/PreviewHiding.swift",
-        "Model/PreviewSelection.swift"
+        "Model/PreviewSelection.swift",
+        "Model/AwayStrip.swift"
       ]
     },
     {
@@ -163,7 +164,7 @@
     "Client/NotificationTap.swift": "Input is a `Map<String, Any?>`; FCM's all-strings data map is the shape Android will hand it.",
     "Model/Settings.swift": "`SettingValue.Int` is 32-bit; a wire number past that is skipped rather than wrapped.",
     "Model/ChannelModes.swift": "All but the `extension ChatState` at the end, which arrives with the store. `topicSetterLine` takes the date formatter from the app. `ChannelRefusals` and `ChannelModeDrafts` compare all their state, not just what is on screen.",
-    "Model/Replies.swift": "All but `stripAddress`, `shown`, `presenting` and `continues`, which need NickCompletion, IgnoreSet and RelayBotSet (T3).",
+    "Model/Replies.swift": "`shown` returns `Replies.Shown(quote, text)` for the named tuple.",
     "Model/Reactions.swift": "Grapheme counting through `BreakIterator`: matches Swift on JDK 21 for emoji sequences, not for Indic conjuncts; verify on a device.",
     "Model/Buffer.swift": "`BufferKey.id` folds with `lowercase()`, which applies final sigma where Swift does not.",
     "Model/BufferOrder.swift": "`localizedCaseInsensitiveCompare` → `java.text.Collator`. The host JDK orders punctuation differently from ICU; verify on a device.",
@@ -178,7 +179,22 @@
     "Model/WhoisResult.swift": "A plain value; the string-or-number reading is FrameParser's (T4).",
     "Model/Modes.swift": "No Swift test of its own; checked against the Swift over a corpus.",
     "Model/UploadsRequest.swift": "The query is encoded by `support.percentEncodedQuery`, to `URLComponents`' rule.",
-    "Model/NetworkProxy.swift": "`ProxyDraft` is a plain class edited through `setType` and `edited`, so the protocol cannot change without its port."
+    "Model/NetworkProxy.swift": "`ProxyDraft` is a plain class edited through `setType` and `edited`, so the protocol cannot change without its port.",
+    "Model/IgnoreRule.swift": "`summary` takes the expiry formatter from the app; the private `ExpiryText` is not ported.",
+    "Model/IgnoreMatch.swift": "Literal masks compare through `FoldedLiteral`, not `equals(ignoreCase)`. The pattern length limit counts UTF-16 units, as the server does, where LurkerKit counts characters. Case-insensitive matching of non-ASCII is engine-dependent; verify on a device.",
+    "Model/IgnoreSet.swift": "Value equality over both buckets, where LurkerKit's class has identity.",
+    "Commands/IgnoreArgs.swift": "`parse` returns `support.Result`.",
+    "Model/RelayEnvelope.swift": "`RelayTemplate` is a plain class (it holds a compiled regex). `.` is spelled out so the host JVM stops where ICU does.",
+    "Model/RelayBotSet.swift": "Value equality, where LurkerKit's class has identity.",
+    "Model/PreviewText.swift": "`stripHiddenUrls` takes an `AttributedBody` interface for `:app` to implement, where LurkerKit takes an `NSMutableAttributedString`.",
+    "Model/Consolidation.swift": "Returns structure, not sentences: the wording is the app's renderer's.",
+    "Model/MessageRows.swift": "`AwayDivider`'s reason is `awayMessage`. Day boundaries depend on time-zone data; verify on a device.",
+    "Commands/CommandParser.swift": "`parse` takes the app's date formatter, for the `/ignore` listing. Lines are cut by UTF-16 unit; differs from Swift only where a combining mark follows a slash, a space or a sigil. `body(after:)` falls back to `BreakIterator`; verify on a device.",
+    "Commands/Command.swift": "`CommandEffect` is a sealed interface of 23 cases in Swift order.",
+    "Model/NickCompletion.swift": "`spokenPunctuation` and `isMarkScalar` read the JDK's Unicode tables; verify on a device.",
+    "Model/Drafts.swift": "`DraftSync` is a mutable class (case 3).",
+    "Model/PreviewSelection.swift": "`looksLikeMedia` reads the path by hand to Foundation's rules rather than through `HttpUrl`; pinned by a port-only test.",
+    "Model/AwayStrip.swift": "Chooses how much of the date to show (`Since`, carrying the ICU skeleton); the app formats it."
   },
   "testNotes": {
     "BufferListPlaceholderTests.swift": {
@@ -277,14 +293,6 @@
         "testResolutionIsTransitive"
       ],
       "note": "Waiting on FrameParser, LurkerStore/ChatState, SettingsCache."
-    },
-    "SpoilerMarkupTests.swift": {
-      "waiting": [
-        "testRewritesUserAuthoredChatBodies",
-        "testLeavesServiceAndRawVerbsUntouched",
-        "testDoesNotRewriteGeneratedBodies"
-      ],
-      "note": "`SpoilerCommandCoverageTests` waits on CommandParser."
     },
     "UploadCapTests.swift": {
       "waiting": [
@@ -404,37 +412,15 @@
         "undoDropsBothHalves",
         "aClearForAnUnknownBufferIsIgnored",
         "aBacklogRetractsTheMarker",
-        "theBoundaryHides",
-        "theDividerIsFirst",
-        "anEmptyVisibleRegionKeepsTheUndo",
-        "anUnclearedBufferIsUntouched",
-        "detachedIgnoresTheMarker",
-        "startOfHistoryIsSuppressed",
-        "localLinesAreNeverHidden",
         "aHalfStatedMarkerIsDiscarded",
-        "theRowBuilderRefusesAHalfMarker",
         "aClearDropsLocalLines",
         "anUndoKeepsLocalLines",
-        "revealingShowsAHiddenAnchor",
-        "aRevealNeverTouchesTheMarker",
-        "theCommandParses",
-        "anUnknownArgumentStillClears"
+        "aRevealNeverTouchesTheMarker"
       ],
       "note": "What each waits on is in the comment at the bottom of the Kotlin class."
     },
     "DccChatTests.swift": {
       "waiting": [
-        "testDccChatOffersToANick",
-        "testPassiveIsAFlagInEitherPosition",
-        "testAnUnknownOptionIsRefusedRatherThanReadAsANick",
-        "testChatCloseIsCaughtAndPointedAtTheRealSpelling",
-        "testCloseIsIrssisTypeFirstForm",
-        "testABufferNameOrAChannelIsNotAPeer",
-        "testFileTransfersSayTheyAreNotHereRatherThanGoingRaw",
-        "testDccNeedsANetwork",
-        "testTheHelpShowsBothFormsAsTheyAreTyped",
-        "testCompletionFindsTheNickInEitherForm",
-        "testABareWhoisOrPingInAChatMeansThePeer",
         "testTheLightFollowsTheSessionNotTheNetwork",
         "testTheSnapshotCarriesLiveChatsAndWaitingOffers",
         "testTheThreeEventsNameThePeerInTheFromField",
@@ -542,7 +528,6 @@
         "testHighlightAndReactionRowsAndThePairedCursor",
         "testOneSidedCursorStillPagesAndNullEnds",
         "testAReactionRowWithoutAValueIsDropped",
-        "testParses",
         "testARenameCarriesTheRevision"
       ],
       "note": "What each waits on is in the comment at the bottom of the Kotlin class."
@@ -550,21 +535,7 @@
     "RepliesTests.swift": {
       "waiting": [
         "testRowsCarryReplyToAndTheStamp",
-        "testStripAddressNeedsPunctuationAfterTheNick",
-        "testQuoteAndStrippedText",
-        "testNoQuoteKeepsTheAddressItIsTheOnlySignOfWhoItsTo",
-        "testAnActionKeepsItsText",
-        "testIgnoredSinceHidesTheQuoteButNotYourOwnLine",
-        "testARelayedParentQuotesThePersonInside",
-        "testASplitReplyIsQuotedOnce",
-        "testARefusedLineComesHomeWithItsReply",
-        "testPresentingSetsTheQuoteAndTextAndPassesOthersThrough",
-        "testTakesBackTheAddressAndNothingElse",
-        "testLeavesADraftThatNoLongerOpensWithIt",
-        "testIsAddressedStillAgrees",
-        "testCopyKeepsTheAddressTheQuoteHides",
-        "testNicksFoldAsciiOnly",
-        "testStripAddressTakesEverySpaceAfterTheMark"
+        "testARefusedLineComesHomeWithItsReply"
       ],
       "note": "What each waits on is in the comment at the bottom of the Kotlin class."
     },
@@ -593,11 +564,68 @@
         "sendResultIsSilent"
       ],
       "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "DraftsTests.swift": {
+      "waiting": [
+        "testParsesTheSnapshotWithItsReplies",
+        "testAnUpdateWithoutAReplyKeyIsNotOneThatClearsIt",
+        "testTheSnapshotResolvesRepliesAndSkipsEmptyDrafts",
+        "testAReplyWithNothingTypedIsADraft",
+        "testTheSnapshotLeavesWhatThisDeviceIsHolding",
+        "testTheSnapshotIsAuthoritativeForWhatItLeavesOut",
+        "testAnUpdateFromAnOlderServerKeepsTheReply",
+        "testARelayedLineIsRepliedToAsThePersonInside",
+        "testALineFromSomeoneIgnoredSinceIsStillTheReplyWithoutTheirWords",
+        "testAClosedBufferTakesItsDraft",
+        "testADeletedNetworkTakesItsDraftsAndOnlyItsDrafts",
+        "testARenameCarriesTheDraft",
+        "testARenameCarriesADraftWhoseRowHasntArrived",
+        "testAMergeKeepsTheSurvivorsDraft",
+        "testAMergeAdoptsTheAbsorbedDraftWhenTheSurvivorHasNone",
+        "testAMergeDropsTheAbsorbedEditInTheViewModelToo",
+        "testAnEditOutranksTheServerUntilItGoesOut",
+        "testAFlushWithNoSocketKeepsTheEditForTheNextConnect",
+        "testAnotherDevicesWriteLandsWhenNothingHereIsNewer",
+        "testTheSystemBufferAndServerLogsKeepNoDraft",
+        "testClosingABufferDropsItsWaitingEdit",
+        "testARenameCarriesTheWaitingEdit"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "IgnoreArgsTests.swift": {
+      "waiting": [
+        "testTheEncodedRuleRoundTripsThroughTheFrameDecoder",
+        "testTheEncoderOmitsUnsetDimensionsRatherThanSendingNulls"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "IgnoreScopeTests.swift": {
+      "waiting": [
+        "testTheSnapshotSeedsBothBucketsAndReplacesThemWholesale",
+        "testIgnoreListUpdatedReplacesOnlyTheScopeItNames",
+        "testTheWireShapeParsesIntoARule",
+        "testAnIgnoreUpdateWithoutAUsableMasksArrayIsDroppedNotReadAsEmpty",
+        "testANullNetworkIdParsesAsTheGlobalScope",
+        "testAMinimalRuleParsesWithEverythingUnconstrained",
+        "testAnIgnoredPeerIsNotReportedAsTyping",
+        "testVisibleMembersDropsIgnoredPeopleButNeverYou"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "RelayBotsTests.swift": {
+      "waiting": [
+        "testTheSnapshotSeedsMarksAndReplacesThemWholesale",
+        "testTheUpdateFramePatchesOneNick",
+        "testParsesTheSnapshotAndUpdateFrames"
+      ],
+      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
+    },
+    "AwayStripTests.swift": {
+      "note": "Three assertions about what `DateFormatter` writes for a template are left to the app's formatter, on a device."
     }
   },
   "partial": {
     "Client/Uploads.swift": "T6",
-    "Model/Replies.swift": "T3",
     "Model/ChannelModes.swift": "T5"
   }
 }

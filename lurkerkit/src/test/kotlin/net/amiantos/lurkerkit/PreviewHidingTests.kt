@@ -6,6 +6,7 @@ package net.amiantos.lurkerkit
 import net.amiantos.lurkerkit.commands.SpoilerMarkup
 import net.amiantos.lurkerkit.model.AttributedBody
 import net.amiantos.lurkerkit.model.PreviewHiding
+import net.amiantos.lurkerkit.model.PreviewSelection
 import net.amiantos.lurkerkit.model.PreviewText
 import net.amiantos.lurkerkit.rendering.IRCFormatting
 import net.amiantos.lurkerkit.rendering.URLMatcher
@@ -172,7 +173,27 @@ class PreviewHidingTests {
         assertTrue(hidden(null, a).isEmpty())
     }
 
-    // Waiting on PreviewSelection: bracketedIsNeverACandidate
+    /** a bracketed URL never becomes a candidate, so its text is never hidden */
+    @Test
+    fun bracketedIsNeverACandidate() {
+        // ⚠⚠ Written first as `hideableUrls("<a>", candidates: [a])`, which passed against every
+        // implementation — including one with the bracket test deleted — because `<` and `>` are
+        // not whitespace, so a bracketed URL can never sit at a blank edge in the first place.
+        // That assertion was about the punctuation, not about the rule.
+        //
+        // What actually keeps a bracketed URL's address on screen is upstream: it is never
+        // resolved, so it is never in `candidates`. That is the property worth guarding, and it
+        // spans the two modules, so the test does too.
+        val text = "<$a>"
+        val candidates = PreviewSelection.urls(text, inlineMedia = true, linkPreviews = true).toSet()
+        assertTrue(candidates.isEmpty(), "nothing was resolved, so nothing can stand in for it")
+        assertTrue(PreviewHiding.hideableUrls(text, candidates = candidates).isEmpty())
+
+        // And the same message without the brackets does hide, so the assertion above is about
+        // the brackets rather than about the fixture.
+        val bare = PreviewSelection.urls(a, inlineMedia = true, linkPreviews = true).toSet()
+        assertEquals(setOf(a), PreviewHiding.hideableUrls(a, candidates = bare))
+    }
 }
 
 /**

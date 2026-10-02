@@ -7,7 +7,9 @@ import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.IgnoreInput
 import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.model.IgnoreSet
+import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.NickCompletion
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -314,6 +316,39 @@ class IgnoreScopeTests {
 
     // MARK: - Completion
 
+    @Test
+    fun testNickCompletionDropsAnIgnoredCandidate() {
+        val members = listOf(
+            Member(nick = "bobby", user = "u", host = "h"),
+            Member(nick = "bonnie", user = "u", host = "h"),
+        )
+        val messages = listOf(Message(id = 1, type = EventType.Message, nick = "bobby", text = "hi"))
+        val set = IgnoreSet(global = listOf(rule(mask = "bobby")))
+        val candidates = NickCompletion.candidates(
+            messages = messages, members = members, selfNick = "me", query = "bo", isChannel = true,
+            ignores = set, networkId = 1,
+        )
+        assertEquals(listOf("bonnie"), candidates)
+    }
+
+    /**
+     * A hostmask-only rule reaches a member (whose user/host the server sent) and not a
+     * speaker who has since left the channel and carries no mask — the same information the
+     * web has at the same point, so the same answer.
+     */
+    @Test
+    fun testACompletionCandidateIsJudgedOnItsReconstructedHostmask() {
+        val members = listOf(Member(nick = "bobby", user = "spam", host = "evil.example"))
+        val set = IgnoreSet(global = listOf(rule(mask = "*!spam@evil.example")))
+        assertEquals(
+            emptyList(),
+            NickCompletion.candidates(
+                messages = emptyList(), members = members, selfNick = "me", query = "bo", isChannel = true,
+                ignores = set, networkId = 1,
+            ),
+        )
+    }
+
     // Port-only:
 
     /**
@@ -351,7 +386,4 @@ class IgnoreScopeTests {
     //
     // Waiting on ChatState: testAnIgnoredPeerIsNotReportedAsTyping,
     // testVisibleMembersDropsIgnoredPeopleButNeverYou
-    //
-    // Waiting on NickCompletion: testNickCompletionDropsAnIgnoredCandidate,
-    // testACompletionCandidateIsJudgedOnItsReconstructedHostmask
 }

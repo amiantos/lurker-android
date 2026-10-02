@@ -4,15 +4,22 @@
 package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.model.EventType
+import net.amiantos.lurkerkit.model.IgnoreRule
+import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.MessageActionContext
 import net.amiantos.lurkerkit.model.MessageActionKey
 import net.amiantos.lurkerkit.model.MessageActionScope
 import net.amiantos.lurkerkit.model.MessageActions
+import net.amiantos.lurkerkit.model.NickCompletion
+import net.amiantos.lurkerkit.model.RelayBotSet
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.ReplyContext
+import net.amiantos.lurkerkit.model.ReplyParent
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -31,9 +38,21 @@ class RepliesTests {
     ): Message =
         Message(id = id, type = type, nick = nick, text = text, isSelf = isSelf, msgid = msgid, isE2E = e2e, replyTo = replyTo)
 
+    private val alice = ReplyParent(id = 7, nick = "alice", type = EventType.Message, text = "has anyone tried it?", userhost = "alice!a@host")
+
     // MARK: - Wire
 
     // MARK: - Text
+
+    @Test
+    fun testStripAddressNeedsPunctuationAfterTheNick() {
+        assertEquals("yes", Replies.stripAddress("alice: yes", nick = "alice"))
+        assertEquals("yes", Replies.stripAddress("ALICE, yes", nick = "alice"), "case-folded")
+        assertEquals("will you come?", Replies.stripAddress("will you come?", nick = "will"), "a word, not an address")
+        assertEquals("bob_: hi", Replies.stripAddress("bob_: hi", nick = "bob"), "bob_ is somebody else")
+        assertEquals("alice: ", Replies.stripAddress("alice: ", nick = "alice"), "never strips to nothing")
+        assertEquals("x", Replies.stripAddress("a.b: x", nick = "a.b"), "the nick is matched literally")
+    }
 
     @Test
     fun testExcerptIsOnePlainLine() {
@@ -54,6 +73,79 @@ class RepliesTests {
     }
 
     // MARK: - Shown
+
+    private fun shown(
+        reply: Message,
+        ignores: IgnoreSet = IgnoreSet.empty,
+        relayBots: RelayBotSet = RelayBotSet.empty,
+        ownNick: String? = "me",
+    ): Replies.Shown =
+        Replies.shown(
+            reply.replyTo!!, line = reply, networkId = 1, target = "#c",
+            ignores = ignores, relayBots = relayBots, ownNick = ownNick,
+        )
+
+    @Test
+    fun testQuoteAndStrippedText() {
+        val reply = line(text = "alice: yes", replyTo = ReplyContext(msgid = "p", parent = alice))
+        val result = shown(reply)
+        assertEquals("alice", result.quote?.nick)
+        assertEquals(7L, result.quote?.id)
+        assertEquals("yes", result.text)
+    }
+
+    @Test
+    fun testNoQuoteKeepsTheAddressItIsTheOnlySignOfWhoItsTo() {
+        val result = shown(line(text = "alice: yes", replyTo = ReplyContext(msgid = "p", parent = null)))
+        assertNull(result.quote)
+        assertEquals("alice: yes", result.text)
+    }
+
+    @Test
+    fun testAnActionKeepsItsText() {
+        val result = shown(line(text = "alice: waves", type = EventType.Action, replyTo = ReplyContext(msgid = "p", parent = alice)))
+        assertEquals("alice: waves", result.text)
+    }
+
+    @Test
+    fun testIgnoredSinceHidesTheQuoteButNotYourOwnLine() {
+        val ignores = IgnoreSet(global = listOf(IgnoreRule(id = 1, mask = "alice!*@*")), byNetwork = emptyMap())
+        val result = shown(line(text = "alice: yes", replyTo = ReplyContext(msgid = "p", parent = alice)), ignores = ignores)
+        assertNull(result.quote, "ignored after the reply arrived")
+        assertEquals("alice: yes", result.text)
+
+        val mine = ReplyParent(id = 7, nick = "alice", type = EventType.Message, text = "x", userhost = "alice!a@host", isSelf = true)
+        assertNotNull(shown(line(replyTo = ReplyContext(msgid = "p", parent = mine)), ignores = ignores).quote)
+    }
+
+    @Test
+    fun testARelayedParentQuotesThePersonInside() {
+        val bots = RelayBotSet.empty.applying(networkId = 1, nick = "bridge", marked = true, pattern = "")
+        val parent = ReplyParent(id = 7, nick = "bridge", type = EventType.Message, text = "<carol> hello there")
+        val viaSpeaker = shown(line(text = "carol: hi", replyTo = ReplyContext(msgid = "p", parent = parent)), relayBots = bots)
+        assertEquals("carol", viaSpeaker.quote?.nick)
+        assertEquals("hello there", viaSpeaker.quote?.text)
+        assertEquals("bridge", viaSpeaker.quote?.relayBot)
+        assertEquals("hi", viaSpeaker.text)
+        // halloy addresses the bot, which knows nothing of relay marks.
+        val viaBot = shown(line(text = "bridge: hi", replyTo = ReplyContext(msgid = "p", parent = parent)), relayBots = bots)
+        assertEquals("hi", viaBot.text)
+        // The person inside is you when they carry your nick.
+        val echo = ReplyParent(id = 7, nick = "bridge", type = EventType.Message, text = "<me> mine")
+        assertEquals(true, shown(line(replyTo = ReplyContext(msgid = "p", parent = echo)), relayBots = bots).quote?.isSelf)
+    }
+
+    @Test
+    fun testASplitReplyIsQuotedOnce() {
+        val context = ReplyContext(msgid = "p", parent = alice)
+        val first = line(1, replyTo = context)
+        assertTrue(Replies.continues(line(2, replyTo = context), previous = first))
+        assertFalse(Replies.continues(line(2, nick = "carol", replyTo = context), previous = first))
+        assertFalse(Replies.continues(line(2, replyTo = ReplyContext(msgid = "q", parent = null)), previous = first))
+        assertFalse(Replies.continues(line(2, type = EventType.Action, replyTo = context), previous = first))
+        assertFalse(Replies.continues(line(2, replyTo = context), previous = line(1)))
+        assertFalse(Replies.continues(line(2, replyTo = context), previous = null))
+    }
 
     // MARK: - Reply gate
 
@@ -98,24 +190,84 @@ class RepliesTests {
 
     // Waiting on FrameParser, ServerFrame: testRowsCarryReplyToAndTheStamp
     //
-    // Waiting on NickCompletion (`Replies.stripAddress`, `Replies.continues`, and the `alice`
-    // fixture): testStripAddressNeedsPunctuationAfterTheNick, testASplitReplyIsQuotedOnce
-    //
-    // Waiting on IgnoreSet, IgnoreRule, RelayBotSet, NickCompletion (`Replies.shown`, and the
-    // private `shown` helper): testQuoteAndStrippedText,
-    // testNoQuoteKeepsTheAddressItIsTheOnlySignOfWhoItsTo, testAnActionKeepsItsText,
-    // testIgnoredSinceHidesTheQuoteButNotYourOwnLine, testARelayedParentQuotesThePersonInside
-    //
     // Waiting on UnsentLine, LurkerStore: testARefusedLineComesHomeWithItsReply
 }
 
-// Waiting on IgnoreSet, RelayBotSet, NickCompletion (`Replies.presenting`): the whole
-// `ReplyPresentingTests` suite — testPresentingSetsTheQuoteAndTextAndPassesOthersThrough
-//
-// Waiting on NickCompletion: the whole `RemovingAddressTests` suite —
-// testTakesBackTheAddressAndNothingElse, testLeavesADraftThatNoLongerOpensWithIt,
-// testIsAddressedStillAgrees
-//
-// Waiting on NickCompletion, IgnoreSet, RelayBotSet: the whole
-// `ReplyReviewTests` suite — testCopyKeepsTheAddressTheQuoteHides, testNicksFoldAsciiOnly,
-// testStripAddressTakesEverySpaceAfterTheMark
+class ReplyPresentingTests {
+    @Test
+    fun testPresentingSetsTheQuoteAndTextAndPassesOthersThrough() {
+        val parent = ReplyParent(id = 7, nick = "alice", type = EventType.Message, text = "q")
+        val reply = Message(id = 2, type = EventType.Message, nick = "bob", text = "alice: yes", replyTo = ReplyContext(msgid = "p", parent = parent))
+        val plain = Message(id = 3, type = EventType.Message, nick = "bob", text = "alice: plain")
+        val out = Replies.presenting(
+            listOf(reply, plain), networkId = 1, target = "#c",
+            ignores = IgnoreSet.empty, relayBots = RelayBotSet.empty, ownNick = "me",
+        )
+        assertEquals("alice", out[0].replyQuote?.nick)
+        assertEquals("yes", out[0].text)
+        assertEquals(2L, out[0].id)
+        assertEquals(plain, out[1])
+    }
+}
+
+/** Cancelling a pending reply takes back only the address its Reply put there (lurker-ios#184). */
+class RemovingAddressTests {
+    @Test
+    fun testTakesBackTheAddressAndNothingElse() {
+        assertEquals("hi there", NickCompletion.removingAddress("alice: hi there", nick = "alice", punctuation = ":"))
+        assertEquals("", NickCompletion.removingAddress("alice: ", nick = "alice", punctuation = ":"))
+        assertEquals("hi", NickCompletion.removingAddress("Alice, hi", nick = "alice", punctuation = ":"), "any mark, folded")
+        assertEquals("hi", NickCompletion.removingAddress("alice-> hi", nick = "alice", punctuation = "->"), "the configured mark verbatim")
+    }
+
+    @Test
+    fun testLeavesADraftThatNoLongerOpensWithIt() {
+        assertEquals("hey alice: hi", NickCompletion.removingAddress("hey alice: hi", nick = "alice", punctuation = ":"))
+        assertEquals("alice_: hi", NickCompletion.removingAddress("alice_: hi", nick = "alice", punctuation = ":"))
+        assertEquals("will you come", NickCompletion.removingAddress("will you come", nick = "will", punctuation = ":"))
+    }
+
+    @Test
+    fun testIsAddressedStillAgrees() {
+        assertTrue(NickCompletion.isAddressed("alice: hi", nick = "alice", punctuation = ":"))
+        assertFalse(NickCompletion.isAddressed("alice hi", nick = "alice", punctuation = ":"))
+        assertTrue(NickCompletion.isAddressed("alice hi", nick = "alice", punctuation = ""))
+    }
+}
+
+class ReplyReviewTests {
+    /** Copy pastes what was SENT, a reply's address included — the row only hides it. */
+    @Test
+    fun testCopyKeepsTheAddressTheQuoteHides() {
+        val parent = ReplyParent(id = 7, nick = "alice", type = EventType.Message, text = "q")
+        val reply = Message(
+            id = 2, type = EventType.Message, nick = "bob", text = "alice: try 1.2.3", msgid = "m",
+            replyTo = ReplyContext(msgid = "p", parent = parent),
+        )
+        val shown = Replies.presenting(
+            listOf(reply), networkId = 1, target = "#c",
+            ignores = IgnoreSet.empty, relayBots = RelayBotSet.empty, ownNick = null,
+        )[0]
+        assertEquals("try 1.2.3", shown.text)
+        var copied: String? = null
+        MessageActions.run(
+            MessageActionKey.Copy, shown, scope = MessageActionScope(networkId = 1, isBookmarked = false),
+            context = MessageActionContext(reply = { _ -> }, copy = { copied = it }, setBookmark = { _, _ -> }, showProfile = { _ -> }),
+        )
+        assertEquals("alice: try 1.2.3", copied)
+        assertEquals("alice: try 1.2.3", reply.copyText, "a line never presented copies its own text")
+    }
+
+    @Test
+    fun testNicksFoldAsciiOnly() {
+        assertTrue(NickCompletion.sameNick("Alice", "aLICE"))
+        assertFalse(NickCompletion.sameNick("alice", "alice_"))
+        assertFalse(NickCompletion.sameNick("Émile", "émile"), "IRC folds ASCII, not Unicode")
+    }
+
+    @Test
+    fun testStripAddressTakesEverySpaceAfterTheMark() {
+        assertEquals("yes", Replies.stripAddress("alice:   yes", nick = "alice"))
+        assertEquals("alice yes", Replies.stripAddress("alice yes", nick = "alice"), "a mark is required")
+    }
+}

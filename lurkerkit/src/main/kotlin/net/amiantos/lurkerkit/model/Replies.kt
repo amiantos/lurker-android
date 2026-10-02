@@ -7,6 +7,7 @@ import net.amiantos.lurkerkit.support.isSwiftWhitespace
 import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import net.amiantos.lurkerkit.rendering.IRCFormatting
 import net.amiantos.lurkerkit.support.unicodeRegex
+import java.time.Instant
 
 /**
  * The line an IRCv3 reply answers, as the server found it by msgid in the reply's own buffer
@@ -125,8 +126,125 @@ object Replies {
             .replace(lineBreaks, " ")
             .trimmingWhitespacesAndNewlines()
 
-    // stripAddress, shown, presenting, continues: wait for NickCompletion, IgnoreSet and
-    // RelayBotSet (see LEDGER).
+    /**
+     * A reply's text without the `nick: ` it opens with when it names the author it answers —
+     * how halloy, goguma and our own composer send one, so a client without replies still sees
+     * who it's for. The quote above already names them. Only a nick followed by punctuation
+     * counts: a reply to `will` saying "will you come?" keeps its first word. Never strips to
+     * nothing.
+     *
+     * The scalar walk is `NickCompletion`'s, so what Reply writes, what Cancel takes back and
+     * what this hides agree on what a nick and a mark are — and it costs no regex per reply on a
+     * list that's re-presented on every frame.
+     */
+    fun stripAddress(text: String, nick: String): String =
+        NickCompletion.removingReplyAddress(text, nick = nick)
+
+    /**
+     * What [shown] answers: a reply's quote, and its own text.
+     *
+     * Port note: the Swift returns a named tuple, `(quote: ReplyQuote?, text: String?)`.
+     */
+    data class Shown(val quote: ReplyQuote?, val text: String?)
+
+    /**
+     * How a reply reads — its quote, and its own text — the ONE rule, so a reply reads the same
+     * in the timeline and wherever else it turns up (the web's `useReplyQuote.shownReply`).
+     *
+     * - The quote is null ("unavailable") when the server found no line, and also when its author
+     *   is ignored NOW: the server only screens out who was ignored when the reply arrived. Your
+     *   own line is never hidden. Judged as the line it was, in the reply's buffer.
+     * - A quoted line from a marked relay bot shows the person inside its envelope, as the
+     *   timeline shows that line; `isSelf` then says whether that person is you.
+     * - The text loses the `alice: ` it opens with when the quote names her — or the bot, which a
+     *   client that knows nothing of relay marks addresses instead. Only on a `message`, and only
+     *   when there's a quote: with none, that address is the only sign of who it's to.
+     */
+    fun shown(
+        context: ReplyContext,
+        line: Message,
+        networkId: Int?,
+        target: String,
+        ignores: IgnoreSet,
+        relayBots: RelayBotSet,
+        ownNick: String?,
+        now: Instant = Instant.now(),
+    ): Shown {
+        val parent = context.parent ?: return Shown(null, line.text)
+        val asLine = Message(
+            id = parent.id, type = parent.type, nick = parent.nick, text = parent.text,
+            isSelf = parent.isSelf, userhost = parent.userhost,
+        )
+        if (!parent.isSelf &&
+            ignores.isMessageHidden(networkId = networkId, message = asLine, target = target, now = now)
+        ) {
+            return Shown(null, line.text)
+        }
+        val unwrapped = relayBots.reattributing(listOf(asLine), networkId = networkId).firstOrNull() ?: asLine
+        val relayed = unwrapped.relayBot != null
+        val quote = ReplyQuote(
+            id = parent.id,
+            nick = unwrapped.nick ?: parent.nick,
+            type = parent.type,
+            text = unwrapped.text ?: parent.text,
+            isSelf = if (relayed) {
+                ownNick?.let { NickCompletion.sameNick(it, unwrapped.nick ?: "") } ?: false
+            } else {
+                parent.isSelf
+            },
+            relayBot = unwrapped.relayBot,
+            relaySource = unwrapped.relaySource,
+        )
+        val text = line.text
+        if (line.type != EventType.Message || text == null) return Shown(quote, line.text)
+        var stripped = stripAddress(text, nick = quote.nick)
+        val bot = quote.relayBot
+        if (stripped == text && bot != null) stripped = stripAddress(text, nick = bot)
+        return Shown(quote, stripped)
+    }
+
+    /**
+     * `shown` over a list the screen is about to draw: every reply gets its quote and its
+     * stripped text, everything else passes through. Run after relay re-attribution, so a reply
+     * that came through a bridge is judged as the line it reads as.
+     */
+    fun presenting(
+        messages: List<Message>,
+        networkId: Int?,
+        target: String,
+        ignores: IgnoreSet,
+        relayBots: RelayBotSet,
+        ownNick: String?,
+        now: Instant = Instant.now(),
+    ): List<Message> {
+        if (messages.none { it.replyTo != null }) return messages
+        return messages.map { line ->
+            val context = line.replyTo ?: return@map line
+            val result = shown(
+                context, line = line, networkId = networkId, target = target,
+                ignores = ignores, relayBots = relayBots, ownNick = ownNick, now = now,
+            )
+            line.showingReply(quote = result.quote, text = result.text)
+        }
+    }
+
+    /**
+     * Whether a reply should show its quote again, or is the next chunk of one already quoted:
+     * obby and goguma tag every chunk of a long reply where Lurker and halloy tag the first. Only
+     * while it reads as one run of the same speaker's lines (the caller's author run), answering
+     * the same msgid with the same kind of line. A divider, anyone else's line, or a later reply
+     * to the same line, and the quote shows again.
+     */
+    fun continues(line: Message, previous: Message?): Boolean {
+        val mine = line.replyTo
+        val theirs = previous?.replyTo
+        if (previous == null || mine == null || theirs == null) return false
+        return mine.msgid == theirs.msgid &&
+            previous.type == line.type &&
+            previous.isSelf == line.isSelf &&
+            previous.relaySource == line.relaySource &&
+            NickCompletion.sameNick(previous.nick ?: "", line.nick ?: "")
+    }
 
     /**
      * The pending reply a Reply on `message` starts, drawn from the line as it's SHOWN — a relayed
