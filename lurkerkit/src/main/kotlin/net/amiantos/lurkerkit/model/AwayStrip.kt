@@ -57,6 +57,11 @@ data class AwayStrip(
          * kit never formats a date for display (PORTING.md). LurkerKit takes a `calendar` and a
          * `locale` for its own `DateFormatter`; the calendar is `zone` here and the locale is
          * the app's business.
+         *
+         * Port note: ⚠ "this year" is the ISO year. LurkerKit asks the user's own calendar, so
+         * on a device set to the Persian or an Islamic calendar the two disagree for an away
+         * that spans that calendar's new year, or the Gregorian one: the year is shown, or left
+         * out, on the other side of it.
          */
         fun make(
             away: AwayState?,

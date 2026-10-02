@@ -363,6 +363,10 @@ class IgnoreScopeTests {
         assertEquals(set, same)
         assertEquals(set.hashCode(), same.hashCode())
         assertEquals(IgnoreSet.empty, IgnoreSet())
+        // A network whose last rule was removed is the same set as one never mentioned — which
+        // is how the next snapshot will describe it.
+        assertEquals(IgnoreSet(), IgnoreSet().replacing(networkId = 5, rules = emptyList()))
+        assertEquals(IgnoreSet().hashCode(), IgnoreSet().replacing(networkId = 5, rules = emptyList()).hashCode())
 
         assertFalse(set == set.replacing(networkId = null, rules = emptyList()), "a global rule removed is a change")
         assertFalse(set == set.replacing(networkId = 1, rules = emptyList()), "a network rule removed is a change")

@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit.commands
 
+import net.amiantos.lurkerkit.support.decodingUtf16
 import net.amiantos.lurkerkit.support.TextRange
 import net.amiantos.lurkerkit.support.isInWhitespacesAndNewlines
 
@@ -145,21 +146,5 @@ object CommandCompletion {
      * half a surrogate pair into U+FFFD — what a caret sitting inside an emoji leaves at the end
      * of the query. `substring` would hand the lone surrogate back, so the repair is done here.
      */
-    private fun string(chars: String, start: Int, end: Int): String {
-        val slice = chars.substring(start, end)
-        if (slice.none { it.isSurrogate() }) return slice
-        val repaired = StringBuilder(slice.length)
-        var index = 0
-        while (index < slice.length) {
-            val unit = slice[index]
-            if (unit.isHighSurrogate() && index + 1 < slice.length && slice[index + 1].isLowSurrogate()) {
-                repaired.append(unit).append(slice[index + 1])
-                index += 2
-                continue
-            }
-            repaired.append(if (unit.isSurrogate()) '\uFFFD' else unit)
-            index += 1
-        }
-        return repaired.toString()
-    }
+    private fun string(chars: String, start: Int, end: Int): String = chars.decodingUtf16(start, end)
 }

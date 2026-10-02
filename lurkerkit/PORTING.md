@@ -63,6 +63,8 @@ is an interface here and an implementation in `:app`:
 | `URL` | `okhttp3.HttpUrl` for http(s); `String` where it is only carried; `java.io.File` for a file URL. Never `java.net.URL` |
 | `URLComponents.queryItems` | `support.percentEncodedQuery`, into `HttpUrl.Builder.encodedQuery` — never `addQueryParameter` |
 | `NSRange` | `support.TextRange` |
+| `text.count`, where clusters matter | `support.graphemeBoundaries(text).size` |
+| `String(decoding:as: UTF16.self)` | `support.decodingUtf16` |
 | `[T]`, `[K: V]`, `Set<T>` | `List<T>`, `Map<K, V>`, `Set<T>` (the read-only interfaces) |
 | `CaseIterable.allCases` | `entries` |
 | `Sendable`, `nonisolated`, `@unchecked` | dropped |
@@ -217,7 +219,11 @@ are good material for a `// Port-only:` test (see `ServerAddressTests`).
   ported: a comment in the Kotlin names what waits, and `ledger.json`'s `partial` names the
   tranche that completes it — the ledger then refuses to call that tranche done without it.
 - **Do not improve.** No renames, no restructuring, no "more idiomatic" rewrite of logic. An
-  improvement worth making is made in LurkerKit and ported.
+  improvement worth making is made in LurkerKit and ported. That includes bugs: client
+  behaviour is ported as LurkerKit has it, the bug pinned by a `// Port-only:` test and named
+  in the ledger, so the fix is made once, there, and arrives here with the next pin. The one
+  exception is a rule the SERVER enforces (a length limit, a wire shape): where LurkerKit
+  mirrors it wrongly, follow the server, and say so in a `Port note:` and in the ledger.
 - **Do not port from a feature branch.** The ledger's pin is a commit on lurker-ios `main`.
   Read the Swift at the pin, not from whatever a lurker-ios checkout has out:
   `git -C ../lurker-ios archive <pin> LurkerKit | tar -x -C <somewhere>`.

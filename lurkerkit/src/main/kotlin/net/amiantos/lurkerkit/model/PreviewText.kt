@@ -39,6 +39,13 @@ interface AttributedBody {
      * is the same rule.
      */
     fun ink(index: Int): Boolean
+
+    /**
+     * Every inked span of [string] as it stands now. What the end-trim reads, in place of asking
+     * [ink] about each character of the body: an implementation over a list of spans answers
+     * this in one pass and each `ink(index)` with a scan.
+     */
+    fun inkRanges(): List<TextRange>
 }
 
 /**
@@ -306,13 +313,11 @@ object PreviewText {
         val lastText = text.indexOfLast { !it.isInWhitespacesAndNewlines() }
         var head = if (firstText == -1) text.length else firstText
         var tail = if (lastText == -1) 0 else lastText + 1
-        // Port note: asked per character, where the Swift enumerates the attribute's runs.
-        // Either way `head` is pulled back to the first inked character and `tail` pushed out
-        // past the last.
-        for (index in whole.start until whole.end) {
-            if (!attributed.ink(index)) continue
-            head = min(head, index)
-            tail = max(tail, index + 1)
+        // `head` is pulled back to the first inked character and `tail` pushed out past the last.
+        for (range in attributed.inkRanges()) {
+            if (range.isEmpty) continue
+            head = min(head, range.start)
+            tail = max(tail, range.end)
         }
         if (head >= tail) {
             attributed.deleteCharacters(whole)

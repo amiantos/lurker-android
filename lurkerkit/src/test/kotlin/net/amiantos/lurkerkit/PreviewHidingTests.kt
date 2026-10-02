@@ -398,6 +398,20 @@ private class TestBody(string: String) : AttributedBody {
 
     override fun ink(index: Int): Boolean = inked[index]
 
+    override fun inkRanges(): List<TextRange> {
+        val ranges = mutableListOf<TextRange>()
+        var start = -1
+        for ((index, isInk) in inked.withIndex()) {
+            if (isInk && start < 0) start = index
+            if (!isInk && start >= 0) {
+                ranges.add(TextRange(start, index))
+                start = -1
+            }
+        }
+        if (start >= 0) ranges.add(TextRange(start, inked.size))
+        return ranges
+    }
+
     fun append(string: String, ink: Boolean = false) {
         insert(string, ink = ink, at = text.length)
     }

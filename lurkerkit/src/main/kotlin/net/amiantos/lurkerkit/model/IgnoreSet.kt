@@ -294,10 +294,17 @@ class IgnoreSet(
 
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
-        return other is IgnoreSet && global == other.global && byNetwork == other.byNetwork
+        return other is IgnoreSet && global == other.global && occupied == other.occupied
     }
 
-    override fun hashCode(): Int = 31 * global.hashCode() + byNetwork.hashCode()
+    override fun hashCode(): Int = 31 * global.hashCode() + occupied.hashCode()
+
+    /**
+     * The networks that have rules. A network left holding an empty list — its last rule just
+     * removed — is the same set as one never mentioned, which is how the next snapshot will
+     * describe it; comparing the raw map would report a change of rules on every reconnect.
+     */
+    private val occupied: Map<Int, List<IgnoreRule>> get() = byNetwork.filterValues { it.isNotEmpty() }
 
     companion object {
         /** No rules at all — what a fresh session and a signed-out one both hold. */

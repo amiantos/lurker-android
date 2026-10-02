@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit.model
 
+import net.amiantos.lurkerkit.support.decodingUtf16
 import net.amiantos.lurkerkit.support.isInWhitespacesAndNewlines
 import kotlin.math.max
 import kotlin.math.min
@@ -461,19 +462,5 @@ object NickCompletion {
      * Port-only. `String(decoding:as: UTF16.self)` over `text[start, end)`: the units as a
      * string, with half a surrogate pair repaired to U+FFFD.
      */
-    private fun decoding(text: String, start: Int, end: Int): String {
-        val out = StringBuilder(end - start)
-        var index = start
-        while (index < end) {
-            val unit = text[index]
-            if (unit.isHighSurrogate() && index + 1 < end && text[index + 1].isLowSurrogate()) {
-                out.append(unit).append(text[index + 1])
-                index += 2
-                continue
-            }
-            out.append(if (unit.isSurrogate()) '\uFFFD' else unit)
-            index += 1
-        }
-        return out.toString()
-    }
+    private fun decoding(text: String, start: Int, end: Int): String = text.decodingUtf16(start, end)
 }

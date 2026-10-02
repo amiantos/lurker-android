@@ -90,16 +90,16 @@ The pure logic layered on the entities: what is hidden, what a slash command mea
 |---|---:|---|---|
 | `Commands/Command.swift` | 471 | ported | `CommandEffect` is a sealed interface of 23 cases in Swift order. |
 | `Commands/CommandCompletion.swift` | 118 | ported |  |
-| `Commands/CommandParser.swift` | 764 | ported | `parse` takes the app's date formatter, for the `/ignore` listing. Lines are cut by UTF-16 unit; differs from Swift only where a combining mark follows a slash, a space or a sigil. `body(after:)` falls back to `BreakIterator`; verify on a device. |
-| `Commands/IgnoreArgs.swift` | 354 | ported | `parse` returns `support.Result`. |
-| `Model/AwayStrip.swift` | 60 | ported | Chooses how much of the date to show (`Since`, carrying the ICU skeleton); the app formats it. |
+| `Commands/CommandParser.swift` | 764 | ported | `parse` takes the app's date formatter, for the `/ignore` listing. Lines are cut by UTF-16 unit; differs from Swift only where a combining mark follows a slash, a space or a sigil. ⚠ Reproduces a LurkerKit bug: a line break straight after the verb (`/topic⏎text`) cuts into the first word, because the argument line is trimmed of spaces but not newlines. Pinned by a port-only test; to fix in LurkerKit, then re-port. |
+| `Commands/IgnoreArgs.swift` | 354 | ported | `parse` returns `support.Result`. ⚠ The pattern length limit counts UTF-16 units, the server's own rule, where LurkerKit counts characters and lets through a pattern the server then drops. To fix in LurkerKit. |
+| `Model/AwayStrip.swift` | 60 | ported | Chooses how much of the date to show (`Since`, carrying the ICU skeleton); the app formats it. "This year" is the ISO year, where LurkerKit asks the user's calendar. |
 | `Model/Consolidation.swift` | 423 | ported | Returns structure, not sentences: the wording is the app's renderer's. |
 | `Model/Drafts.swift` | 322 | ported | `DraftSync` is a mutable class (case 3). |
 | `Model/EventFilter.swift` | 213 | ported |  |
 | `Model/HistoryCountBy.swift` | 43 | ported |  |
-| `Model/IgnoreMatch.swift` | 577 | ported | Literal masks compare through `FoldedLiteral`, not `equals(ignoreCase)`. The pattern length limit counts UTF-16 units, as the server does, where LurkerKit counts characters. Case-insensitive matching of non-ASCII is engine-dependent; verify on a device. |
+| `Model/IgnoreMatch.swift` | 577 | ported | Literal masks compare through `FoldedLiteral`, not `equals(ignoreCase)`. Case-insensitive matching of non-ASCII is engine-dependent; verify on a device. |
 | `Model/IgnoreRule.swift` | 245 | ported | `summary` takes the expiry formatter from the app; the private `ExpiryText` is not ported. |
-| `Model/IgnoreSet.swift` | 295 | ported | Value equality over both buckets, where LurkerKit's class has identity. |
+| `Model/IgnoreSet.swift` | 295 | ported | Value equality over the rules, where LurkerKit's class has identity. |
 | `Model/MessageRows.swift` | 426 | ported | `AwayDivider`'s reason is `awayMessage`. Day boundaries depend on time-zone data; verify on a device. |
 | `Model/NickCompletion.swift` | 350 | ported | `spokenPunctuation` and `isMarkScalar` read the JDK's Unicode tables; verify on a device. |
 | `Model/PreviewHiding.swift` | 67 | ported |  |

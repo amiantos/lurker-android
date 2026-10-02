@@ -181,20 +181,20 @@
     "Model/UploadsRequest.swift": "The query is encoded by `support.percentEncodedQuery`, to `URLComponents`' rule.",
     "Model/NetworkProxy.swift": "`ProxyDraft` is a plain class edited through `setType` and `edited`, so the protocol cannot change without its port.",
     "Model/IgnoreRule.swift": "`summary` takes the expiry formatter from the app; the private `ExpiryText` is not ported.",
-    "Model/IgnoreMatch.swift": "Literal masks compare through `FoldedLiteral`, not `equals(ignoreCase)`. The pattern length limit counts UTF-16 units, as the server does, where LurkerKit counts characters. Case-insensitive matching of non-ASCII is engine-dependent; verify on a device.",
-    "Model/IgnoreSet.swift": "Value equality over both buckets, where LurkerKit's class has identity.",
-    "Commands/IgnoreArgs.swift": "`parse` returns `support.Result`.",
+    "Model/IgnoreMatch.swift": "Literal masks compare through `FoldedLiteral`, not `equals(ignoreCase)`. Case-insensitive matching of non-ASCII is engine-dependent; verify on a device.",
+    "Model/IgnoreSet.swift": "Value equality over the rules, where LurkerKit's class has identity.",
+    "Commands/IgnoreArgs.swift": "`parse` returns `support.Result`. ⚠ The pattern length limit counts UTF-16 units, the server's own rule, where LurkerKit counts characters and lets through a pattern the server then drops. To fix in LurkerKit.",
     "Model/RelayEnvelope.swift": "`RelayTemplate` is a plain class (it holds a compiled regex). `.` is spelled out so the host JVM stops where ICU does.",
     "Model/RelayBotSet.swift": "Value equality, where LurkerKit's class has identity.",
     "Model/PreviewText.swift": "`stripHiddenUrls` takes an `AttributedBody` interface for `:app` to implement, where LurkerKit takes an `NSMutableAttributedString`.",
     "Model/Consolidation.swift": "Returns structure, not sentences: the wording is the app's renderer's.",
     "Model/MessageRows.swift": "`AwayDivider`'s reason is `awayMessage`. Day boundaries depend on time-zone data; verify on a device.",
-    "Commands/CommandParser.swift": "`parse` takes the app's date formatter, for the `/ignore` listing. Lines are cut by UTF-16 unit; differs from Swift only where a combining mark follows a slash, a space or a sigil. `body(after:)` falls back to `BreakIterator`; verify on a device.",
+    "Commands/CommandParser.swift": "`parse` takes the app's date formatter, for the `/ignore` listing. Lines are cut by UTF-16 unit; differs from Swift only where a combining mark follows a slash, a space or a sigil. ⚠ Reproduces a LurkerKit bug: a line break straight after the verb (`/topic⏎text`) cuts into the first word, because the argument line is trimmed of spaces but not newlines. Pinned by a port-only test; to fix in LurkerKit, then re-port.",
     "Commands/Command.swift": "`CommandEffect` is a sealed interface of 23 cases in Swift order.",
     "Model/NickCompletion.swift": "`spokenPunctuation` and `isMarkScalar` read the JDK's Unicode tables; verify on a device.",
     "Model/Drafts.swift": "`DraftSync` is a mutable class (case 3).",
     "Model/PreviewSelection.swift": "`looksLikeMedia` reads the path by hand to Foundation's rules rather than through `HttpUrl`; pinned by a port-only test.",
-    "Model/AwayStrip.swift": "Chooses how much of the date to show (`Since`, carrying the ICU skeleton); the app formats it."
+    "Model/AwayStrip.swift": "Chooses how much of the date to show (`Since`, carrying the ICU skeleton); the app formats it. \"This year\" is the ISO year, where LurkerKit asks the user's calendar."
   },
   "testNotes": {
     "BufferListPlaceholderTests.swift": {

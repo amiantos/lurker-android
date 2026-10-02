@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit.commands
 
+import net.amiantos.lurkerkit.support.graphemeBoundaries
 import net.amiantos.lurkerkit.model.ChannelName
 import net.amiantos.lurkerkit.model.DccChat
 import net.amiantos.lurkerkit.model.IgnoreRule
@@ -17,9 +18,7 @@ import net.amiantos.lurkerkit.support.isSwiftWhitespace
 import net.amiantos.lurkerkit.support.splitOnSwiftWhitespace
 import net.amiantos.lurkerkit.support.trimmingWhitespaces
 import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
-import java.text.BreakIterator
 import java.time.Instant
-import java.util.Locale
 
 /**
  * Turns a line of composer input into a `ParsedInput`. Pure and total — every string maps
@@ -951,28 +950,8 @@ object CommandParser {
         return argLine.substring(cut).trimmingWhitespaces()
     }
 
-    /**
-     * Where each of `text`'s grapheme clusters — a Swift `Character` — ends, in UTF-16 units; as
-     * many entries as `text.count` is in Swift. Port-only, and only `body`'s off-the-rails case
-     * reads it.
-     *
-     * Port note: `java.text.BreakIterator`, with everything `Reactions.graphemeCount` says about
-     * it: two implementations (the host JVM's and, on Android, ICU's), neither of them Swift's,
-     * each with its own version of Unicode's rules. Checked against the Swift on the host
-     * (JDK 21) over CR-LF, astral letters, emoji and ZWJ sequences; a device's answer is
-     * unverified.
-     */
-    private fun characterBoundaries(text: String): List<Int> {
-        val clusters = BreakIterator.getCharacterInstance(Locale.ROOT)
-        clusters.setText(text)
-        val ends = mutableListOf<Int>()
-        while (true) {
-            val end = clusters.next()
-            if (end == BreakIterator.DONE) break
-            ends.add(end)
-        }
-        return ends
-    }
+    /** Where each of `text`'s Swift `Character`s ends — `support.graphemeBoundaries`. */
+    private fun characterBoundaries(text: String): List<Int> = graphemeBoundaries(text)
 
     /** A DM/user target: has a network, isn't a channel, isn't a `:server:`/`:system:` pseudo. */
     private fun isNickTarget(target: String): Boolean =

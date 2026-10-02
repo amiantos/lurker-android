@@ -3,10 +3,9 @@
 
 package net.amiantos.lurkerkit.model
 
+import net.amiantos.lurkerkit.support.graphemeBoundaries
 import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import net.amiantos.lurkerkit.support.Result
-import java.text.BreakIterator
-import java.util.Locale
 
 /**
  * One IRCv3 reaction (`+draft/react`) standing on a line, as it rides a message row: who, what,
@@ -108,13 +107,7 @@ object Reactions {
      * Where the two differ it is by splitting what the other joins, so only for a value
      * within reach of the limit.
      */
-    private fun graphemeCount(value: String): Int {
-        val clusters = BreakIterator.getCharacterInstance(Locale.ROOT)
-        clusters.setText(value)
-        var count = 0
-        while (clusters.next() != BreakIterator.DONE) count += 1
-        return count
-    }
+    private fun graphemeCount(value: String): Int = graphemeBoundaries(value).size
 
     /**
      * Reactions grouped by value for display: groups in the order their first reaction arrived,
