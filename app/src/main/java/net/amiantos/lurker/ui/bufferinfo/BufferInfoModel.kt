@@ -13,11 +13,15 @@ import net.amiantos.lurkerkit.model.ChannelAccess
 import net.amiantos.lurkerkit.model.ChannelModeForm
 import net.amiantos.lurkerkit.model.ChannelModeState
 import net.amiantos.lurkerkit.model.DccChat
+import net.amiantos.lurkerkit.model.IgnoreSet
+import net.amiantos.lurkerkit.model.Member
+import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NetworkAction
 import net.amiantos.lurkerkit.model.NetworkRow
 import net.amiantos.lurkerkit.model.StatusLight
 import net.amiantos.lurkerkit.model.channelAccess
 import net.amiantos.lurkerkit.store.ChatState
+import net.amiantos.lurkerkit.store.SocketStatus
 import java.time.Instant
 
 /**
@@ -66,6 +70,80 @@ data class BufferInfoInputs(
                 dccLive = if (opened.kind == BufferKind.Dcc) state.dccChatSession(key) else null,
             )
         }
+    }
+}
+
+/**
+ * The slice of `ChatState` the info page is built from, narrowed so that most frames can be turned away
+ * cheaply before [BufferInfoInputs] is built — lurker-ios's `removeDuplicates`, made a type, as
+ * `BufferListInputs` is.
+ *
+ * ⚠ The member list and the ignore set compare by IDENTITY ([same]): building the inputs counts the
+ * visible members, which runs the ignore rules over every member of the channel, and a busy channel's
+ * state moves on every line. The store replaces a member list only when membership changes, and the
+ * ignore set only when a rule does, so identity is exactly "something the count reads moved". The
+ * buffer is narrowed to the two fields the page reads (topic, joined) — its unread counts move on every
+ * message in it, and nothing here draws them.
+ */
+internal class BufferInfoSource private constructor(
+    private val key: BufferKey,
+    private val connection: SocketStatus,
+    private val snapshotSinceOpen: Boolean,
+    private val present: Boolean,
+    private val topic: String?,
+    private val joined: Boolean,
+    private val network: Network?,
+    private val members: List<Member>?,
+    private val modes: ChannelModeState?,
+    private val ignores: IgnoreSet,
+    private val dccChats: List<String>?,
+) {
+    /** The page's inputs, from exactly what was compared — the kit's own helpers over a narrowed state. */
+    fun inputs(opened: Buffer): BufferInfoInputs {
+        val networkId = key.networkId
+        val narrowed = ChatState(
+            connection = connection,
+            snapshotSinceOpen = snapshotSinceOpen,
+            networks = network?.let { mapOf(it.id to it) }.orEmpty(),
+            buffers = if (present) mapOf(key.id to opened.copy(topic = topic, joined = joined)) else emptyMap(),
+            members = members?.let { mapOf(key.id to it) }.orEmpty(),
+            channelModes = modes?.let { mapOf(key.id to it) }.orEmpty(),
+            ignores = ignores,
+            dccChats = if (networkId != null && dccChats != null) mapOf(networkId to dccChats) else emptyMap(),
+        )
+        return BufferInfoInputs.of(narrowed, opened)
+    }
+
+    companion object {
+        fun of(state: ChatState, key: BufferKey): BufferInfoSource {
+            val live = state.buffers[key.id]
+            val networkId = key.networkId
+            return BufferInfoSource(
+                key = key,
+                connection = state.connection,
+                snapshotSinceOpen = state.snapshotSinceOpen,
+                present = live != null,
+                topic = live?.topic,
+                joined = live?.joined == true,
+                network = networkId?.let { state.networks[it] },
+                members = state.members[key.id],
+                modes = state.channelModes[key.id],
+                ignores = state.ignores,
+                dccChats = networkId?.let { state.dccChats[it] },
+            )
+        }
+
+        fun same(old: BufferInfoSource, new: BufferInfoSource): Boolean =
+            old.members === new.members &&
+                old.ignores === new.ignores &&
+                old.connection == new.connection &&
+                old.snapshotSinceOpen == new.snapshotSinceOpen &&
+                old.present == new.present &&
+                old.topic == new.topic &&
+                old.joined == new.joined &&
+                old.network == new.network &&
+                old.modes == new.modes &&
+                old.dccChats == new.dccChats
     }
 }
 

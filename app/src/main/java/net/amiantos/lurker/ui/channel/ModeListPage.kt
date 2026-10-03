@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -105,6 +105,9 @@ class ModeListState(
     var refreshing by mutableStateOf(false)
         private set
 
+    /** What a pull to refresh is holding on screen until its answer — see `ModeListModel.shown`. */
+    private var held by mutableStateOf<List<ModeListEntry>?>(null)
+
     /** The Add dialog is up, with what's been typed. */
     var adding by mutableStateOf<String?>(null)
 
@@ -140,6 +143,8 @@ class ModeListState(
     /** Fetch the list. ⚠ Asks the IRC server for it (a MODE query) — a read, but it goes out on the wire. */
     fun load(byPull: Boolean = false) {
         val mine = fetches.start()
+        // Taken before the rows reset: the list as the reader sees it.
+        held = if (byPull) shown else null
         status = ModeListStatus.Loading
         rowsSinceFetch = emptyList()
         refreshing = byPull
@@ -147,12 +152,13 @@ class ModeListState(
             val result = model.fetchModeList(key, letter = letter)
             val next = fetches.answered(mine, result) ?: return@launch
             refreshing = false
+            held = null
             status = next
         }
     }
 
     /** What the list shows: the fetch, patched by every live row since. */
-    val shown: List<ModeListEntry> get() = ModeListModel.shown(status, rowsSinceFetch, letter)
+    val shown: List<ModeListEntry> get() = ModeListModel.shown(status, rowsSinceFetch, letter, held)
 
     val footer: String?
         get() = (listOfNotNull(actionError) + refusals.current).takeIf { it.isNotEmpty() }?.joinToString("\n")
@@ -218,6 +224,7 @@ internal fun ModeListPage(state: ModeListState, dateTime: (Instant) -> String, o
         AddEntryDialog(
             title = ModeListModel.addTitle(state.name),
             text = adding,
+            busy = state.busy,
             onTextChange = { state.adding = it },
             onDismiss = { state.adding = null },
             onAdd = { mask ->
@@ -268,8 +275,10 @@ private fun ModeListContent(
                         )
                     }
                 }
-                itemsIndexed(entries, key = { index, entry -> "$index:${entry.mask}" }) { _, entry ->
-                    EntryRow(entry, meta(entry), canEdit, onCopy, onRemove)
+                // By mask, unique per list (`ModeListModel.shown`), so a row keeps its state — an open
+                // menu — while live edits add and remove the rows around it.
+                items(entries, key = { it.mask }) { entry ->
+                    EntryRow(entry, meta(entry), canEdit, busy, onCopy, onRemove)
                 }
             }
             // Loading, the fetch's refusal, or an empty list — said in place of rows. A pull shows its
@@ -286,7 +295,7 @@ private fun ModeListContent(
 /** An entry: the mask in monospace (it's a pattern, read character by character), who set it and when under it. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun EntryRow(entry: ModeListEntry, meta: String?, canEdit: Boolean, onCopy: (String) -> Unit, onRemove: (String) -> Unit) {
+private fun EntryRow(entry: ModeListEntry, meta: String?, canEdit: Boolean, busy: Boolean, onCopy: (String) -> Unit, onRemove: (String) -> Unit) {
     var menu by remember { mutableStateOf(false) }
     Box {
         ListItem(
@@ -314,6 +323,8 @@ private fun EntryRow(entry: ModeListEntry, meta: String?, canEdit: Boolean, onCo
                     text = { Text("Remove") },
                     leadingIcon = { Icon(LurkerIcons.Remove, contentDescription = null) },
                     colors = MenuDefaults.itemColors(textColor = MaterialTheme.colorScheme.error, leadingIconColor = MaterialTheme.colorScheme.error),
+                    // One change at a time: disabled, not dropped, while the last one is unanswered.
+                    enabled = !busy,
                     onClick = {
                         menu = false
                         // Not deleted from the list here: the entry goes when the channel's -letter comes back.
@@ -327,7 +338,7 @@ private fun EntryRow(entry: ModeListEntry, meta: String?, canEdit: Boolean, onCo
 
 /** iOS's Add alert: one field, a mask. Trimmed on Add; a mask with a space inside is refused by the page. */
 @Composable
-private fun AddEntryDialog(title: String, text: String, onTextChange: (String) -> Unit, onDismiss: () -> Unit, onAdd: (String) -> Unit) {
+private fun AddEntryDialog(title: String, text: String, busy: Boolean, onTextChange: (String) -> Unit, onDismiss: () -> Unit, onAdd: (String) -> Unit) {
     val focus = remember { FocusRequester() }
     LaunchedEffect(Unit) { focus.requestFocus() }
     AlertDialog(
@@ -343,7 +354,8 @@ private fun AddEntryDialog(title: String, text: String, onTextChange: (String) -
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii),
             )
         },
-        confirmButton = { TextButton(onClick = { onAdd(text.trimmingWhitespacesAndNewlines()) }) { Text("Add") } },
+        // Held off while a change is unanswered — the page sends one at a time — rather than tapped and dropped.
+        confirmButton = { TextButton(onClick = { onAdd(text.trimmingWhitespacesAndNewlines()) }, enabled = !busy) { Text("Add") } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
     )
 }

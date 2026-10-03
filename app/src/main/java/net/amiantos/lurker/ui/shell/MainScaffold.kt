@@ -295,6 +295,8 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
     // it's the buffer open in the conversation, the route follows — the conversation and the list's
     // open mark both read it. The relaunch record follows in `LurkerApp` (`rewriteBuffer`).
     fun follow(from: BufferKey, to: BufferKey) {
+        // An open members/info/profile dialog follows too, whichever buffer it's about (U5).
+        bufferSheets.follow(from, to)
         if (currentRoute()?.key?.id != from.id) return
         val destination = navigator.currentDestination?.contentKey ?: return
         val target = BufferRoute.of(to)

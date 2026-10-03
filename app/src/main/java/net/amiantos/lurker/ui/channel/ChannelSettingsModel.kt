@@ -64,6 +64,11 @@ sealed interface SettingsItem {
         val isKey: Boolean,
         val placeholder: String,
         val enabled: Boolean,
+        /**
+         * The channel has a key we don't know (`+k`, field empty). Said under the field rather than
+         * as a placeholder, which only shows while focused. Always false for anything but the key.
+         */
+        val keySet: Boolean = false,
     ) : SettingsItem {
         override val id: String get() = "value:$letter"
     }
@@ -205,6 +210,7 @@ object ChannelSettingsModel {
         val out = mutableListOf<SettingsItem>(SettingsItem.Toggle(row.letter, label, shown.on, access.canEditModes))
         if (row.kind == ChannelModeForm.RowKind.Flag || !shown.on) return out
         val isKey = row.kind == ChannelModeForm.RowKind.Key
+        val keySet = isKey && live.row("k").on
         out += SettingsItem.Value(
             letter = row.letter,
             label = if (isKey) "Key" else if (row.letter == "l") "Limit" else "Value",
@@ -212,8 +218,9 @@ object ChannelSettingsModel {
             isKey = isKey,
             // A +k channel whose key we never learned: the field is empty, and the channel still has
             // one. Typing replaces it; switching off removes it.
-            placeholder = if (isKey && live.row("k").on) "Key is set" else "Required",
+            placeholder = if (keySet) "Key is set" else "Required",
             enabled = access.canEditModes,
+            keySet = keySet,
         )
         return out
     }

@@ -80,9 +80,19 @@ object MemberListModel {
 
     const val FILTER_PLACEHOLDER = "Filter members"
 
-    /** Everyone listed, ranked — the kit's order (`MemberPrefix.sorted`): by rank, then by nick. */
+    /**
+     * Everyone listed, once each, ranked — the kit's order (`MemberPrefix.sorted`): by rank, then by nick.
+     *
+     * ⚠⚠ Deduplicated by folded nick, the FIRST entry in the store's order winning. The store's list
+     * can hold two entries for one person: its nick-change fold maps the old entry to the new nick
+     * without checking that the new nick is already listed (a NAMES that raced the NICK, a case-only
+     * change). The list is keyed by folded nick, and two equal keys crash a lazy list — so the second
+     * is dropped here, before anything draws. The first is the one the store has held longest, and so
+     * the one carrying the modes and away state the server last sent for it.
+     */
     fun rows(visible: List<Member>): List<MemberRow> =
-        MemberPrefix.sorted(visible).map { MemberRow(nick = it.nick, prefix = MemberPrefix.of(it.modes), away = it.away) }
+        MemberPrefix.sorted(visible.distinctBy { it.nick.lowercase() })
+            .map { MemberRow(nick = it.nick, prefix = MemberPrefix.of(it.modes), away = it.away) }
 
     fun title(count: Int): String = if (count == 0) "Members" else "Members ($count)"
 

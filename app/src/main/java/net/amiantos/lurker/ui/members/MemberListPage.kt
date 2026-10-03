@@ -44,7 +44,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormInset
@@ -62,7 +62,18 @@ import net.amiantos.lurkerkit.session.ChatViewModel
  */
 class MembersPageState(val key: BufferKey) {
     var query by mutableStateOf("")
+
+    /**
+     * The rows last built, and the inputs they were built from. Kept with the page, so coming Back to the
+     * list from a profile draws it at once instead of sorting it again — and the publisher's replay of a
+     * state these inputs already answer is skipped, not re-sorted. Written off the main thread.
+     */
+    @Volatile
+    internal var built: BuiltMembers? = null
 }
+
+/** A ranked member list and the inputs it was built from. */
+internal class BuiltMembers(val inputs: MemberListInputs, val rows: List<MemberRow>)
 
 /**
  * The nick list (lurker-android#13) — lurker-ios's `MemberListViewController`. Who's here, ranked,
@@ -86,19 +97,22 @@ internal fun MemberListPage(
     onOpenProfile: ((String) -> Unit)?,
 ) {
     val key = state.key
-    // Filtered and ranked off the main thread: a big channel is thousands of members, re-sorted on
-    // every join and part. The first list is built here, once, so the page opens drawn.
-    val rowsFlow = remember(model, key) {
+    // Filtered and ranked off the main thread, and only there: a big channel is thousands of members,
+    // re-sorted on every join and part. One build per change — the publisher replays its latest state
+    // to every new collector, and inputs the page already built from are skipped. The very first open
+    // draws an empty page for the frame that build takes, rather than sorting the list on the main
+    // thread to have it a frame sooner; every later appearance draws the last build at once.
+    val rowsFlow = remember(model, state) {
         model.statePublisher
             .conflate()
             .map { MemberListInputs.of(it, key) }
-            .distinctUntilChanged(MemberListInputs::same)
-            .map { MemberListModel.rows(it.visible) }
+            .filter { inputs -> state.built?.let { MemberListInputs.same(it.inputs, inputs) } != true }
+            .map { inputs -> BuiltMembers(inputs, MemberListModel.rows(inputs.visible)).also { state.built = it }.rows }
             .flowOn(Dispatchers.Default)
             .conflate()
     }
-    val initial = remember(model, key) { MemberListModel.rows(MemberListInputs.of(model.state, key).visible) }
-    val rows by rowsFlow.collectAsStateWithLifecycle(initialValue = initial)
+    val built by rowsFlow.collectAsStateWithLifecycle(initialValue = state.built?.rows)
+    val rows = built ?: emptyList()
     // ⚠⚠ Cleared, not just hidden, when the field goes — see `MemberListModel.effectiveQuery`.
     val wantsSearch = MemberListModel.wantsSearch(rows.size)
     LaunchedEffect(wantsSearch) { if (!wantsSearch) state.query = "" }
@@ -106,6 +120,7 @@ internal fun MemberListPage(
     val kind = remember(key) { BufferKind.of(networkId = key.networkId, target = key.target) }
 
     MemberListContent(
+        loaded = built != null,
         title = MemberListModel.title(rows.size),
         rows = MemberListModel.filter(rows, query),
         showsSearch = wantsSearch,
@@ -145,6 +160,7 @@ private fun toggleFriend(model: ChatViewModel, key: BufferKey, nick: String) {
 
 @Composable
 private fun MemberListContent(
+    loaded: Boolean,
     title: String,
     rows: List<MemberRow>,
     showsSearch: Boolean,
@@ -171,7 +187,9 @@ private fun MemberListContent(
                     keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
                 )
             }
-            if (rows.isEmpty()) {
+            if (!loaded) {
+                // The first build's frame: nothing yet, and not "No members yet." either.
+            } else if (rows.isEmpty()) {
                 // The list filters in place — there's no second results screen — so the empty sentence
                 // stands where the rows were.
                 Box(Modifier.fillMaxSize()) { StateView(title = emptyText) }
@@ -268,6 +286,7 @@ private val previewRows = listOf(
 private fun MembersPreview(dark: Boolean, rows: List<MemberRow>, search: Boolean = false) {
     LurkerTheme(darkTheme = dark) {
         MemberListContent(
+            loaded = true,
             title = MemberListModel.title(rows.size),
             rows = rows,
             showsSearch = search,

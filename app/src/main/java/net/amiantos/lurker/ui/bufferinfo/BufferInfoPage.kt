@@ -35,11 +35,13 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -84,23 +86,33 @@ class BufferInfoState(private val model: ChatViewModel, val buffer: Buffer, priv
         private set
 
     /** Which attempt may write [actionError]: bumped per tap, so a slow earlier request can't answer for a later one. */
-    private var attempt = 0
+    private var attempts = 0
 
     /** The connection and session as last drawn — see `BufferInfoModel.Subject`. */
     private var shown = BufferInfoModel.Subject.of(inputsFlow.value)
 
     init {
         scope.launch {
-            model.statePublisher.conflate().map { BufferInfoInputs.of(it, buffer) }.distinctUntilChanged().collect { next ->
-                val subject = BufferInfoModel.Subject.of(next)
-                if (subject != shown) {
-                    // A refusal is about the connection as it was when the verb was sent; once it moves,
-                    // the footer would contradict the rows above it.
-                    shown = subject
-                    actionError = null
+            // Narrowed and compared first — cheaply, the member list and the ignore set by identity — and
+            // only a frame that moved something here is counted, all of it off the main thread: the count
+            // runs the ignore rules over every member of a busy channel (see `BufferInfoSource`).
+            model.statePublisher
+                .conflate()
+                .map { BufferInfoSource.of(it, buffer.key) }
+                .distinctUntilChanged(BufferInfoSource::same)
+                .map { it.inputs(buffer) }
+                .flowOn(Dispatchers.Default)
+                .distinctUntilChanged()
+                .collect { next ->
+                    val subject = BufferInfoModel.Subject.of(next)
+                    if (subject != shown) {
+                        // A refusal is about the connection as it was when the verb was sent; once it moves,
+                        // the footer would contradict the rows above it.
+                        shown = subject
+                        actionError = null
+                    }
+                    inputsFlow.value = next
                 }
-                inputsFlow.value = next
-            }
         }
         // Connect is offered off `Network.blocked`, which the store learns from the roster — read when
         // the socket opens, and otherwise only when something writes a network. The networks screen
@@ -117,7 +129,7 @@ class BufferInfoState(private val model: ChatViewModel, val buffer: Buffer, priv
      */
     fun perform(action: NetworkAction) {
         val networkId = buffer.networkId ?: return
-        run { model.perform(action, networkId) }
+        attempt { model.perform(action, networkId) }
     }
 
     /**
@@ -129,7 +141,7 @@ class BufferInfoState(private val model: ChatViewModel, val buffer: Buffer, priv
     fun perform(action: DccChatAction) {
         val networkId = buffer.networkId ?: return
         val nick = BufferInfoModel.dccPeer(buffer.key)
-        run {
+        attempt {
             when (action) {
                 DccChatAction.Start -> model.openDccChat(networkId = networkId, nick = nick)
                 DccChatAction.End -> model.closeDccChat(networkId = networkId, nick = nick)
@@ -137,12 +149,12 @@ class BufferInfoState(private val model: ChatViewModel, val buffer: Buffer, priv
         }
     }
 
-    private fun run(verb: suspend () -> String?) {
+    private fun attempt(verb: suspend () -> String?) {
         // Whatever the last attempt said is now stale. The counter keeps a SLOW earlier attempt from
         // answering for this one: tap Disconnect, watch the row flip to Connect, tap that, and the first
         // request's late refusal would otherwise land under the second.
-        attempt += 1
-        val mine = attempt
+        attempts += 1
+        val mine = attempts
         val sentAgainst = shown
         actionError = null
         scope.launch {
@@ -152,7 +164,7 @@ class BufferInfoState(private val model: ChatViewModel, val buffer: Buffer, priv
             // ⚠ The connection check is the other half of "a refusal is about the connection as it was":
             // a Disconnect whose reply timed out after the server had already acted would otherwise
             // print "Disconnect failed" under a row that says Offline.
-            if (mine == attempt && shown == sentAgainst) actionError = refusal
+            if (mine == attempts && shown == sentAgainst) actionError = refusal
         }
     }
 }
