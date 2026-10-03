@@ -79,7 +79,16 @@ internal fun NetworkFormPage(state: NetworkFormState, onBack: () -> Unit) {
     // The message lands at the top of the form, which is off screen if the user saved from the
     // bottom — so go to it rather than leaving them looking at an unchanged screen wondering whether
     // the button worked.
-    LaunchedEffect(state.errorShown) { if (state.errorShown > 0) scroll.animateScrollTo(0) }
+    //
+    // Once per refusal, not once per composition: the form is recomposed from scratch by a rotation
+    // or a return to the page, and a bare "errorShown > 0" would scroll the user off the field they
+    // went down to fix every time. `errorScrolledTo` lives on the state, which outlives both.
+    LaunchedEffect(state.errorShown) {
+        if (state.errorShown > state.errorScrolledTo) {
+            state.errorScrolledTo = state.errorShown
+            scroll.animateScrollTo(0)
+        }
+    }
 
     // ⚠ Every type rather than a list of certificate ones: a type left off greys the file out in the
     // picker with no way around it (lurker-ios#125), and providers label `.pem`, `.key` and `.crt`
@@ -402,7 +411,7 @@ private fun readPicked(resolver: ContentResolver, uri: Uri): String =
 /** Write the exported pair into the file the user chose. False when it couldn't be written. */
 private fun writeExport(resolver: ContentResolver, uri: Uri, pem: String): Boolean =
     try {
-        val out = resolver.openOutputStream(uri, "w")
+        val out = resolver.openOutputStream(uri, "wt")
         out?.use { it.write(pem.toByteArray(Charsets.UTF_8)) }
         out != null
     } catch (_: Exception) {

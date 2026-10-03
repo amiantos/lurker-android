@@ -52,7 +52,13 @@ import net.amiantos.lurker.ui.theme.LurkerTheme
 internal fun FullScreenDialog(onDismissRequest: () -> Unit, content: @Composable () -> Unit) {
     Dialog(
         onDismissRequest = onDismissRequest,
-        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+            // Said, not left to the content happening to fill the window: a stray tap beside the
+            // centred sheet must never throw away a half-typed form.
+            dismissOnClickOutside = false,
+        ),
     ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val wide = maxWidth >= WIDE

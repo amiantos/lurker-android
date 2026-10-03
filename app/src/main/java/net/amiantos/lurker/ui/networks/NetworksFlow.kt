@@ -69,7 +69,10 @@ internal sealed interface NetworksPage {
  * down mid-flight is one the server may or may not have acted on.
  */
 internal class NetworksFlow(private val model: ChatViewModel, start: NetworksStart) {
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    // `Main`, not `Main.immediate`: the flow is built inside composition (`NetworkSheetsHost`), and
+    // its pages start loading in their `init`. Dispatched, those requests begin after the frame
+    // rather than inline in the composition pass that created them.
+    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     /** The page stack, root first. Never empty: back from the root dismisses the dialog instead. */
     val pages = mutableStateListOf<NetworksPage>()
@@ -98,34 +101,34 @@ internal class NetworksFlow(private val model: ChatViewModel, start: NetworksSta
     }
 
     fun pushAdd(draft: NetworkDraft) {
-        pages.add(
-            NetworksPage.Form(
-                NetworkFormState(
-                    ChatViewModelWrites(model),
-                    scope,
-                    existing = null,
-                    initialDraft = draft,
-                    onSaved = ::formSaved,
-                    onCertificateChanged = {},
-                ),
+        lateinit var page: NetworksPage.Form
+        page = NetworksPage.Form(
+            NetworkFormState(
+                ChatViewModelWrites(model),
+                scope,
+                existing = null,
+                initialDraft = draft,
+                onSaved = { formSaved(page) },
+                onCertificateChanged = {},
             ),
         )
+        pages.add(page)
     }
 
     fun pushEdit(config: NetworkConfig) {
         val list = list
-        pages.add(
-            NetworksPage.Form(
-                NetworkFormState(
-                    ChatViewModelWrites(model),
-                    scope,
-                    existing = config,
-                    initialDraft = NetworkDraft(editing = config),
-                    onSaved = ::formSaved,
-                    onCertificateChanged = { list?.certificateChanged(it, config.id) },
-                ),
+        lateinit var page: NetworksPage.Form
+        page = NetworksPage.Form(
+            NetworkFormState(
+                ChatViewModelWrites(model),
+                scope,
+                existing = config,
+                initialDraft = NetworkDraft(editing = config),
+                onSaved = { formSaved(page) },
+                onCertificateChanged = { list?.certificateChanged(it, config.id) },
             ),
         )
+        pages.add(page)
     }
 
     /**
@@ -136,8 +139,14 @@ internal class NetworksFlow(private val model: ChatViewModel, start: NetworksSta
      * re-reads on appearing (the create's roster re-read updates the roster, and the list is a
      * different fetch of a different shape). From the buffer list's Add Network the whole dialog
      * goes: there is nothing to come back to — the new network's buffers arriving IS the result.
+     *
+     * ⚠ Only while the saving form is still the page on top. The reply can land after the user has
+     * gone back and opened something else — another network's form with a draft in it, or the
+     * picker for a new one — and unwinding the stack then would throw that page away under them.
+     * The save itself still happened; the list re-reads whenever it next appears.
      */
-    private fun formSaved() {
+    private fun formSaved(page: NetworksPage.Form) {
+        if (pages.lastOrNull() !== page) return
         if (list != null) {
             while (pages.size > 1) pages.removeAt(pages.lastIndex)
         } else {
@@ -380,6 +389,9 @@ internal class NetworkFormState(
     /** Bumped with every refusal shown, so the screen scrolls up to it even when the words repeat. */
     var errorShown by mutableIntStateOf(0)
         private set
+
+    /** The last [errorShown] the screen scrolled up for — see `NetworkFormPage`. Not state: nothing draws it. */
+    var errorScrolledTo = 0
 
     /**
      * The network's certificate as the server last described it.
