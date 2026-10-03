@@ -131,7 +131,10 @@ fun ConversationScreen(
         val hydrate = HydrateGate(kind)
         // Once: every later frame would say the same, and each would ask the navigator to leave again.
         var left = false
-        model.statePublisher.conflate().collect { state ->
+        // Every frame, not conflated: these are transition-driven — `HydrateGate` must see the
+        // `hydrated = true` frame before a rename merge resets the row, or its earlier request stays
+        // latched and the buffer sits on "Loading messages…". The drawn streams below conflate.
+        model.statePublisher.collect { state ->
             if (left) return@collect
             when (val verdict = watch.check(state)) {
                 BufferWatch.Verdict.Gone -> {

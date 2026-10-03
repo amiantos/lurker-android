@@ -10,7 +10,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import net.amiantos.lurkerkit.session.ChatViewModel
@@ -22,12 +21,14 @@ import net.amiantos.lurkerkit.session.ChatViewModel
  * whichever screen is up, and an error held by the conversation alone sat unseen behind the buffer
  * list on a phone, then popped up later over a conversation it had nothing to do with.
  *
- * Its own stream: it moves nothing else on screen. Acknowledging clears it in the store, which is
+ * Its own stream: it moves nothing else on screen. Not conflated: two identical errors either side
+ * of an acknowledgement would collapse into one once the `null` between them was skipped, and OK
+ * would appear not to dismiss the second. Acknowledging clears it in the store, which is
  * what lets the same error come back as news rather than be dropped as a duplicate.
  */
 @Composable
 fun ServerErrorDialog(model: ChatViewModel) {
-    val errorFlow = remember(model) { model.statePublisher.conflate().map { it.error }.distinctUntilChanged() }
+    val errorFlow = remember(model) { model.statePublisher.map { it.error }.distinctUntilChanged() }
     val error by errorFlow.collectAsStateWithLifecycle(initialValue = model.state.error)
     error?.let { message ->
         AlertDialog(
