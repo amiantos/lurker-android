@@ -83,6 +83,7 @@ class SettingsModelTest {
                 "chat.send_typing_notifications" to "Send typing notifications",
                 "chat.keep_position_on_send" to "Stay put when you send",
                 "input.completion.nick_suffix" to "Address nicks with",
+                "away.all_networks" to "Away on every network",
                 "chat.events.mobile" to "Event filter",
                 "chat.consolidate_joins" to "Consolidate events",
                 "chat.consolidate_max_names" to "Max consolidated nicks",

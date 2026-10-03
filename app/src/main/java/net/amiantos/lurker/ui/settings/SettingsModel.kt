@@ -199,6 +199,10 @@ object SettingsModel {
         // "Input" header over a single pull-down would be filing for its own sake.
         // U3: the @ picker and Reply read it (`NickCompletion.addressPunctuation`).
         "input.completion.nick_suffix" to "Address nicks with",
+        // What a bare /away or /back, and the away strip's Back, reach: off, the network you're on;
+        // on, every network (lurker#994). Composing again, so it sits beside the suffix. The server
+        // applies it (the kit sends no `all` when the user didn't type -all/-one).
+        "away.all_networks" to "Away on every network",
     )
 
     /**
