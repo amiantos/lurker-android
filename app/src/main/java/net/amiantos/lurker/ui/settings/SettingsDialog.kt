@@ -71,6 +71,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import androidx.lifecycle.viewmodel.compose.viewModel
+import java.util.UUID
+import net.amiantos.lurker.platform.findActivity
 import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormActionRow
@@ -124,14 +127,22 @@ internal fun SettingsDialog(
     val initialInputs = remember(model) { SettingsInputs.of(model.state, linkPreviews = model.features.linkPreviews) }
     val inputs by inputsFlow.collectAsStateWithLifecycle(initialValue = initialInputs)
 
-    // `Main`, not `Main.immediate`: built in composition. Never cancelled — every write runs to its
-    // reply (see `SettingsWriter`), and a scope with nothing in it holds nothing.
-    val writer = remember(model) {
+    // Kept in an activity-scoped store under a saved token, so a rotation keeps the writer and what it
+    // has on screen — see `SettingsWriterStore`. `Main`, not `Main.immediate`: built in composition.
+    // Never cancelled — every write runs to its reply, and a scope with nothing in it holds nothing.
+    val token = rememberSaveable { UUID.randomUUID().toString() }
+    val store: SettingsWriterStore = viewModel()
+    val writer = store.writer(token) {
         SettingsWriter(CoroutineScope(SupervisorJob() + Dispatchers.Main)) { changes -> model.updateSettings(changes) }
     }
-    DisposableEffect(writer) { onDispose { writer.flush() } }
+    val activity = LocalContext.current.findActivity()
+    // ⚠ Discarded when Settings goes — dismissed, signed out of, or closed by a join landing — but NOT
+    // across a configuration change, the one disposal the store exists to survive.
+    DisposableEffect(token) {
+        onDispose { if (activity?.isChangingConfigurations != true) store.discard(token) }
+    }
     // Any settings change — the echo of our own write, or another device's — retires a rejection.
-    LaunchedEffect(inputs.settings) { writer.settingsChanged() }
+    LaunchedEffect(writer, inputs.settings) { writer.observe(inputs.settings) }
 
     val autocapitalizes by uiPreferences.composerAutocapitalizes.collectAsStateWithLifecycle()
     val context = LocalContext.current
