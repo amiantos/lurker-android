@@ -89,6 +89,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.filter
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.PageExit
+import net.amiantos.lurker.ui.shell.RetryRow
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
@@ -190,8 +191,11 @@ internal fun UploadsPage(
                     }
                     // A failed page-in under tiles already shown: tiles ask for the next page as they come
                     // on screen, and at the bottom none ever will again — so the way to ask again is here.
-                    if (grid.pageInFailed && grid.items.isNotEmpty()) {
-                        item(key = "retry", span = { GridItemSpan(maxLineSpan) }) { RetryRow(onRetry = state::retryMore) }
+                    // There under any tiles, failed or not, so a failure is a change TalkBack reads out (`RetryRow`).
+                    if (grid.items.isNotEmpty()) {
+                        item(key = "retry", span = { GridItemSpan(maxLineSpan) }) {
+                            RetryRow(failed = grid.pageInFailed, onRetry = state::retryMore, modifier = Modifier.padding(horizontal = 4.dp))
+                        }
                     }
                     grid.footer?.let { footer ->
                         item(key = "footer", span = { GridItemSpan(maxLineSpan) }) {
@@ -209,13 +213,12 @@ internal fun UploadsPage(
                 // A pull shows its own spinner, so the page's stays away while one is out.
                 if (placeholder != null && !(placeholder.isLoading && grid.refreshing)) {
                     StateView(
-                        title = placeholder.title,
-                        symbol = placeholder.symbol,
-                        subtitle = placeholder.subtitle,
-                        isLoading = placeholder.isLoading,
-                        // "Pull to try again." — a pull TalkBack can't make, so offered as an action too.
+                        placeholder,
+                        // "Pull to try again." — a pull TalkBack can't make, so offered as an action too, as
+                        // an ordinary reload: this view goes to Loading and back rather than hiding behind
+                        // the pull's spinner (see `StateView`).
                         onRetry = if (!placeholder.isLoading && grid.loadFailed) {
-                            { state.reload(byPull = true) }
+                            { state.reload() }
                         } else {
                             null
                         },
@@ -546,25 +549,6 @@ private fun relativeAge(formatter: RelativeDateTimeFormatter, then: Instant): St
         )
     }
 
-/** "Couldn't load more." and the button that asks again, at the grid's foot — U7's feed retry row. */
-@Composable
-private fun RetryRow(onRetry: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            "Couldn't load more.",
-            // Appears under the reader as they scroll — said, not just drawn.
-            modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite },
-            style = MaterialTheme.typography.bodyMedium,
-            color = LurkerTheme.colors.fgMuted,
-        )
-        TextButton(onClick = onRetry) { Text("Try Again", style = MaterialTheme.typography.bodyMedium) }
-    }
-}
-
 /**
  * Put the address on the clipboard. No toast of our own: Android 13 and up confirm a copy themselves,
  * and a second notice for the same thing is noise (the platform's guidance).
@@ -634,7 +618,7 @@ private fun EmptyPreview(dark: Boolean) {
     LurkerTheme(darkTheme = dark) {
         Box(Modifier.background(MaterialTheme.colorScheme.background).size(360.dp, 400.dp)) {
             val placeholder = UploadsGrid().placeholder!!
-            StateView(title = placeholder.title, symbol = placeholder.symbol, subtitle = placeholder.subtitle)
+            StateView(placeholder)
         }
     }
 }

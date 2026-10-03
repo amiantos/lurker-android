@@ -19,9 +19,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -37,11 +34,11 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormInset
-import net.amiantos.lurker.ui.networks.FormSectionFooter
 import net.amiantos.lurker.ui.networks.FormSectionHeader
 import net.amiantos.lurker.ui.networks.FormSwitchRow
 import net.amiantos.lurker.ui.networks.FormTextField
 import net.amiantos.lurker.ui.networks.PageExit
+import net.amiantos.lurker.ui.shell.AnnouncedSlot
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.BufferKey
@@ -285,6 +282,8 @@ private fun ChannelSettingsContent(
         onConfirm = onSave,
     ) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
+            // Save's refusal lands in the last section's footer (`ChannelSettingsModel.withErrors`).
+            val refusalSection = screen.sections.lastOrNull()?.id
             for (section in screen.sections) {
                 section.header?.let { header -> item(key = "header:${section.id}") { FormSectionHeader(header) } }
                 // Keyed by the row's identity, so a field keeps its focus and caret while the rows
@@ -294,21 +293,19 @@ private fun ChannelSettingsContent(
                         SettingsItemView(row, keyRevealed, onTopic, onToggle, onValue, onToggleReveal)
                     }
                 }
-                section.footer?.let { footer ->
+                // The section a refusal can land in keeps its footer slot with or without one, and draws the
+                // standing note and the refusal through the same node — so a save refused while the page is
+                // open is a change TalkBack reads out (`AnnouncedSlot`), and only the refusal announces.
+                val footer = section.footer
+                if (footer != null || section.id == refusalSection) {
                     item(key = "footer:${section.id}") {
-                        if (footer.isError) {
+                        AnnouncedSlot(words = footer?.text, modifier = Modifier.fillMaxWidth(), live = footer?.isError == true) {
                             Text(
-                                footer.text,
-                                // A save refused while the page is open is read out where it lands (#20).
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = FormInset, vertical = 4.dp)
-                                    .semantics { liveRegion = LiveRegionMode.Polite },
+                                footer?.text.orEmpty(),
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = LurkerTheme.colors.badText,
+                                color = if (footer?.isError == true) LurkerTheme.colors.badText else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                        } else {
-                            FormSectionFooter(footer.text)
                         }
                     }
                 }

@@ -40,9 +40,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -58,6 +55,7 @@ import kotlinx.coroutines.withContext
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormInset
 import net.amiantos.lurker.ui.networks.PageExit
+import net.amiantos.lurker.ui.shell.AnnouncedSlot
 import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.theme.LurkerIcons
@@ -219,6 +217,7 @@ internal fun ModeListPage(state: ModeListState, dateTime: (Instant) -> String, o
         meta = { ModeListModel.meta(it, dateTime) },
         onBack = onBack,
         onRefresh = { state.load(byPull = true) },
+        onReload = { state.load() },
         onAdd = { state.adding = "" },
         onCopy = { mask -> scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(state.name, mask))) } },
         onRemove = { mask -> state.change('-', mask) },
@@ -255,6 +254,8 @@ private fun ModeListContent(
     onAdd: () -> Unit,
     onCopy: (String) -> Unit,
     onRemove: (String) -> Unit,
+    /** The list again, without a pull — the failed state's TalkBack "Try Again" (see `StateView`). */
+    onReload: () -> Unit = {},
 ) {
     DialogPage(
         title = title,
@@ -268,16 +269,13 @@ private fun ModeListContent(
     ) { padding ->
         PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(Modifier.fillMaxSize()) {
-                // The refusal leads, where it's seen whether the list is long or empty.
-                if (footer != null) {
-                    item(key = "footer") {
+                // The refusal leads, where it's seen whether the list is long or empty. There with or without
+                // one, so a change refused while the list is open is read out where it lands (`AnnouncedSlot`).
+                item(key = "footer") {
+                    AnnouncedSlot(words = footer, modifier = Modifier.fillMaxWidth()) {
                         Text(
-                            footer,
-                            // A change refused while the list is open is read out where it lands (#20).
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = FormInset, vertical = 8.dp)
-                                .semantics { liveRegion = LiveRegionMode.Polite },
+                            footer.orEmpty(),
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 8.dp),
                             style = MaterialTheme.typography.bodyMedium,
                             color = LurkerTheme.colors.badText,
                         )
@@ -297,7 +295,11 @@ private fun ModeListContent(
                 is ModeListStatus.Failed -> StateModel(status.message)
                 is ModeListStatus.Ready -> if (entries.isEmpty()) StateModel(ModeListModel.EMPTY) else null
             }
-            if (placeholder != null) StateView(placeholder)
+            // The failure's way out is the pull, which TalkBack can't make — offered as an action too, as an
+            // ordinary load, so this view goes to Loading and back rather than hiding behind the pull's spinner.
+            if (placeholder != null) {
+                StateView(placeholder, onRetry = if (status is ModeListStatus.Failed) onReload else null)
+            }
         }
     }
 }

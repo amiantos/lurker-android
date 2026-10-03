@@ -7,6 +7,7 @@ import android.content.ClipData
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -20,10 +21,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.liveRegion
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
@@ -43,6 +40,7 @@ import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormSectionFooter
 import net.amiantos.lurker.ui.networks.FormSectionHeader
 import net.amiantos.lurker.ui.networks.PageExit
+import net.amiantos.lurker.ui.shell.AnnouncedSlot
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.FriendPresence
@@ -114,6 +112,7 @@ internal fun UserProfilePage(
     UserProfileContent(
         title = state.nick,
         sections = sections,
+        outcome = UserProfileModel.lookupOutcome(inputs, state.nick),
         exit = exit,
         onExit = onExit,
         onRow = { row ->
@@ -139,13 +138,27 @@ internal fun UserProfilePage(
 private fun UserProfileContent(
     title: String,
     sections: List<ProfileSection>,
+    outcome: String?,
     exit: PageExit,
     onExit: () -> Unit,
     onRow: (ProfileRow) -> Unit,
 ) {
+    // The status line — "Looking up alice…", "alice isn't on this network." — leads in a place of its
+    // own that's there whatever the lookup's state, rather than as a row that comes and goes: a lookup
+    // lands while the reader waits, and only a node that was already there can announce it
+    // (`AnnouncedSlot`), or keep TalkBack's focus when the line it was on is answered. Quiet while the
+    // lookup is out; on landing it says the [outcome] — the miss, or a hit as the Status row's value
+    // ("alice, Online"), which with no line to show is a place 1dp tall that's read but not drawn.
+    val statusLine = sections.firstOrNull()?.rows?.singleOrNull() as? ProfileRow.Status
+    val rest = if (statusLine != null) sections.drop(1) else sections
     DialogPage(title = title, exit = exit, onExit = onExit) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
-            sections.forEachIndexed { index, section ->
+            item(key = "status") {
+                AnnouncedSlot(words = statusLine?.text ?: outcome, modifier = Modifier.fillMaxWidth(), live = outcome != null) {
+                    if (statusLine != null) StatusLineRow(statusLine)
+                }
+            }
+            rest.forEachIndexed { index, section ->
                 item(key = "section$index") {
                     Column {
                         section.header?.let { FormSectionHeader(it) }
@@ -164,20 +177,8 @@ private fun ProfileRowView(row: ProfileRow, onRow: (ProfileRow) -> Unit) {
     val tint = MaterialTheme.colorScheme.primary
     val clear = ListItemDefaults.colors(containerColor = Color.Transparent)
     when (row) {
-        is ProfileRow.Status -> ListItem(
-            // The lookup's answer lands while the reader waits — "Looking up alice…" turning into
-            // "alice isn't on this network." is read out (#20). One description on the row, so the
-            // change is the live region's own.
-            modifier = Modifier.clearAndSetSemantics {
-                contentDescription = row.text
-                liveRegion = LiveRegionMode.Polite
-            },
-            colors = clear,
-            leadingContent = {
-                Icon(if (row.line == ProfileStatus.StatusLine.NotFound) LurkerIcons.HelpOutline else LurkerIcons.MoreHoriz, null, tint = muted)
-            },
-            headlineContent = { Text(row.text, color = muted) },
-        )
+        // Drawn in the page's status place (`UserProfileContent`), not among the sections.
+        is ProfileRow.Status -> StatusLineRow(row)
         // Label above, value below — on every row, not just the long ones: a hostmask always needs the
         // room, and one row in a different shape reads as something gone wrong. The LABEL is the quiet
         // caption; the value is what you came to read.
@@ -209,6 +210,19 @@ private fun ProfileRowView(row: ProfileRow, onRow: (ProfileRow) -> Unit) {
         ProfileRow.SendMessage -> ActionRow(LurkerIcons.ChatBubble, "Send Message", tint) { onRow(row) }
         ProfileRow.Refresh -> ActionRow(LurkerIcons.Refresh, "Refresh", tint) { onRow(row) }
     }
+}
+
+/** The lookup's status line, as iOS draws it: the glyph and the words, muted. Its semantics are its place's. */
+@Composable
+private fun StatusLineRow(row: ProfileRow.Status) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    ListItem(
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        leadingContent = {
+            Icon(if (row.line == ProfileStatus.StatusLine.NotFound) LurkerIcons.HelpOutline else LurkerIcons.MoreHoriz, null, tint = muted)
+        },
+        headlineContent = { Text(row.text, color = muted) },
+    )
 }
 
 /** A tinted row that does something — the grouped form's button row, with iOS's glyph. */
@@ -254,6 +268,7 @@ private fun ProfilePreview(dark: Boolean, inputs: ProfileInputs) {
         UserProfileContent(
             title = "alice",
             sections = UserProfileModel.sections(inputs, "alice", canOpenBuffers = true, dateTime = { "Sep 21, 2026, 10:00" }),
+            outcome = UserProfileModel.lookupOutcome(inputs, "alice"),
             exit = PageExit.Back,
             onExit = {},
             onRow = {},

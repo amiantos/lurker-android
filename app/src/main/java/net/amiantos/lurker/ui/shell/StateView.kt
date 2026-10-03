@@ -71,9 +71,16 @@ import net.amiantos.lurker.ui.theme.LurkerTheme
  * debounced keystroke — "Searching…" read over the reader's own typing is noise. It says it's in
  * progress instead, as a spinner does.
  *
+ * [announces] false keeps even a settled state quiet, for a screen whose states follow the reader's
+ * own typing: Search lands on "No matches" or "Keep typing" at the end of every debounced keystroke,
+ * and announcing each would talk over the typing as "Searching…" would. Read on focus all the same.
+ *
  * [onRetry] is for a state whose way out is a gesture TalkBack can't make — "Pull to try again."
  * Material's pull-to-refresh offers no accessibility action, where iOS's refresh control answers
  * VoiceOver, so the same retry is offered as the element's "Try Again" action. The copy stays iOS's.
+ * ⚠ The retry must NOT take the pull's path: a pull hides this view behind its own spinner, so the
+ * focused element would vanish and a repeat failure would come back as a new, unannounced one. A
+ * caller retries as an ordinary reload, which puts THIS view into its loading state and back.
  */
 @Composable
 fun StateView(
@@ -85,6 +92,7 @@ fun StateView(
     actionTitle: String? = null,
     onAction: () -> Unit = {},
     onRetry: (() -> Unit)? = null,
+    announces: Boolean = true,
 ) {
     val spoken = if (subtitle == null) title else "$title, $subtitle"
     val currentRetry by rememberUpdatedState(onRetry)
@@ -98,7 +106,7 @@ fun StateView(
                     contentDescription = spoken
                     if (isLoading) {
                         progressBarRangeInfo = ProgressBarRangeInfo.Indeterminate
-                    } else {
+                    } else if (announces) {
                         liveRegion = LiveRegionMode.Polite
                     }
                     if (retryActions != null) customActions = retryActions
@@ -151,7 +159,13 @@ fun StateView(
 
 /** [StateView] drawn from a [StateModel]. */
 @Composable
-fun StateView(model: StateModel, modifier: Modifier = Modifier, onAction: () -> Unit = {}, onRetry: (() -> Unit)? = null) =
+fun StateView(
+    model: StateModel,
+    modifier: Modifier = Modifier,
+    onAction: () -> Unit = {},
+    onRetry: (() -> Unit)? = null,
+    announces: Boolean = true,
+) =
     StateView(
         title = model.title,
         modifier = modifier,
@@ -161,6 +175,7 @@ fun StateView(model: StateModel, modifier: Modifier = Modifier, onAction: () -> 
         actionTitle = model.actionTitle,
         onAction = onAction,
         onRetry = onRetry,
+        announces = announces,
     )
 
 /** Each [StateSymbol] as its Material glyph — iOS's symbol name in the enum's KDoc. */

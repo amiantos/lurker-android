@@ -96,6 +96,7 @@ import net.amiantos.lurker.ui.composer.rememberComposerState
 import net.amiantos.lurker.ui.media.MediaSource
 import net.amiantos.lurker.ui.media.PreviewContext
 import net.amiantos.lurker.ui.media.PreviewToggles
+import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.uploads.ComposerInsertTarget
 import net.amiantos.lurker.ui.uploads.LocalUploadServices
 import net.amiantos.lurker.ui.uploads.UploadTargets
@@ -111,7 +112,6 @@ import net.amiantos.lurker.ui.shell.ConnectionBanner
 import net.amiantos.lurker.ui.shell.JumpLedger
 import net.amiantos.lurker.ui.shell.JumpRequest
 import net.amiantos.lurker.ui.shell.SafeUriHandler
-import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.shell.StatusTitle
 import net.amiantos.lurker.ui.shell.StatusTitleText
@@ -755,7 +755,6 @@ fun ConversationScreen(
         context = context,
         placeholder = placeholder,
         empty = ConversationModel.emptyState(kind, inputs.buffer?.target ?: key.target),
-        emptySymbol = emptySymbol(kind),
         listState = listState,
         pills = pills,
         flash = flash,
@@ -972,10 +971,8 @@ internal fun ConversationContent(
     keys: List<String>,
     context: MessageListContext,
     placeholder: BufferPlaceholder,
-    empty: EmptyState,
+    empty: StateModel,
     listState: LazyListState,
-    /** The empty state's glyph, per kind — see [emptySymbol]. */
-    emptySymbol: StateSymbol? = null,
     pills: ConversationScroll.Pills = ConversationScroll.Pills(),
     flash: RowFlash? = null,
     onConnectionBannerShown: (Boolean) -> Unit = {},
@@ -1053,13 +1050,7 @@ internal fun ConversationContent(
                 // states, so "Loading messages…" settling to "No messages yet" is a change TalkBack
                 // reads out rather than one node swapped for another.
                 if (rows.isEmpty() && placeholder != BufferPlaceholder.None) {
-                    val loading = placeholder == BufferPlaceholder.Loading
-                    StateView(
-                        title = if (loading) "Loading messages…" else empty.title,
-                        symbol = if (loading) null else emptySymbol,
-                        subtitle = if (loading) null else empty.subtitle,
-                        isLoading = loading,
-                    )
+                    StateView(if (placeholder == BufferPlaceholder.Loading) ConversationModel.LOADING else empty)
                 } else if (rows.isNotEmpty()) {
                     LazyColumn(
                         state = listState,
@@ -1119,17 +1110,6 @@ internal fun ConversationContent(
     }
 }
 
-/**
- * The empty state's glyph, per kind — iOS's `emptyStateModel` symbols: a speech bubble for the
- * conversations, the server rack for a server log, sparkles for the system buffer's welcome.
- */
-private fun emptySymbol(kind: BufferKind): StateSymbol =
-    when (kind) {
-        BufferKind.Channel, BufferKind.Dm, BufferKind.Dcc -> StateSymbol.Conversation
-        BufferKind.Server -> StateSymbol.Server
-        BufferKind.System -> StateSymbol.Welcome
-    }
-
 // MARK: - Previews
 
 @Composable
@@ -1155,7 +1135,6 @@ private fun ConversationPreview(dark: Boolean, empty: Boolean, pills: Conversati
             placeholder = if (empty) BufferPlaceholder.Empty else BufferPlaceholder.None,
             empty = ConversationModel.emptyState(BufferKind.Channel, "#lurker"),
             listState = rememberLazyListState(),
-            emptySymbol = emptySymbol(BufferKind.Channel),
             pills = pills,
             onShowMembers = {},
             onShowInfo = {},

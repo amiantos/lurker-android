@@ -3,6 +3,8 @@
 
 package net.amiantos.lurker.ui.conversation
 
+import net.amiantos.lurker.ui.shell.StateModel
+import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurker.ui.shell.StatusTitle
 import net.amiantos.lurkerkit.model.AwayState
 import net.amiantos.lurkerkit.model.Buffer
@@ -157,8 +159,6 @@ internal class ConversationProjector(private val key: BufferKey, private val kin
     }
 }
 
-/** What an empty conversation says — a title and, for most kinds, an invitation. */
-data class EmptyState(val title: String, val subtitle: String? = null)
 
 /**
  * The conversation's decisions, pure: which rows it draws, what its title says, what it shows when
@@ -313,16 +313,20 @@ internal object ConversationModel {
 
     /**
      * The empty-state copy, per kind — a just-joined channel and a fresh DM are different
-     * invitations, and the system and server buffers aren't conversations at all.
+     * invitations, and the system and server buffers aren't conversations at all. With iOS's
+     * symbols: a speech bubble for the conversations, the server rack, sparkles for the welcome.
      */
-    fun emptyState(kind: BufferKind, target: String): EmptyState =
+    fun emptyState(kind: BufferKind, target: String): StateModel =
         when (kind) {
-            BufferKind.Channel -> EmptyState("No messages yet", "Messages in $target will show up here.")
-            BufferKind.Dm -> EmptyState("No messages yet", "Say hello to $target.")
-            BufferKind.Dcc -> EmptyState("No messages yet", "A direct chat with ${DccChat.peer(target)}.")
-            BufferKind.Server -> EmptyState("Nothing from the server yet")
-            BufferKind.System -> EmptyState("Welcome to Lurker", "Run /commands to see what you can do.")
+            BufferKind.Channel -> StateModel("No messages yet", StateSymbol.Conversation, "Messages in $target will show up here.")
+            BufferKind.Dm -> StateModel("No messages yet", StateSymbol.Conversation, "Say hello to $target.")
+            BufferKind.Dcc -> StateModel("No messages yet", StateSymbol.Conversation, "A direct chat with ${DccChat.peer(target)}.")
+            BufferKind.Server -> StateModel("Nothing from the server yet", StateSymbol.Server)
+            BufferKind.System -> StateModel("Welcome to Lurker", StateSymbol.Welcome, "Run /commands to see what you can do.")
         }
+
+    /** "Loading messages…" — the one loading state a conversation has. */
+    val LOADING: StateModel = StateModel("Loading messages…", isLoading = true)
 
     /**
      * Your own away state as it applies to this buffer (lurker-ios#68), or null where it doesn't.

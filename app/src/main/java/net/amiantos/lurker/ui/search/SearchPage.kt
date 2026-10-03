@@ -51,7 +51,7 @@ import net.amiantos.lurker.ui.feeds.FeedModel
 import net.amiantos.lurker.ui.feeds.FeedPageState
 import net.amiantos.lurker.ui.feeds.FeedPlaceholder
 import net.amiantos.lurker.ui.feeds.FeedSnapshot
-import net.amiantos.lurker.ui.feeds.StateWords
+import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.FeedCursor
@@ -166,7 +166,7 @@ class SearchState(private val model: ChatViewModel, seed: String, private val sc
         feed.reload(newQuestion = true)
     }
 
-    fun words(placeholder: FeedPlaceholder): StateWords =
+    fun words(placeholder: FeedPlaceholder): StateModel =
         when (placeholder) {
             FeedPlaceholder.Loading -> SearchWords.loading(showing)
             FeedPlaceholder.Empty -> SearchWords.empty(showing, shownQuery)
@@ -199,7 +199,17 @@ internal fun SearchPage(model: ChatViewModel, state: SearchState, onClose: () ->
         onClear = state::clear,
         onClose = onClose,
     ) { modifier ->
-        FeedList(model = model, state = state, words = state::words, onSelect = onSelect, modifier = modifier, listState = listState)
+        // Quiet states: every debounced keystroke lands on one, and announcing "No matches" over the
+        // reader's typing is noise (see `StateView`). Read on focus all the same.
+        FeedList(
+            model = model,
+            state = state,
+            words = state::words,
+            onSelect = onSelect,
+            modifier = modifier,
+            listState = listState,
+            announcesStates = false,
+        )
     }
 }
 
@@ -269,7 +279,7 @@ private fun SearchScaffold(
 // MARK: - Previews
 
 @Composable
-private fun SearchPreview(dark: Boolean, text: String, words: StateWords) {
+private fun SearchPreview(dark: Boolean, text: String, words: StateModel) {
     LurkerTheme(darkTheme = dark) {
         SearchScaffold(
             field = TextFieldValue(text),
