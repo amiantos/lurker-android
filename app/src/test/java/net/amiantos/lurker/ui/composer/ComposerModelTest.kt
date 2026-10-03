@@ -233,7 +233,7 @@ class ComposerModelTest {
     fun `only something other than whitespace sends, trimmed`() {
         assertNull(ComposerModel.sendable(" \n\t"))
         assertEquals("hi", ComposerModel.sendable("  hi\n"))
-        assertTrue(ComposerModel.isBlank(" \n"))
+        assertTrue(ComposerModel.isBlank("\u00A0\n"))
     }
 
     @Test
