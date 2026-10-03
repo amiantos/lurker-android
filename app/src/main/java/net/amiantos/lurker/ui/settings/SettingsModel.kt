@@ -90,9 +90,10 @@ data class SettingsEdits(
     /**
      * The write of [value] to [key] came back: [failure] is the server's reason, or null for success.
      *
-     * Success clears any rejection on screen, whichever row it was under. That covers the write that
-     * changed nothing — setting a value it already held: the store doesn't move, so the settings
-     * change that would otherwise retire the old rejection never comes.
+     * Success clears any rejection on screen, whichever row it was under — iOS's rule, where any
+     * settings change rebuilds the table. That covers the write that changed nothing — setting a
+     * value it already held: the store doesn't move, so the settings change that would otherwise
+     * retire the old rejection never comes.
      */
     fun finished(key: String, value: SettingValue, failure: String?): SettingsEdits = SettingsEdits(
         pending = if (pending[key] == value) pending - key else pending,
@@ -405,7 +406,9 @@ object SettingsModel {
             key = option.key,
             label = row.label,
             control = control,
-            enabled = settings.isActive(option.key),
+            // Over the pending values too: a dependent row follows the switch the user just flipped,
+            // rather than waiting out its write — and greys back if that write is refused.
+            enabled = settings.apply(edits.pending).isActive(option.key),
             error = edits.error?.takeIf { it.key == option.key }?.message,
         )
     }
