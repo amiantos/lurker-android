@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import net.amiantos.lurker.platform.AppEvents
 import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.signin.SignInScreen
 import kotlinx.coroutines.flow.StateFlow
@@ -34,6 +35,7 @@ import net.amiantos.lurkerkit.session.ChatViewModel
 fun AppRoot(
     model: ChatViewModel,
     uiPreferences: UiPreferences,
+    events: AppEvents,
     signInNotice: StateFlow<String?>,
     lastServerURL: () -> String,
     onSignIn: (server: String) -> Unit,
@@ -44,7 +46,7 @@ fun AppRoot(
         // Keyed on signed-in or not, so `LoggedOut` ↔ `LoggingIn` doesn't rebuild the form.
         Crossfade(targetState = session == ChatViewModel.SessionState.LoggedIn, label = "root") { signedIn ->
             if (signedIn) {
-                MainScaffold(model = model, uiPreferences = uiPreferences, onSignOut = model::logout)
+                MainScaffold(model = model, uiPreferences = uiPreferences, events = events, onSignOut = model::logout)
             } else {
                 SignInScreen(model = model, notice = signInNotice, initialServer = lastServerURL(), onSignIn = onSignIn)
             }

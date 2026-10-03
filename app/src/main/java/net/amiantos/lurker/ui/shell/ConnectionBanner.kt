@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.shell
 
+import kotlinx.coroutines.flow.conflate
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -155,7 +156,7 @@ private fun BannerCapsule(state: ConnectionBannerState) {
 @Composable
 fun rememberConnectionBannerState(model: ChatViewModel): ConnectionBannerState {
     fun banner(state: ChatState) = ConnectionBannerState.of(reachable = state.reachable, connection = state.connection)
-    val flow = remember(model) { model.statePublisher.map(::banner).distinctUntilChanged() }
+    val flow = remember(model) { model.statePublisher.conflate().map(::banner).distinctUntilChanged() }
     val initial = remember(model) { banner(model.state) }
     val state by flow.collectAsStateWithLifecycle(initialValue = initial)
     return state

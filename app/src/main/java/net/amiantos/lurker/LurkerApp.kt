@@ -15,6 +15,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import net.amiantos.lurker.auth.BrowserSignIn
 import net.amiantos.lurker.auth.KeystoreSecureStorage
+import net.amiantos.lurker.platform.AppEvent
+import net.amiantos.lurker.platform.AppEvents
 import net.amiantos.lurker.platform.ExpiryText
 import net.amiantos.lurker.platform.ReachabilityMonitor
 import net.amiantos.lurker.prefs.PrefsDefaultsStorage
@@ -54,6 +56,9 @@ class LurkerApp : Application() {
 
     /** App-scoped so an attempt survives the activity under the tab being recreated. */
     val browserSignIn = BrowserSignIn()
+
+    /** The kit's asks of the screen, queued for `MainScaffold` — see [AppEvents]. */
+    val events = AppEvents()
 
     /**
      * Same shape as reachability and push: the kit decides the number, the app makes the platform
@@ -129,22 +134,26 @@ class LurkerApp : Application() {
     private fun wireCallbacks() {
         // A rename has to chase the buffer's key through the preferences that store it. Owned here,
         // not in the kit: the preferences are the app's, and the view model just announces the move.
-        model.onBufferRenamed = { from, to -> uiPreferences.rewriteBuffer(from, to) }
+        // The navigator holds keys too, and is the screen's: it hears through the queue.
+        model.onBufferRenamed = { from, to ->
+            uiPreferences.rewriteBuffer(from, to)
+            events.send(AppEvent.BufferRenamed(from, to))
+        }
 
         // U8: drop the decoded-image cache (link previews). Sign-out must: the images are the
         // previous account's reading history, and against a different instance the signed proxy
         // tokens wouldn't verify anyway.
         model.onPreviewCachesCleared = {}
 
-        // U4: a join this device asked for landed — navigate to it (lurker-ios#57).
-        model.onJoinOpened = { _ -> }
+        // A join this device asked for landed — navigate to it (lurker-ios#57).
+        model.onJoinOpened = { key -> events.send(AppEvent.OpenBuffer(key)) }
 
-        // U4: a join that didn't happen says why, as a toast/snackbar over whatever is on screen.
-        model.onJoinNotice = { _ -> }
+        // A join that didn't happen says why, as a snackbar over whatever is on screen.
+        model.onJoinNotice = { notice -> events.send(AppEvent.Notice(notice.message)) }
 
-        // U6: a DCC chat this device opened or accepted has a buffer — navigate, as for a join
-        // (lurker#270). The offer prompt (iOS `DccOfferPrompt`) is U6's too.
-        model.onDccChatOpened = { _ -> }
+        // A DCC chat this device opened or accepted has a buffer — navigate, as for a join
+        // (lurker#270). U6: the offer prompt (iOS `DccOfferPrompt`).
+        model.onDccChatOpened = { key -> events.send(AppEvent.OpenBuffer(key)) }
 
         // U3: the server refused a line — the composer for that buffer refills from `takeUnsent`.
         model.onSendRefused = { _ -> }
@@ -164,7 +173,10 @@ class LurkerApp : Application() {
     private fun observeSession() {
         scope.launch {
             model.sessionPublisher.collect { session ->
-                if (session == ChatViewModel.SessionState.LoggedOut) uiPreferences.forgetLastOpenBuffer()
+                if (session == ChatViewModel.SessionState.LoggedOut) {
+                    uiPreferences.forgetLastOpenBuffer()
+                    events.drain()
+                }
                 // U9: signing in is the moment push becomes askable (`enablePushIfSignedIn`).
             }
         }
