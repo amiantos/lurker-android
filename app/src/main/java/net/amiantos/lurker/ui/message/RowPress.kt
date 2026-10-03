@@ -33,8 +33,10 @@ sealed interface RowPress {
 }
 
 /**
- * A long press anywhere in the element, reported at the press's position — and the rest of that touch
- * swallowed, so the link, chip or quote under the finger doesn't also take it as a tap on release.
+ * A long press anywhere in the element, offered at the press's position. [onLongPress] says whether
+ * it took it: when it did, the rest of that touch is swallowed, so the link, chip or quote under the
+ * finger doesn't also take it as a tap on release; when it didn't (nothing there to act on — the
+ * typing line, a summary with no link), the touch is let go untouched.
  *
  * Watched on the Initial pass, ahead of the children: a link and a chip are clickable, and a
  * clickable consumes its down, so a long press asked for after them would never see a press that
@@ -47,7 +49,7 @@ sealed interface RowPress {
  * press would race the chips' own.
  */
 @Composable
-internal fun Modifier.longPressAnywhere(onLongPress: (Offset) -> Unit): Modifier {
+internal fun Modifier.longPressAnywhere(onLongPress: (Offset) -> Boolean): Modifier {
     val current by rememberUpdatedState(onLongPress)
     return pointerInput(Unit) {
         awaitEachGesture {
@@ -61,8 +63,7 @@ internal fun Modifier.longPressAnywhere(onLongPress: (Offset) -> Unit): Modifier
                         (change.position - down.position).getDistance() > viewConfiguration.touchSlop
                 }
             }
-            if (letGo) return@awaitEachGesture
-            current(down.position)
+            if (letGo || !current(down.position)) return@awaitEachGesture
             do {
                 val event = awaitPointerEvent(PointerEventPass.Initial)
                 event.changes.forEach { it.consume() }

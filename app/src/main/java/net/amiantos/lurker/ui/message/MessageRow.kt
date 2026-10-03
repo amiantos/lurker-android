@@ -273,7 +273,12 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
     } else {
         Modifier
             .onPlaced { targets.row = it }
-            .longPressAnywhere { position -> targets.resolve(position, message)?.let(onLongPress) }
+            .longPressAnywhere { position ->
+                // Resolved first: a press on nothing to act on is let go, not swallowed.
+                val press = targets.resolve(position, message) ?: return@longPressAnywhere false
+                onLongPress(press)
+                true
+            }
     }
 
     Column(

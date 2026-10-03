@@ -10,6 +10,7 @@ import net.amiantos.lurkerkit.model.MessageActionKey
 import net.amiantos.lurkerkit.model.MessageActionScope
 import net.amiantos.lurkerkit.support.Result
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -99,6 +100,15 @@ class MessageActionsModelTest {
         val header = MessageActionsModel.header(ActionSubject.Line(line(text = "\u000304ALERT\u0003 disk full"), scope()))
         assertEquals("alice", header.title)
         assertEquals("ALERT disk full", header.detail)
+    }
+
+    @Test
+    fun `the header never prints a hidden spoiler — it's masked, and announced as one`() {
+        val text = "the ending is \u000301,01he was a ghost\u0003 by the way"
+        val header = MessageActionsModel.header(ActionSubject.Line(line(text = text), scope()))
+        assertEquals("the ending is ██████████████ by the way", header.detail)
+        assertEquals("the ending is hidden spoiler by the way", header.spokenDetail)
+        assertFalse(header.detail!!.contains("ghost"))
     }
 
     @Test
