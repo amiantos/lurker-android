@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- The suite's socket tests talk to a plain-HTTP fake on localhost. The app permits cleartext the
+         same way (network_security_config; `ServerAddress` is the policy), so this is parity, not a
+         hole. On the TEST manifest: a library's own <application> attributes don't reach the APK
+         its instrumented tests run in. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application android:usesCleartextTraffic="true" />
+</manifest>
