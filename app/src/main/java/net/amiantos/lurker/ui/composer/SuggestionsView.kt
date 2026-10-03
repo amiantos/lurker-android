@@ -27,10 +27,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import net.amiantos.lurker.ui.theme.LurkerColors
+import net.amiantos.lurker.ui.message.MessageText
+import net.amiantos.lurker.ui.message.MessageTextStyle
+import net.amiantos.lurker.ui.message.rememberMessageTextStyle
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.commands.CommandRegistry
-import net.amiantos.lurkerkit.rendering.NickColor
 
 /**
  * The completion suggestions — lurker-ios's `SuggestionsView`: the best few candidates floating
@@ -46,6 +47,7 @@ import net.amiantos.lurkerkit.rendering.NickColor
 @Composable
 internal fun SuggestionsView(suggestions: List<Suggestion>, onPick: (Suggestion) -> Unit, modifier: Modifier = Modifier) {
     if (suggestions.isEmpty()) return
+    val style = rememberMessageTextStyle()
     Column(
         modifier,
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -53,14 +55,13 @@ internal fun SuggestionsView(suggestions: List<Suggestion>, onPick: (Suggestion)
     ) {
         // Best-first in, so reversed out: the head of the list lands nearest the composer.
         for (suggestion in suggestions.asReversed()) {
-            Pill(suggestion, onPick)
+            Pill(suggestion, style, onPick)
         }
     }
 }
 
 @Composable
-private fun Pill(suggestion: Suggestion, onPick: (Suggestion) -> Unit) {
-    val colors = LurkerTheme.colors
+private fun Pill(suggestion: Suggestion, style: MessageTextStyle, onPick: (Suggestion) -> Unit) {
     Box(
         Modifier
             .shadow(3.dp, CircleShape)
@@ -80,7 +81,7 @@ private fun Pill(suggestion: Suggestion, onPick: (Suggestion) -> Unit) {
             suggestion.title,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = FontWeight.SemiBold,
-            color = suggestion.color(colors),
+            color = suggestion.color(style),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
@@ -88,13 +89,14 @@ private fun Pill(suggestion: Suggestion, onPick: (Suggestion) -> Unit) {
 }
 
 /**
- * A pill's colour: a command in the accent (an action), a channel in the label colour, a nick in its
- * own palette colour — the one the conversation above draws it in.
+ * A pill's colour: a command in the accent (an action), a channel in the label colour, a nick in the
+ * colour the conversation above draws it in — through the list's own function, so its palette rules
+ * are this one's. Never your own nick: completion doesn't offer you.
  */
-internal fun Suggestion.color(colors: LurkerColors): Color = when (kind) {
-    Suggestion.Kind.Command -> colors.accent
-    Suggestion.Kind.Channel -> colors.fg
-    Suggestion.Kind.Nick -> colors.nick[NickColor.index(value, paletteCount = colors.nick.size)]
+internal fun Suggestion.color(style: MessageTextStyle): Color = when (kind) {
+    Suggestion.Kind.Command -> style.colors.accent
+    Suggestion.Kind.Channel -> style.colors.fg
+    Suggestion.Kind.Nick -> MessageText.nickColor(value, isSelf = false, style = style)
 }
 
 // MARK: - Previews

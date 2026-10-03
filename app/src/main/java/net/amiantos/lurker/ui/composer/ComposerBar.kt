@@ -31,6 +31,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -111,7 +112,10 @@ internal fun ComposerBar(
         onSend = state::send,
         onCancelReply = state::cancelReply,
         onBack = state::back,
-        onFocusLost = state::focusLost,
+        onFocusChange = { focused ->
+            state.isFocused = focused
+            if (!focused) state.focusLost()
+        },
         isComposing = { state.isComposing },
         modifier = modifier,
     )
@@ -128,7 +132,8 @@ internal fun ComposerBarContent(
     onSend: () -> Unit,
     onCancelReply: () -> Unit,
     onBack: () -> Unit,
-    onFocusLost: () -> Unit,
+    /** The field gained (true) or lost (false) focus — only on a change, never for the initial state. */
+    onFocusChange: (Boolean) -> Unit,
     isComposing: () -> Boolean,
     modifier: Modifier = Modifier,
 ) {
@@ -154,8 +159,10 @@ internal fun ComposerBarContent(
             // The button sits at the BOTTOM, beside the last line as the field grows upward.
             verticalAlignment = Alignment.Bottom,
         ) {
-            Field(field, placeholder, capitalizes, collapsed, focusRequester, onFocusLost, onCancelReply, isComposing, strip is Strip.Reply)
-            SendButton(enabled = ComposerModel.sendable(field.text.toString()) != null, size = collapsed, onClick = onSend)
+            Field(field, placeholder, capitalizes, collapsed, focusRequester, onFocusChange, onCancelReply, isComposing, strip is Strip.Reply)
+            // Derived, so the bar recomposes when the answer flips rather than on every keystroke.
+            val canSend by remember(field) { derivedStateOf { ComposerModel.sendable(field.text.toString()) != null } }
+            SendButton(enabled = canSend, size = collapsed, onClick = onSend)
         }
     }
 }
@@ -181,7 +188,7 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
     capitalizes: Boolean,
     collapsed: Dp,
     focusRequester: FocusRequester,
-    onFocusLost: () -> Unit,
+    onFocusChange: (Boolean) -> Unit,
     onCancelReply: () -> Unit,
     isComposing: () -> Boolean,
     replyPending: Boolean,
@@ -199,8 +206,10 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
             .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(collapsed / 2))
             .focusRequester(focusRequester)
             .onFocusChanged { focus ->
-                if (focused[0] && !focus.isFocused) onFocusLost()
-                focused[0] = focus.isFocused
+                if (focused[0] != focus.isFocused) {
+                    focused[0] = focus.isFocused
+                    onFocusChange(focus.isFocused)
+                }
             }
             .onPreviewKeyEvent { event ->
                 // Escape cancels a pending reply — and only then, so otherwise it does whatever it
@@ -402,7 +411,7 @@ private fun ComposerPreview(dark: Boolean, text: String, strip: Strip, placehold
                 onSend = {},
                 onCancelReply = {},
                 onBack = {},
-                onFocusLost = {},
+                onFocusChange = {},
                 isComposing = { false },
             )
         }
