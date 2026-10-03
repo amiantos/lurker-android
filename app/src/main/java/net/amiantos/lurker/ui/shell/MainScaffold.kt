@@ -6,6 +6,7 @@ package net.amiantos.lurker.ui.shell
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.CompositionLocalProvider
+import net.amiantos.lurker.ui.settings.SettingsDialog
 import net.amiantos.lurker.ui.networks.rememberNetworkSheets
 import net.amiantos.lurker.ui.networks.NetworkSheetsHost
 import net.amiantos.lurker.platform.findActivity
@@ -339,6 +340,11 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
     // hosted there would close (and drop a half-typed form) the moment a join navigated.
     val sheets = rememberNetworkSheets()
 
+    // Settings (U10) — here for the same reason, and saved so a rotation keeps it up. Its own flag
+    // rather than one of `sheets`: the networks list opens OVER it (Back comes back here, as from iOS's
+    // pushed networks screen), so the two can be up at once.
+    var showingSettings by rememberSaveable { mutableStateOf(false) }
+
     // The kit's asks of the screen (`AppEvents`), taken for as long as this scaffold is composed.
     // Attached across a configuration change — that gap is what the queue bridges — and detached
     // when the screen goes for good, so nothing waits for a launch hours later.
@@ -355,6 +361,7 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
                 // conversation hydrates it.
                 is AppEvent.OpenBuffer -> {
                     sheets.dismiss()
+                    showingSettings = false
                     open(event.key, jumpTo = event.jumpTo)
                 }
                 is AppEvent.BufferRenamed -> follow(event.from, event.to)
@@ -378,7 +385,7 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
                         sideBySide = sideBySide,
                         onOpen = ::openBuffer,
                         onClose = ::close,
-                        onSignOut = onSignOut,
+                        onOpenSettings = { showingSettings = true },
                         sheets = sheets,
                     )
                 }
@@ -422,6 +429,20 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
         // screen for a channel you never got into has nothing to show. `requestJoin` opens the
         // channel when `channel-joined` lands (`AppEvent.OpenBuffer`), and says why when it doesn't
         // (`AppEvent.Notice`).
+        if (showingSettings) {
+            SettingsDialog(
+                model = model,
+                uiPreferences = uiPreferences,
+                onDismiss = { showingSettings = false },
+                // Over Settings, not instead of it: closing the networks list comes back here.
+                onOpenNetworks = sheets::showNetworks,
+                onSignOut = {
+                    showingSettings = false
+                    onSignOut()
+                },
+            )
+        }
+        // After Settings, so a networks list opened from it is the window on top.
         NetworkSheetsHost(sheets = sheets, model = model) { networkId, channel ->
             model.requestJoin(networkId = networkId, channel = channel, opens = true)
         }
