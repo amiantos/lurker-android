@@ -181,6 +181,8 @@ class ConversationModelTest {
     private fun inputs(state: ChatState, key: BufferKey = channel) =
         ConversationProjector(key, BufferKind.of(key.networkId, key.target)).project(state)
 
+    private fun rowsOf(inputs: ConversationInputs) = ConversationModel.built(inputs, RowOptions()).rows
+
     private fun texts(rows: List<MessageRow>) = rows.mapNotNull { it.message?.text }
 
     @Test
@@ -191,7 +193,7 @@ class ConversationModelTest {
             message(3, "bob", "   "),
             message(4, "bob", "yo"),
         )
-        val rows = ConversationModel.buildRows(inputs(state(messages = mapOf(channel.id to messages))))
+        val rows = rowsOf(inputs(state(messages = mapOf(channel.id to messages))))
         assertEquals(listOf("hi", "yo"), texts(rows))
     }
 
@@ -199,16 +201,16 @@ class ConversationModelTest {
     fun `an ignore rule hides its lines at render time`() {
         val ignores = IgnoreSet(byNetwork = mapOf(1 to listOf(IgnoreRule(id = 1, mask = "spammer"))))
         val messages = listOf(message(1, "spammer", "buy"), message(2, "alice", "hi"))
-        val rows = ConversationModel.buildRows(inputs(state(messages = mapOf(channel.id to messages), ignores = ignores)))
+        val rows = rowsOf(inputs(state(messages = mapOf(channel.id to messages), ignores = ignores)))
         assertEquals(listOf("hi"), texts(rows))
     }
 
     @Test
     fun `history exhausted says so at the top, and an unhydrated buffer doesn't claim it`() {
         val messages = mapOf(channel.id to listOf(message(1, "alice", "hi")))
-        val unknown = ConversationModel.buildRows(inputs(state(messages = messages, buffers = emptyList())))
+        val unknown = rowsOf(inputs(state(messages = messages, buffers = emptyList())))
         assertFalse(unknown.contains(MessageRow.StartOfHistory))
-        val exhausted = ConversationModel.buildRows(
+        val exhausted = rowsOf(
             inputs(state(messages = messages, buffers = listOf(row(hydrated = true).copy(hasMoreOlder = false)))),
         )
         assertEquals(MessageRow.StartOfHistory, exhausted.first())

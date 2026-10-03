@@ -203,16 +203,9 @@ internal object ConversationModel {
         )
     }
 
-    /** The rows for this frame — [visibleMessages], then iOS's `rebuildRows`. */
-    fun buildRows(
-        inputs: ConversationInputs,
-        options: RowOptions = RowOptions(),
-        now: Instant = Instant.now(),
-        zone: ZoneId = ZoneId.systemDefault(),
-    ): List<MessageRow> = rows(inputs, visibleMessages(inputs, options.keeping, now), options, now, zone)
-
     /**
-     * Everything one build produces, for the screen — built off the main thread, so composition only
+     * The rows for this frame — [visibleMessages], then iOS's `rebuildRows` — and everything else one
+     * build produces, for the screen — built off the main thread, so composition only
      * draws. Safe there because every input is immutable: `ConversationInputs` holds the store's own
      * lists and kit models (`ChatState` is replaced, never mutated), `RowOptions` is a value, and the
      * kit's filters and `MessageRows.build` are pure functions of their arguments — their only

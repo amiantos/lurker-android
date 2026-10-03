@@ -85,6 +85,7 @@ import net.amiantos.lurker.ui.message.ReactionContext
 import net.amiantos.lurker.ui.message.previewMessageRows
 import net.amiantos.lurker.ui.message.rememberMessageTextStyle
 import net.amiantos.lurker.ui.shell.ConnectionBanner
+import net.amiantos.lurker.ui.shell.JumpLedger
 import net.amiantos.lurker.ui.shell.JumpRequest
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.shell.StatusTitle
@@ -135,8 +136,10 @@ import java.time.ZoneOffset
  *
  * U3: the composer. U6: long-press message actions and the reaction picker. U8: link previews.
  *
- * @param jump the message to land on rather than the bottom (`BufferRoute.jump`), consumed once by
- *   its nonce — a new request on the same buffer arrives here without rebuilding the screen.
+ * @param jump the message to land on rather than the bottom (`BufferRoute.jump`) — a new request on
+ *   the same buffer arrives here without rebuilding the screen.
+ * @param jumps the scaffold's record of the requests already acted on: each acts once for the
+ *   session's navigator, however often this screen is rebuilt from the route that carries it.
  * @param resting this is the system buffer the detail pane shows side by side when nothing is picked,
  *   rather than a buffer anyone opened — iOS's `isResting`. It isn't recorded as the buffer you were
  *   reading, which would make a buffer nobody opened the next launch's destination.
@@ -153,6 +156,7 @@ fun ConversationScreen(
     model: ChatViewModel,
     key: BufferKey,
     jump: JumpRequest? = null,
+    jumps: JumpLedger = remember { JumpLedger() },
     resting: Boolean,
     showsBack: Boolean,
     onBack: () -> Unit,
@@ -168,11 +172,13 @@ fun ConversationScreen(
     }
 
     // Where the list is and where it's going. Saved, so a rotation keeps the latched read boundary
-    // (by then the buffer has been marked read, and re-latching would latch our own mark) and the
-    // jump it already consumed. A route's jump is consumed here, at birth, so the very first frame
-    // already knows a jump is pending and hydrates through its `around` slice instead.
+    // (by then the buffer has been marked read, and re-latching would latch our own mark). A route's
+    // jump is taken here, at birth, so the very first frame already knows a jump is pending and
+    // hydrates through its `around` slice instead — once per session: see `JumpLedger`.
     val scroll = rememberSaveable(key.id, saver = scrollSaver(kind)) {
-        ConversationScroll(kind).also { machine -> jump?.let(machine::consume) }
+        ConversationScroll(kind).also { machine ->
+            jump?.takeIf(jumps::claim)?.let { machine.jumpTo(it.messageId) }
+        }
     }
     val options = remember(scroll) { MutableStateFlow(scroll.options) }
     fun publishOptions() {
@@ -230,9 +236,11 @@ fun ConversationScreen(
             hydrate.check(state.connection, state.buffers[key.id], state.burstGeneration, jumpPending = scroll.jumpPending)
                 ?.let(model::hydrate)
             val step = scroll.onFrame(state, key, seq)
+            jobs.lastFrame = state
             step.loadAround?.let { anchor -> model.loadAround(key, anchorId = anchor) }
+            if (step.loadLatest) model.loadLatest(key)
             if (step.optionsChanged) publishOptions()
-            if (step.optionsChanged || step.loadAround != null) revision++
+            if (step.optionsChanged || step.loadAround != null || step.loadLatest) revision++
             // New traffic while we're on screen: keep it marked read — never before the boundary is
             // latched (`ConversationScroll.marksRead`), and only while the screen can be seen (iOS's
             // `view.window != nil`). ⚠ A WRITE: the server's pointer moves for every device. Asked
@@ -355,16 +363,22 @@ fun ConversationScreen(
     }
 
     // A jump the machine just took: its fetch (if the message isn't held) and its landing (if it is).
+    // Asked of the last frame the screen processed, never a fresh read of the store: the reply is
+    // recognised against the frame after it (`ReplyWatch`). Before the first frame there's nothing
+    // to ask against, and that frame asks for itself.
     fun startJump() {
         publishOptions()
-        scroll.requestAround(model.state, key, frameSeq.value)?.let { anchor -> model.loadAround(key, anchorId = anchor) }
+        jobs.lastFrame?.let { frame -> scroll.requestAround(frame, key) }?.let { anchor -> model.loadAround(key, anchorId = anchor) }
         land()
     }
 
     // A route's request that arrived after birth: a jump into the buffer already open.
     LaunchedEffect(jump?.nonce) {
         val request = jump ?: return@LaunchedEffect
-        if (scroll.consume(request)) startJump()
+        if (jumps.claim(request)) {
+            scroll.jumpTo(request.messageId)
+            startJump()
+        }
     }
 
     // MARK: - Builds
@@ -373,8 +387,11 @@ fun ConversationScreen(
     // holding are both about the rows they were reading.
     fun accept(built: BuiltRows) {
         val drawn = current
-        val wasNearBottom = ConversationModel.followsTail(
-            listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, followSlop,
+        val visible = visibleItems(listState)
+        val firstIndex = listState.firstVisibleItemIndex
+        val firstOffset = listState.firstVisibleItemScrollOffset
+        val wasNearBottom = ConversationScroll.nearBottomBefore(
+            visible, drawn, firstIndex, firstOffset, followSlop, lastKnown = jobs.nearBottom,
         )
         val step = scroll.onRows(built, wasNearBottom)
         if (step.optionsChanged) publishOptions()
@@ -382,9 +399,9 @@ fun ConversationScreen(
             null
         } else {
             ConversationScroll.hold(
-                firstVisibleIndex = listState.firstVisibleItemIndex,
-                firstVisibleOffset = listState.firstVisibleItemScrollOffset,
-                visible = visibleItems(listState),
+                firstVisibleIndex = firstIndex,
+                firstVisibleOffset = firstOffset,
+                visible = visible,
                 drawn = drawn,
                 next = built,
             )
@@ -440,6 +457,8 @@ fun ConversationScreen(
                 val rows = sample.rows
                 if (rows.rows.isEmpty()) {
                     pills = ConversationScroll.Pills()
+                    // Nothing drawn is the bottom: whatever lands first is followed.
+                    jobs.nearBottom = true
                     return@collect
                 }
                 val info = sample.layout
@@ -450,6 +469,7 @@ fun ConversationScreen(
                     nearBottomPx = followSlop,
                     pagingPx = pagingDistance,
                 ) ?: return@collect
+                jobs.nearBottom = facts.nearBottom
                 // Read live, as iOS's `isDetached` is: whether a page is worth asking for is a question
                 // about the server's latest word, not the frame that happened to trigger this pass.
                 val detached = model.state.buffers[key.id]?.hasMoreNewer == true
@@ -545,10 +565,17 @@ fun ConversationScreen(
             // U3: sending from a detached slice re-attaches through this same path (iOS's `send`),
             // since the line just sent isn't in the slice and no scroll will reach it.
             val detached = model.state.buffers[key.id]?.hasMoreNewer == true
-            when (scroll.jumpToLatest(hasRows = rows.isNotEmpty(), detached = detached)) {
-                ConversationScroll.ToLatest.Reattach -> model.loadLatest(key)
+            val choice = scroll.jumpToLatest(hasRows = rows.isNotEmpty(), detached = detached)
+            // Both branches can put a `/clear` back.
+            publishOptions()
+            when (choice) {
+                ConversationScroll.ToLatest.Reattach -> {
+                    // A converging chain belongs to the jump this cancelled.
+                    jobs.converging?.cancel()
+                    if (jobs.lastFrame?.let { frame -> scroll.requestLatest(frame, key) } == true) model.loadLatest(key)
+                }
                 ConversationScroll.ToLatest.ScrollDown -> {
-                    publishOptions()
+                    jobs.converging?.cancel()
                     scope.launch { listState.animateScrollToItem(0) }
                 }
                 ConversationScroll.ToLatest.Nothing -> Unit
@@ -579,6 +606,12 @@ private class Jobs {
 
     /** This buffer's message list as of the last mark-read. */
     var markedFor: List<Message>? = null
+
+    /** The last frame the frame stream processed — what a tap's request is judged against. */
+    var lastFrame: ChatState? = null
+
+    /** Whether the reader was at the bottom, as of the last layout that measured what's drawn. */
+    var nearBottom = true
 }
 
 /** What the layout stream reads, in one value, so a change to any of it re-decides. */

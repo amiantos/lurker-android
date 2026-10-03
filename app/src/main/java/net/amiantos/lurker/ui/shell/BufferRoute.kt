@@ -57,3 +57,23 @@ data class JumpRequest(val messageId: Long, val nonce: Long) : java.io.Serializa
         fun to(messageId: Long): JumpRequest = JumpRequest(messageId = messageId, nonce = Random.nextLong())
     }
 }
+
+/**
+ * Which [JumpRequest]s have been consumed, for as long as the navigator's history lives — held by
+ * `MainScaffold`, which outlives the panes, and saved with that history.
+ *
+ * Not the conversation's to remember: the history keeps a route's request for as long as the route
+ * is in it, and the conversation leaves composition (taking its saved state) whenever another
+ * buffer is pushed over it. Back to it rebuilds it from the same route, and a screen-held "last
+ * consumed" would jump again — as would one overwritten by a later in-place jump, once a navigation
+ * retired that and the route's own request came back into view.
+ */
+class JumpLedger(consumed: Collection<Long> = emptyList()) {
+    private val consumed = LinkedHashSet(consumed)
+
+    /** True the first time [request] is seen — it's the caller's to act on — and false ever after. */
+    fun claim(request: JumpRequest): Boolean = consumed.add(request.nonce)
+
+    /** What to save. */
+    fun saved(): LongArray = consumed.toLongArray()
+}

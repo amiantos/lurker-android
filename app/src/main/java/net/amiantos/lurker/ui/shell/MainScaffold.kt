@@ -31,6 +31,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -145,9 +146,14 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
     // the new request on it. Not a navigation, for the rename's reason — the navigator has no
     // replace, and a pop and push would rebuild the conversation (and on a phone slide it out and
     // back in) to deliver one message id. The conversation is keyed by buffer, so a new `jump` on
-    // the same buffer reaches the screen in place, and it consumes the request by its nonce.
+    // the same buffer reaches the screen in place, and each request acts once (`jumps`).
     // Saved with the history it amends; any navigation of ours clears it, as with the rename.
     var jumpedInPlace by rememberSaveable { mutableStateOf<BufferRoute?>(null) }
+
+    // Every jump request the conversation has acted on, so each acts once for the life of the
+    // history that holds it — back to a buffer you were jumped into rebuilds its screen from the
+    // same route, request and all (`JumpLedger`).
+    val jumps = rememberSaveable(saver = JumpLedgerSaver) { JumpLedger() }
 
     // A side-by-side pick in flight. The replace below passes through the list destination, and the
     // detail pane would otherwise show the system buffer for the frame in between.
@@ -395,8 +401,9 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
                             model = model,
                             key = bufferKey,
                             // A new request on the same buffer arrives here without rebuilding the
-                            // screen (`jumpedInPlace`); the screen consumes each one once.
+                            // screen (`jumpedInPlace`); each acts once for the session (`jumps`).
                             jump = route?.jump,
+                            jumps = jumps,
                             resting = route == null,
                             showsBack = !sideBySide,
                             onBack = ::back,
@@ -421,6 +428,9 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
     }
     }
 }
+
+/** Saves the consumed jump requests with the navigator's history. */
+private val JumpLedgerSaver = Saver<JumpLedger, LongArray>(save = { it.saved() }, restore = { JumpLedger(it.toList()) })
 
 /** A route remembered across compositions without being state — reading it must not recompose. */
 private class LastDestination(var route: BufferRoute?)

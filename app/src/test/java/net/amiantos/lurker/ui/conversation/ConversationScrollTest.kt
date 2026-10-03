@@ -3,7 +3,6 @@
 
 package net.amiantos.lurker.ui.conversation
 
-import net.amiantos.lurker.ui.shell.JumpRequest
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
@@ -347,29 +346,49 @@ class ConversationScrollTest {
 
     // MARK: - Jumps
 
+    /**
+     * Drives the machine the way the screen does: every frame through `onFrame`, strictly in order,
+     * and builds stamped with the frame they're of. A live append is `list + message` — the same
+     * held objects with more behind them, as the store makes it; a reply is freshly made messages.
+     */
+    private inner class Drive(val scroll: ConversationScroll = machine(), val key: BufferKey = channel) {
+        var seq = 0L
+            private set
+        lateinit var last: ChatState
+            private set
+
+        fun frame(s: ChatState): ConversationScroll.FrameStep {
+            seq += 1
+            last = s
+            return scroll.onFrame(s, key, seq)
+        }
+
+        /** A build of the last frame, taken onto the screen. */
+        fun built(): BuiltRows = build(scroll, last, seq, key).also { scroll.onRows(it, wasNearBottom = true) }
+
+        fun land(): ConversationScroll.Landing = scroll.landing(built())
+    }
+
     @Test
     fun `a jump to a held message lands without a fetch, on the message's row`() {
-        val scroll = machine()
-        val s = state(messages = msgs(1L..10L))
-        scroll.jumpTo(4)
-        assertNull(scroll.requestAround(s, channel, 1))
-        val built = build(scroll, s, seq = 1)
-        scroll.onRows(built, wasNearBottom = true)
-        assertTrue(scroll.landing(built) is ConversationScroll.Landing.Converge)
-        assertEquals(built.rowIndex(4), scroll.jumpTargetRow(built))
+        val d = Drive()
+        d.frame(state(messages = msgs(1L..10L)))
+        d.scroll.jumpTo(4)
+        assertNull(d.scroll.requestAround(d.last, channel))
+        val built = d.built()
+        assertTrue(d.scroll.landing(built) is ConversationScroll.Landing.Converge)
+        assertEquals(built.rowIndex(4), d.scroll.jumpTargetRow(built))
     }
 
     @Test
     fun `a jump to a message outside the slice fetches an around slice and waits for it`() {
-        val scroll = machine()
-        val s = state(messages = msgs(100L..110L))
-        scroll.jumpTo(4)
-        assertEquals(4L, scroll.requestAround(s, channel, 1))
+        val d = Drive()
+        d.frame(state(messages = msgs(100L..110L)))
+        d.scroll.jumpTo(4)
+        assertEquals(4L, d.scroll.requestAround(d.last, channel))
         // Asked: not again for the same burst.
-        assertNull(scroll.requestAround(s, channel, 2))
-        val built = build(scroll, s, seq = 2)
-        scroll.onRows(built, wasNearBottom = true)
-        assertEquals(ConversationScroll.Landing.Wait, scroll.landing(built))
+        assertNull(d.frame(d.last).loadAround)
+        assertEquals(ConversationScroll.Landing.Wait, d.land())
     }
 
     @Test
@@ -382,69 +401,108 @@ class ConversationScrollTest {
 
     @Test
     fun `the around request is re-armed by a drop and by a new burst`() {
-        val scroll = machine()
-        scroll.jumpTo(4)
-        assertEquals(4L, scroll.requestAround(state(messages = msgs(100L..110L)), channel, 1))
-        assertNull(scroll.requestAround(state(messages = msgs(100L..110L), connection = SocketStatus.Reconnecting), channel, 2))
-        assertEquals(4L, scroll.requestAround(state(messages = msgs(100L..110L)), channel, 3))
+        val d = Drive()
+        val held = msgs(100L..110L)
+        d.scroll.jumpTo(4)
+        assertEquals(4L, d.frame(state(messages = held)).loadAround)
+        assertNull(d.frame(state(messages = held, connection = SocketStatus.Reconnecting)).loadAround)
+        assertEquals(4L, d.frame(state(messages = held)).loadAround)
         // The socket replaced under a steady Connected: the burst is the signal.
-        assertEquals(4L, scroll.requestAround(state(messages = msgs(100L..110L), burstGeneration = 2), channel, 4))
+        assertEquals(4L, d.frame(state(messages = held, burstGeneration = 2)).loadAround)
     }
 
     @Test
-    fun `the around reply is detected by the slice replacing the held ids, not by the buffer having messages`() {
-        val scroll = machine()
+    fun `the around reply is recognised by its rebuilt list, not by the buffer having messages`() {
+        val d = Drive()
         // A small connect backlog is already held when the jump asks.
-        val before = state(messages = msgs(100L..104L))
-        scroll.jumpTo(4)
-        scroll.requestAround(before, channel, 1)
-        // A live append keeps every baseline id: not the reply.
-        val live = build(scroll, state(messages = msgs(100L..105L)), seq = 2)
-        scroll.onRows(live, wasNearBottom = true)
-        assertEquals(ConversationScroll.Landing.Wait, scroll.landing(live))
-        // The reply replaces the slice (anchor missing on the server, say): now it has landed, and
-        // the jump gives up — at the bottom, since there's something to land on.
-        val reply = build(scroll, state(row(hasMoreNewer = true), msgs(20L..30L)), seq = 3)
-        scroll.onRows(reply, wasNearBottom = true)
-        assertEquals(ConversationScroll.Landing.AtTail, scroll.landing(reply))
-        assertFalse(scroll.jumpPending)
+        val backlog = msgs(100L..104L)
+        d.frame(state(messages = backlog))
+        d.scroll.jumpTo(4)
+        assertEquals(4L, d.frame(state(messages = backlog)).loadAround)
+        // A live append keeps every held message: not the reply.
+        d.frame(state(messages = backlog + msg(105)))
+        assertEquals(ConversationScroll.Landing.Wait, d.land())
+        // The reply rebuilds the list (anchor missing on the server, say): it has landed, and the
+        // jump gives up — at the bottom, since there's something to land on.
+        d.frame(state(row(hasMoreNewer = true), msgs(20L..30L)))
+        assertEquals(ConversationScroll.Landing.AtTail, d.land())
+        assertFalse(d.scroll.jumpPending)
     }
 
     @Test
-    fun `an older build still in the pipeline is not mistaken for the reply`() {
-        val scroll = machine()
-        scroll.onRows(build(scroll, state(messages = msgs(100L..104L)), seq = 1), wasNearBottom = true)
-        // Frame 2 brought a live line; the jump asks after it, with 105 in its baseline.
-        scroll.jumpTo(4)
-        scroll.requestAround(state(messages = msgs(100L..105L)), channel, 2)
-        // Frame 1's build, still in flight, lacks 105 — "replaced" by arithmetic. It isn't.
-        val stale = build(scroll, state(messages = msgs(100L..104L)), seq = 1)
-        scroll.onRows(stale, wasNearBottom = true)
-        assertEquals(ConversationScroll.Landing.Wait, scroll.landing(stale))
+    fun `an around reply that lacks the anchor but holds every id already held is still recognised`() {
+        val d = Drive()
+        // A small, fully loaded buffer; the quoted line has been pruned since.
+        val all = msgs(1L..10L)
+        val small = row(hasMoreOlder = false)
+        d.frame(state(small, all))
+        d.scroll.jumpTo(99)
+        assertEquals(99L, d.frame(state(small, all)).loadAround)
+        // The reply is the whole buffer again — every id already held, nothing replaced.
+        d.frame(state(small, msgs(1L..10L)))
+        assertEquals(ConversationScroll.Landing.AtTail, d.land())
+        assertFalse(d.scroll.jumpPending)
+    }
+
+    @Test
+    fun `a build of a frame before the reply is not taken for the reply's rows`() {
+        val d = Drive()
+        val backlog = msgs(100L..104L)
+        d.frame(state(messages = backlog))
+        d.scroll.jumpTo(4)
+        d.frame(state(messages = backlog))
+        val stale = build(d.scroll, d.last, d.seq)
+        d.frame(state(row(hasMoreNewer = true), msgs(20L..30L)))
+        // The reply has landed, but these rows are of the frame before it.
+        assertEquals(ConversationScroll.Landing.Wait, d.scroll.landing(stale))
+        assertEquals(ConversationScroll.Landing.AtTail, d.land())
     }
 
     @Test
     fun `an empty anchorMissing reply into an unhydrated buffer is recognised by it hydrating`() {
-        val scroll = machine()
-        scroll.jumpTo(4)
-        scroll.requestAround(state(row(hydrated = false)), channel, 1)
+        val d = Drive()
+        d.frame(state(row(hydrated = false)))
+        d.scroll.jumpTo(4)
+        assertEquals(4L, d.frame(state(row(hydrated = false))).loadAround)
         // Nothing to replace, no anchor to appear — but a history reply always hydrates.
-        val reply = build(scroll, state(row(hydrated = true)), seq = 2)
-        scroll.onRows(reply, wasNearBottom = true)
+        d.frame(state(row(hydrated = true)))
         // An empty buffer: let go, and let the empty state show.
-        assertEquals(ConversationScroll.Landing.Idle, scroll.landing(reply))
-        assertFalse(scroll.jumpPending)
+        assertEquals(ConversationScroll.Landing.Idle, d.land())
+        assertFalse(d.scroll.jumpPending)
+    }
+
+    @Test
+    fun `a jump into a buffer the server says is empty lets go without a fetch`() {
+        val d = Drive()
+        d.frame(state(row(hydrated = true)))
+        d.scroll.jumpTo(4)
+        assertNull(d.scroll.requestAround(d.last, channel))
+        assertEquals(ConversationScroll.Landing.Idle, d.land())
+        assertFalse(d.scroll.jumpPending)
     }
 
     @Test
     fun `the reply with the anchor in it is landed on`() {
-        val scroll = machine()
-        scroll.jumpTo(4)
-        scroll.requestAround(state(messages = msgs(100L..110L)), channel, 1)
-        val reply = build(scroll, state(row(hasMoreNewer = true), msgs(1L..8L)), seq = 2)
-        scroll.onRows(reply, wasNearBottom = true)
-        assertTrue(scroll.landing(reply) is ConversationScroll.Landing.Converge)
-        assertEquals(reply.rowIndex(4), scroll.jumpTargetRow(reply))
+        val d = Drive()
+        d.frame(state(messages = msgs(100L..110L)))
+        d.scroll.jumpTo(4)
+        d.frame(d.last)
+        d.frame(state(row(hasMoreNewer = true), msgs(1L..8L)))
+        val reply = d.built()
+        assertTrue(d.scroll.landing(reply) is ConversationScroll.Landing.Converge)
+        assertEquals(reply.rowIndex(4), d.scroll.jumpTargetRow(reply))
+    }
+
+    @Test
+    fun `a live append and a reply are told apart by the held objects`() {
+        val held = msgs(1L..5L)
+        assertTrue(ReplyWatch.isAppend(held, held + msg(6)))
+        assertTrue(ReplyWatch.isAppend(held, held))
+        assertFalse(ReplyWatch.isAppend(held, msgs(1L..5L)))
+        assertFalse(ReplyWatch.isAppend(held, msgs(1L..6L)))
+        assertFalse(ReplyWatch.isAppend(held, held.drop(1)))
+        // An empty start says nothing either way — the hydrate flag does.
+        assertTrue(ReplyWatch.isAppend(emptyList(), msgs(1L..3L)))
     }
 
     @Test
@@ -499,17 +557,24 @@ class ConversationScrollTest {
     }
 
     @Test
-    fun `a jump whose target vanished lands at the bottom, one the reader interrupted stays put`() {
+    fun `a jump whose target vanished lands at the bottom`() {
         val scroll = machine()
         scroll.jumpTo(4)
         val built = build(scroll, state(messages = msgs(1L..10L)))
         val token = (scroll.landing(built) as ConversationScroll.Landing.Converge).token
         val gone = build(scroll, state(messages = msgs(6L..10L)))
         assertEquals(ConversationScroll.Finish.AtTail, scroll.finishJump(token, gone, interrupted = false))
+    }
 
+    @Test
+    fun `a jump the reader interrupted stays put and never flashes`() {
+        val scroll = machine()
         scroll.jumpTo(4)
-        val again = (scroll.landing(built) as ConversationScroll.Landing.Converge).token
-        assertEquals(ConversationScroll.Finish.Release, scroll.finishJump(again, gone, interrupted = true))
+        val built = build(scroll, state(messages = msgs(1L..10L)))
+        val token = (scroll.landing(built) as ConversationScroll.Landing.Converge).token
+        // The target is right there — still no pulse on a row they're dragging away from.
+        assertEquals(ConversationScroll.Finish.Release, scroll.finishJump(token, built, interrupted = true))
+        assertFalse(scroll.jumpPending)
     }
 
     @Test
@@ -540,7 +605,7 @@ class ConversationScrollTest {
         val lines = msgs(1L..3L) + msg(4, nick = null, type = EventType.System, text = "sys") + msgs(5L..6L)
         val s = state(messages = lines)
         scroll.jumpTo(4)
-        assertNull(scroll.requestAround(s, channel, 1))
+        assertNull(scroll.requestAround(s, channel))
         assertEquals(ConversationScroll.Landing.AtTail, scroll.landing(build(scroll, s)))
     }
 
@@ -551,49 +616,36 @@ class ConversationScrollTest {
         val s = state(row(log, hydrated = false), messages = msgs(10L..20L), key = log)
         scroll.jumpTo(4)
         // A server log can't fetch an `around` slice.
-        assertNull(scroll.requestAround(s, log, 1))
+        assertNull(scroll.requestAround(s, log))
         assertEquals(ConversationScroll.Landing.AtTail, scroll.landing(build(scroll, s, key = log)))
-    }
-
-    @Test
-    fun `a request is consumed once by its nonce, across recreation`() {
-        val scroll = machine()
-        val request = JumpRequest(messageId = 4, nonce = 77)
-        assertTrue(scroll.consume(request))
-        assertFalse(scroll.consume(request))
-        val restored = ConversationScroll(BufferKind.Channel, scroll.memory())
-        assertFalse(restored.consume(request))
-        assertFalse(restored.jumpPending)
-        // The same message again is a new request.
-        assertTrue(restored.consume(JumpRequest(messageId = 4, nonce = 78)))
     }
 
     // MARK: - Jump to first unread
 
     @Test
     fun `the unread jump fetches on the boundary but lands on the first unread rendered row`() {
-        val scroll = machine()
+        val d = Drive()
         // A large unread: the boundary (5) is older than everything loaded, so the divider is
         // pinned to the top of the window — the seam isn't loaded.
-        val s = state(row(readStateKnown = true, lastReadId = 5), msgs(100L..110L))
-        scroll.onFrame(s, channel, 1)
-        val pinned = build(scroll, s, seq = 1)
+        val pointer = row(readStateKnown = true, lastReadId = 5)
+        d.frame(state(pointer, msgs(100L..110L)))
+        val pinned = d.built()
         // Under only the day's divider: every loaded row is unread.
         assertEquals(1, pinned.dividerRow)
-        assertTrue(scroll.jumpToFirstUnread())
+        assertTrue(d.scroll.jumpToFirstUnread())
         // The FETCH anchors on the boundary…
-        assertEquals(5L, scroll.requestAround(s, channel, 1))
+        assertEquals(5L, d.scroll.requestAround(d.last, channel))
         // …and while it's in flight the top-pinned divider is no target.
-        val waiting = build(scroll, s, seq = 1)
-        scroll.onRows(waiting, wasNearBottom = true)
-        assertNull(scroll.jumpTargetRow(waiting))
-        assertEquals(ConversationScroll.Landing.Wait, scroll.landing(waiting))
+        d.frame(d.last)
+        val waiting = d.built()
+        assertNull(d.scroll.jumpTargetRow(waiting))
+        assertEquals(ConversationScroll.Landing.Wait, d.scroll.landing(waiting))
         // The slice arrives around the boundary, whose own id is a frame this channel never renders.
         val seam = msgs(1L..4L) + msg(5, nick = null, type = EventType.Other, text = null) + msgs(6L..9L)
-        val reply = build(scroll, state(row(readStateKnown = true, lastReadId = 5, hasMoreNewer = true), seam), seq = 2)
-        scroll.onRows(reply, wasNearBottom = true)
-        assertTrue(scroll.landing(reply) is ConversationScroll.Landing.Converge)
-        val target = scroll.jumpTargetRow(reply)!!
+        d.frame(state(row(readStateKnown = true, lastReadId = 5, hasMoreNewer = true), seam))
+        val reply = d.built()
+        assertTrue(d.scroll.landing(reply) is ConversationScroll.Landing.Converge)
+        val target = d.scroll.jumpTargetRow(reply)!!
         assertEquals(reply.firstUnreadRow, target)
         assertEquals(6L, reply.rows[target].message?.id)
     }
@@ -602,10 +654,24 @@ class ConversationScrollTest {
     fun `the unread jump with the seam already loaded lands without a fetch`() {
         val (scroll, built) = withDivider()
         assertTrue(scroll.jumpToFirstUnread())
-        assertNull(scroll.requestAround(state(row(readStateKnown = true, lastReadId = 5), msgs(1L..10L)), channel, 2))
+        assertNull(scroll.requestAround(state(row(readStateKnown = true, lastReadId = 5), msgs(1L..10L)), channel))
         val current = build(scroll, state(row(readStateKnown = true, lastReadId = 5), msgs(1L..10L)), seq = 2)
         assertTrue(scroll.landing(current) is ConversationScroll.Landing.Converge)
         assertEquals(built.firstUnreadRow, scroll.jumpTargetRow(current))
+    }
+
+    @Test
+    fun `the unread jump never peels back a clear - its target is a rendered row`() {
+        val d = Drive()
+        // Read up to 3; cleared up to 5. The fetch anchor (3) is behind the marker, the target isn't.
+        val s = state(row(readStateKnown = true, lastReadId = 3, clearedBeforeId = 5, clearedAt = clearedAt), msgs(1L..10L))
+        d.frame(s)
+        assertTrue(d.scroll.jumpToFirstUnread())
+        d.frame(s)
+        val built = d.built()
+        assertFalse(d.scroll.options.showsClearedHistory)
+        assertTrue(d.scroll.landing(built) is ConversationScroll.Landing.Converge)
+        assertEquals(6L, built.rows[d.scroll.jumpTargetRow(built)!!].message?.id)
     }
 
     @Test
@@ -659,19 +725,74 @@ class ConversationScrollTest {
 
     @Test
     fun `jump to latest from a detached slice re-attaches and lands at the new tail once it arrives`() {
-        val scroll = machine()
-        val detached = build(scroll, state(row(hasMoreNewer = true), msgs(1L..10L)))
-        scroll.onRows(detached, wasNearBottom = true)
-        assertEquals(ConversationScroll.ToLatest.Reattach, scroll.jumpToLatest(hasRows = true, detached = true))
-        assertTrue(scroll.landingPending)
+        val d = Drive()
+        d.frame(state(row(hasMoreNewer = true), msgs(1L..10L)))
+        d.built()
+        assertEquals(ConversationScroll.ToLatest.Reattach, d.scroll.jumpToLatest(hasRows = true, detached = true))
+        assertTrue(d.scroll.landingPending)
+        assertTrue(d.scroll.requestLatest(d.last, channel))
+        // Asked: not again for the same burst.
+        assertFalse(d.frame(d.last).loadLatest)
         // Still the old slice: wait.
-        assertEquals(ConversationScroll.Landing.Wait, scroll.landing(detached))
+        assertEquals(ConversationScroll.Landing.Wait, d.land())
         // A drag while the latest slice is in flight must not drop the asked-for landing.
-        assertFalse(scroll.onUserDrag())
-        val latest = build(scroll, state(row(), msgs(500L..520L)))
-        scroll.onRows(latest, wasNearBottom = false)
-        assertEquals(ConversationScroll.Landing.AtTail, scroll.landing(latest))
-        assertFalse(scroll.landingPending)
+        assertFalse(d.scroll.onUserDrag())
+        d.frame(state(row(), msgs(500L..520L)))
+        assertEquals(ConversationScroll.Landing.AtTail, d.land())
+        assertFalse(d.scroll.landingPending)
+    }
+
+    @Test
+    fun `a re-attach lost with its socket is asked for again`() {
+        val d = Drive()
+        val slice = msgs(1L..10L)
+        d.frame(state(row(hasMoreNewer = true), slice))
+        d.scroll.jumpToLatest(hasRows = true, detached = true)
+        assertTrue(d.scroll.requestLatest(d.last, channel))
+        assertFalse(d.frame(state(row(hasMoreNewer = true), slice, connection = SocketStatus.Reconnecting)).loadLatest)
+        assertTrue(d.frame(state(row(hasMoreNewer = true), slice)).loadLatest)
+        // Replaced under a steady Connected: the new burst asks again.
+        assertTrue(d.frame(state(row(hasMoreNewer = true), slice, burstGeneration = 2)).loadLatest)
+        assertFalse(d.frame(state(row(hasMoreNewer = true), slice, burstGeneration = 2)).loadLatest)
+    }
+
+    @Test
+    fun `jump to latest cancels a pending jump when it rides down`() {
+        val d = Drive()
+        d.frame(state(messages = msgs(1L..10L)))
+        d.scroll.jumpTo(4)
+        assertEquals(ConversationScroll.ToLatest.ScrollDown, d.scroll.jumpToLatest(hasRows = true, detached = false))
+        assertFalse(d.scroll.jumpPending)
+        assertEquals(ConversationScroll.Landing.Idle, d.land())
+    }
+
+    @Test
+    fun `jump to latest with a jump's slice still in the air re-attaches past it`() {
+        val d = Drive()
+        val live = msgs(100L..110L)
+        d.frame(state(messages = live))
+        d.scroll.jumpTo(4)
+        assertEquals(4L, d.frame(state(messages = live)).loadAround)
+        // The reader gives up on it and asks for the bottom.
+        assertEquals(ConversationScroll.ToLatest.Reattach, d.scroll.jumpToLatest(hasRows = true, detached = false))
+        assertFalse(d.scroll.jumpPending)
+        assertTrue(d.scroll.requestLatest(d.last, channel))
+        // The stray `around` reply lands anyway, detaching the buffer: nothing converges on it.
+        d.frame(state(row(hasMoreNewer = true), msgs(1L..8L)))
+        assertEquals(ConversationScroll.Landing.Wait, d.land())
+        // The `latest` behind it re-attaches, and that's where the reader lands.
+        d.frame(state(row(), msgs(100L..112L)))
+        assertEquals(ConversationScroll.Landing.AtTail, d.land())
+    }
+
+    @Test
+    fun `re-attaching puts a clear back too`() {
+        val scroll = machine()
+        scroll.jumpTo(3)
+        scroll.onRows(build(scroll, state(row(clearedBeforeId = 5, clearedAt = clearedAt), msgs(1L..10L))), wasNearBottom = false)
+        assertTrue(scroll.options.showsClearedHistory)
+        assertEquals(ConversationScroll.ToLatest.Reattach, scroll.jumpToLatest(hasRows = true, detached = true))
+        assertFalse(scroll.options.showsClearedHistory)
     }
 
     @Test
@@ -690,7 +811,7 @@ class ConversationScrollTest {
     fun `a drag releases a converging jump, never one waiting on its fetch`() {
         val scroll = machine()
         scroll.jumpTo(4)
-        scroll.requestAround(state(messages = msgs(100L..110L)), channel, 1)
+        scroll.requestAround(state(messages = msgs(100L..110L)), channel)
         assertFalse(scroll.onUserDrag())
         val held = machine()
         held.jumpTo(4)
@@ -855,5 +976,31 @@ class ConversationScrollTest {
         val scroll = machine()
         val drawn = build(scroll, state(messages = msgs(1L..20L)))
         assertNull(ConversationScroll.hold(3, 0, laidOut(drawn, 20, 200, 60), drawn, drawn))
+    }
+
+    @Test
+    fun `hold refuses a layout that hasn't measured the drawn rows`() {
+        val scroll = machine()
+        val older = build(scroll, state(row(hasMoreNewer = true), msgs(1L..40L)))
+        val drawn = build(scroll, state(row(hasMoreNewer = true), msgs(1L..50L)))
+        val big = build(scroll, state(row(hasMoreNewer = true), msgs(1L..250L)))
+        // Of the drawn rows: a big page below the reader is held by hand.
+        assertNotNull(ConversationScroll.hold(0, 4, laidOut(drawn, 20, 200, 4), drawn, big))
+        // Of an earlier build (the new rows were published, the pass that lays them out hasn't run):
+        // its first visible index means nothing in the drawn rows.
+        assertNull(ConversationScroll.hold(0, 4, laidOut(older, 20, 200, 4), drawn, big))
+    }
+
+    @Test
+    fun `wasNearBottom falls back to the last measured answer when the layout is stale`() {
+        val scroll = machine()
+        val older = build(scroll, state(messages = msgs(1L..40L)))
+        val drawn = build(scroll, state(messages = msgs(1L..50L)))
+        // Measured: read off the layout.
+        assertTrue(ConversationScroll.nearBottomBefore(laidOut(drawn, 20, 200, 0), drawn, 0, 0, 80, lastKnown = false))
+        assertFalse(ConversationScroll.nearBottomBefore(laidOut(drawn, 20, 200, 400), drawn, 20, 0, 80, lastKnown = true))
+        // A layout of other rows: the last answer stands.
+        assertFalse(ConversationScroll.nearBottomBefore(laidOut(older, 20, 200, 0), drawn, 0, 0, 80, lastKnown = false))
+        assertTrue(ConversationScroll.nearBottomBefore(emptyList(), drawn, 0, 0, 80, lastKnown = true))
     }
 }
