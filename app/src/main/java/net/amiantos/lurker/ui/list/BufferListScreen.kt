@@ -3,6 +3,8 @@
 
 package net.amiantos.lurker.ui.list
 
+import kotlinx.coroutines.flow.conflate
+import net.amiantos.lurker.ui.networks.NetworkSheets
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -64,8 +66,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
-import net.amiantos.lurker.ui.networks.NetworkSheetsHost
-import net.amiantos.lurker.ui.networks.rememberNetworkSheets
 import net.amiantos.lurker.ui.shell.ConnectionBanner
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.shell.StatusTitle
@@ -121,11 +121,15 @@ fun BufferListScreen(
     onOpen: (Buffer) -> Unit,
     onClose: (Buffer) -> Unit,
     onSignOut: () -> Unit,
+    sheets: NetworkSheets,
 ) {
     // Stage one: map every frame to what the list draws, and drop the frames that change none of
     // it. Stage two (below) builds the sections from what's left.
     val inputsFlow = remember(model) {
         model.statePublisher
+            // Conflated: a burst's frames for other buffers needn't be mapped one by one when only
+            // the latest is ever drawn.
+            .conflate()
             .map(BufferListInputs::of)
             .distinctUntilChanged { old, new -> BufferListInputs.same(old, new) }
     }
@@ -134,8 +138,6 @@ fun BufferListScreen(
 
     var optimistic by remember { mutableStateOf<OptimisticFavorites?>(null) }
     var drag by remember { mutableStateOf<DragSession?>(null) }
-    // Join Channel, Add Network and the networks list — full-screen dialogs over this screen.
-    val sheets = rememberNetworkSheets()
 
     // ⚠⚠ The burst gate. `hasRenderedList` is NEVER reset here. On iOS it used to be cleared
     // whenever `backlogComplete` was false — meant as "a fresh session waits again" — which
@@ -257,14 +259,6 @@ fun BufferListScreen(
         draggingSection = drag?.sectionId,
         actions = actions,
     )
-
-    // Joining is also switching: you asked for a channel, so land in it — once the server says
-    // you're in (lurker-ios#57). Nothing navigates before then: a join can be refused, and a screen
-    // for a channel you never got into has nothing to show. `requestJoin` opens the channel when
-    // `channel-joined` lands (`AppEvent.OpenBuffer`), and says why when it doesn't (`AppEvent.Notice`).
-    NetworkSheetsHost(sheets = sheets, model = model) { networkId, channel ->
-        model.requestJoin(networkId = networkId, channel = channel, opens = true)
-    }
 }
 
 /** What the list's touches do. One object so the content composable stays stateless (previews). */

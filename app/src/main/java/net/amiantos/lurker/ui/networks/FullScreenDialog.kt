@@ -3,6 +3,10 @@
 
 package net.amiantos.lurker.ui.networks
 
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import net.amiantos.lurker.ui.shell.NoticeHost
+import net.amiantos.lurker.platform.LocalAppEvents
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
@@ -76,6 +80,11 @@ internal fun FullScreenDialog(onDismissRequest: () -> Unit, content: @Composable
                 }
             } else {
                 Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) { content() }
+            }
+            // The app's notices, over this dialog while it's on top: a snackbar in the activity's
+            // window would be drawn under this one's, where nobody reads it (iOS toasts on the sheet).
+            LocalAppEvents.current?.let { events ->
+                NoticeHost(events, Modifier.align(Alignment.BottomCenter).safeDrawingPadding().imePadding())
             }
         }
     }

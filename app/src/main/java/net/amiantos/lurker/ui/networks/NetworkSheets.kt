@@ -3,9 +3,7 @@
 
 package net.amiantos.lurker.ui.networks
 
-import android.app.Activity
-import android.content.Context
-import android.content.ContextWrapper
+import net.amiantos.lurker.platform.findActivity
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -49,6 +47,14 @@ class NetworkSheets internal constructor(private val open: MutableState<String?>
 
     fun showJoinChannel() {
         open.value = JOIN
+    }
+
+    /**
+     * Close whatever is open, discarding its state — iOS's `dismissPresented`, which `land(on:)` runs
+     * before opening a buffer a join or a DCC chat asked for.
+     */
+    fun dismiss() {
+        current = null
     }
 
     internal var current: String?
@@ -165,10 +171,3 @@ private fun NetworksDialog(model: ChatViewModel, flow: NetworksFlow, onDismiss: 
     }
 }
 
-/** The activity under a (possibly wrapped) context — a dialog's context wraps its activity's. */
-private tailrec fun Context.findActivity(): Activity? =
-    when (this) {
-        is Activity -> this
-        is ContextWrapper -> baseContext.findActivity()
-        else -> null
-    }
