@@ -9,22 +9,26 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameNanos
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
-import androidx.core.net.toUri
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import net.amiantos.lurker.platform.AppEvent
 import net.amiantos.lurker.platform.LocalAppEvents
 import net.amiantos.lurker.ui.message.RowPress
@@ -89,8 +93,10 @@ internal class MessageActionsState(private val model: ChatViewModel, private val
     }
 
     /** The add chip, or a chip that can't toggle: the reaction sheet for that line. */
-    fun showReactions(message: Message) {
-        if (sheet == null) sheet = ActionSheet.Reactions(message)
+    fun showReactions(message: Message): Boolean {
+        if (sheet != null) return false
+        sheet = ActionSheet.Reactions(message)
+        return true
     }
 
     fun showIgnore(message: Message, subject: String) {
@@ -110,6 +116,9 @@ internal fun rememberMessageActionsState(model: ChatViewModel, key: BufferKey): 
  * Draws whichever sheet is up, and runs what it picked — the platform half: the composer, the
  * clipboard, the share sheet, the browser, the profile.
  *
+ * Composed inside the conversation's `LocalUriHandler` provider, so Open Link goes through the same
+ * opener as a tap on a link (`SafeUriHandler`), with the same failure policy.
+ *
  * @param onReply the composer's Reply (`ComposerState.startReply`), given the line as the list shows it.
  * @param onShowProfile the profile dialog, for this buffer's network.
  */
@@ -122,6 +131,8 @@ internal fun MessageActionsHost(
     onShowProfile: (networkId: Int, nick: String) -> Unit,
 ) {
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
+    val window = LocalWindowInfo.current
     val clipboard = LocalClipboard.current
     val events = LocalAppEvents.current
     val scope = rememberCoroutineScope()
@@ -138,12 +149,27 @@ internal fun MessageActionsHost(
         copy = { text -> copy("Message", text) },
         setBookmark = { id, saved ->
             // ⚠ A WRITE. Nothing retries it, so a send that went nowhere says so rather than nothing.
-            if (!model.setBookmark(messageId = id, saved = saved)) notice(ReactionSheetModel.NOT_CONNECTED)
+            if (!model.setBookmark(messageId = id, saved = saved)) notice(MessageActionsModel.BOOKMARK_NOT_SENT)
         },
         showProfile = { nick -> key.networkId?.let { onShowProfile(it, nick) } },
-        react = state::showReactions,
+        react = { message -> state.showReactions(message) },
         ignore = state::showIgnore,
     )
+
+    // A picked action, waiting for the sheet to be gone. Dismiss first, act second: Reply raises the
+    // keyboard, which doesn't take while the sheet's window still holds the focus — so this waits for
+    // the real event, the sheet out of composition AND this window focused again, rather than a guess
+    // at how many frames that takes. Bounded, so an app that lost focus meanwhile (a split-screen
+    // neighbour tapped) still gets its copy; and dropped if the conversation goes first.
+    var pending by remember { mutableStateOf<(() -> Unit)?>(null) }
+    LaunchedEffect(pending) {
+        val action = pending ?: return@LaunchedEffect
+        withTimeoutOrNull(FOCUS_WAIT_MS) {
+            snapshotFlow { state.sheet == null && window.isWindowFocused }.first { it }
+        }
+        pending = null
+        action()
+    }
 
     when (val sheet = state.sheet) {
         null -> Unit
@@ -152,18 +178,15 @@ internal fun MessageActionsHost(
             rows = sheet.rows,
             onDismiss = state::dismiss,
             onPick = { picked ->
-                state.dismiss()
-                // Act once the sheet's window is gone (the frame after it leaves composition): Reply
-                // raises the keyboard, which doesn't take while the sheet still holds the focus.
-                scope.launch {
-                    repeat(2) { withFrameNanos {} }
+                pending = {
                     MessageActionsModel.run(
                         picked, sheet.subject, effects,
-                        open = { url -> openLink(context, url) },
+                        open = uriHandler::openUri,
                         copyLink = { url -> copy("Link", url) },
                         share = { url -> share(context, url) },
                     )
                 }
+                state.dismiss()
             },
         )
         is ActionSheet.Reactions -> {
@@ -202,14 +225,8 @@ internal fun MessageActionsHost(
     }
 }
 
-/** Open Link: the browser, or whatever takes the address — and nothing at all, rather than a crash, when nothing does. */
-private fun openLink(context: Context, url: String) {
-    try {
-        context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
-    } catch (e: ActivityNotFoundException) {
-        Log.w("Lurker", "no app opens $url", e)
-    }
-}
+/** How long a picked action waits for the sheet's window to hand the focus back. */
+private const val FOCUS_WAIT_MS = 1_000L
 
 /** Share Link: the system share sheet. */
 private fun share(context: Context, url: String) {

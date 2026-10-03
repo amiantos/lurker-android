@@ -17,6 +17,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SheetState
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -26,6 +27,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -33,6 +36,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
@@ -52,7 +56,7 @@ import net.amiantos.lurkerkit.model.MessageActionKey
  * that's a bit taller. Sized to its rows, not half the screen: the conversation behind it is what
  * you're acting on, and worth leaving visible.
  *
- * Dismiss first, act second ([onPick] fires once the sheet is down): Reply raises the keyboard, which
+ * Dismiss first, act second ([onPick] fires once the sheet is down — [SheetCloser]): Reply raises the keyboard, which
  * can't take while a sheet's window still holds the focus.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -63,18 +67,44 @@ internal fun MessageActionsSheet(
     onDismiss: () -> Unit,
     onPick: (ActionKey) -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val scope = rememberCoroutineScope()
-    // Rows stay tappable through the dismissal animation, so without this a quick double tap on
-    // Share Link would queue two share sheets.
-    val ran = remember { booleanArrayOf(false) }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
-        MessageActionsContent(header, rows) { key ->
-            if (ran[0]) return@MessageActionsContent
-            ran[0] = true
-            scope.launch { sheetState.hide() }.invokeOnCompletion { onPick(key) }
+    val closer = rememberSheetCloser()
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = closer.state) {
+        MessageActionsContent(header, rows) { key -> closer.closeThen { onPick(key) } }
+    }
+}
+
+/**
+ * A sheet's "dismiss first, act second", shared by the actions and reaction sheets: hide, and act only
+ * once the hide has FINISHED.
+ *
+ * ⚠ Only on normal completion — never from `invokeOnCompletion`, which also runs when the hide is
+ * cancelled: the sheet torn down some other way (Back, the conversation leaving) would then still open
+ * a share sheet or a browser the user had already backed out of. And once per sheet: rows stay
+ * tappable through the dismissal animation, so a quick double tap on Share Link would queue two.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+internal class SheetCloser(val state: SheetState, private val scope: CoroutineScope) {
+    private var closing = false
+
+    /** Whether a close is under way — the sheet's choices are spent. */
+    val isClosing: Boolean get() = closing
+
+    fun closeThen(action: () -> Unit) {
+        if (closing) return
+        closing = true
+        scope.launch {
+            state.hide()
+            action()
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun rememberSheetCloser(): SheetCloser {
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    return remember(state, scope) { SheetCloser(state, scope) }
 }
 
 /** The sheet's contents, stateless — for previews, and so it draws only what it's given. */
@@ -88,7 +118,7 @@ internal fun MessageActionsContent(header: ActionHeader, rows: List<ActionRow>, 
             .verticalScroll(rememberScrollState())
             .padding(bottom = 8.dp),
     ) {
-        SheetHeader(header.title, header.detail, detailLines = 3)
+        SheetHeader(header.title, header.detail, spokenDetail = header.spokenDetail, detailLines = 3)
         for (row in rows) ActionRowItem(row, onPick)
     }
 }
@@ -98,7 +128,7 @@ internal fun MessageActionsContent(header: ActionHeader, rows: List<ActionRow>, 
  * the same kind of object: a thing, then what you can do to it. Shared with the reaction sheet.
  */
 @Composable
-internal fun SheetHeader(title: String, detail: String?, detailLines: Int) {
+internal fun SheetHeader(title: String, detail: String?, detailLines: Int, spokenDetail: String? = detail) {
     val colors = LurkerTheme.colors
     Column(
         Modifier
@@ -119,6 +149,12 @@ internal fun SheetHeader(title: String, detail: String?, detailLines: Int) {
         if (!detail.isNullOrEmpty()) {
             Text(
                 detail,
+                // A masked spoiler is announced as one, not read out block by block.
+                modifier = if (spokenDetail != null && spokenDetail != detail) {
+                    Modifier.clearAndSetSemantics { contentDescription = spokenDetail }
+                } else {
+                    Modifier
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = colors.fgMuted,
                 textAlign = TextAlign.Center,

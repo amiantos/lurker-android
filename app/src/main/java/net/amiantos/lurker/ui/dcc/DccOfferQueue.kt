@@ -41,9 +41,17 @@ data class DccOfferPrompt(val offer: DccChatOffer, val networkName: String?) {
  * Asked = answered, here, where iOS marks it at presentation: the prompt is composition, which a
  * configuration change rebuilds, and an offer marked asked by a dialog that was then torn down would
  * never be put up again. One offer at a time, oldest first.
+ *
+ * ⚠⚠ An answer counts only once the prompt for THAT offer has been on screen for [SETTLE_MS]
+ * ([shown], [answer]). With two offers queued, answering the first puts the second up in the same
+ * spot, and a quick second tap — or a double tap — would answer an offer nobody read. Accepting makes
+ * the server dial an address the peer chose; it has to be a deliberate act about the offer named.
  */
 class DccOfferQueue {
     private var asked: Set<Int> = emptySet()
+
+    /** The offer whose prompt is on screen, and since when (a monotonic clock, in ms). */
+    private var shownSince: Pair<Int, Long>? = null
     private var offers: List<DccChatOffer> = emptyList()
     private var names: Map<Int, String?> = emptyMap()
 
@@ -64,15 +72,35 @@ class DccOfferQueue {
         return recompute()
     }
 
-    /** The prompt was answered — Accept, Decline or Not Now (or dismissed, which is Not Now). */
-    fun answered(id: Int): DccOfferPrompt? {
+    /**
+     * The prompt for [id] is on screen as of [now] — the moment its settle runs from. Once per offer:
+     * a recomposition of the same dialog doesn't restart it.
+     */
+    fun shown(id: Int, now: Long) {
+        if (current?.offer?.id == id && shownSince?.first != id) shownSince = id to now
+    }
+
+    /**
+     * The prompt for [id] was answered at [now] — Accept, Decline or Not Now (Back is Not Now). False,
+     * and nothing changes, unless it's the offer being asked about and its prompt has settled.
+     */
+    fun answer(id: Int, now: Long): Boolean {
+        val since = shownSince
+        if (current?.offer?.id != id || since == null || since.first != id || now - since.second < SETTLE_MS) return false
         asked = asked + id
-        return recompute()
+        recompute()
+        return true
     }
 
     private fun recompute(): DccOfferPrompt? {
         val offer = offers.firstOrNull { it.id !in asked }
         current = offer?.let { DccOfferPrompt(it, names[it.networkId]) }
+        if (shownSince?.first != offer?.id) shownSince = null
         return current
+    }
+
+    companion object {
+        /** How long a prompt is on screen before a tap on it counts. Longer than a double tap. */
+        const val SETTLE_MS = 500L
     }
 }

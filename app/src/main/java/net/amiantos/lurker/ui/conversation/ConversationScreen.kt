@@ -581,19 +581,23 @@ fun ConversationScreen(
     val actions = rememberMessageActionsState(model, key)
     val keyboard = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    fun onLongPress(press: RowPress) {
-        if (!actions.press(press)) return
-        // The keyboard would otherwise stay up over the sheet, which is sized to a few rows — shorter
-        // than the keyboard — so it would land entirely behind it: the common case, mid-draft,
-        // long-pressing a line to reply to it.
+    // Every way a sheet opens comes through here first: the keyboard would otherwise stay up over it,
+    // and the sheet is sized to a few rows — shorter than the keyboard — so it would land entirely
+    // behind it: the common case, mid-draft, long-pressing a line to reply to it.
+    fun beforeSheet() {
         keyboard?.hide()
         focusManager.clearFocus()
+    }
+    fun onLongPress(press: RowPress) {
+        if (!actions.press(press)) return
+        beforeSheet()
         // The press has no other visible effect at the moment it fires, so the tap is what confirms it
         // registered, before the sheet animates in.
         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
     }
 
-    val context = remember(rows, inputs, highlighter, style, day) {
+    // Keyed on everything the resolvers capture, the sheets' state and the keyboard's included.
+    val context = remember(rows, inputs, highlighter, style, day, actions, keyboard, focusManager, haptics) {
         MessageListContext(
             style = style,
             networkName = { message -> ConversationModel.networkName(message, key, inputs.networks) },
@@ -624,7 +628,8 @@ fun ConversationScreen(
                     val sent = model.toggleReaction(messageId = message.id, value = value)
                     haptics.performHapticFeedback(if (sent) HapticFeedbackType.Confirm else HapticFeedbackType.Reject)
                 },
-                onOpen = { message -> actions.showReactions(message) },
+                // The add chip, or a chip that can't toggle: the reaction sheet, keyboard down first.
+                onOpen = { message -> if (actions.showReactions(message)) beforeSheet() },
             ),
             onLongPress = ::onLongPress,
             zone = day.zone,
@@ -681,16 +686,6 @@ fun ConversationScreen(
         carryToComposer()
     }
 
-    MessageActionsHost(
-        state = actions,
-        model = model,
-        key = key,
-        // The line as the list shows it — a relayed line as the person inside it — which is whom the
-        // Reply addresses.
-        onReply = composer::startReply,
-        onShowProfile = onShowProfile,
-    )
-
     val placeholder = ConversationModel.placeholder(hasRows = rows.isNotEmpty(), inputs = inputs, forceLoading = forceLoading)
     ConversationContent(
         title = title,
@@ -713,6 +708,18 @@ fun ConversationScreen(
         onJumpToUnread = { if (scroll.jumpToFirstUnread()) startJump() },
         onJumpToLatest = ::jumpToLatest,
         bottomBar = { ComposerBar(composer, uiPreferences.composerAutocapitalizes, clockKey = day) },
+        // Inside the screen's link-opener provider, so Open Link uses the same `SafeUriHandler` as a tap.
+        sheets = {
+            MessageActionsHost(
+                state = actions,
+                model = model,
+                key = key,
+                // The line as the list shows it — a relayed line as the person inside it — which is
+                // whom the Reply addresses.
+                onReply = composer::startReply,
+                onShowProfile = onShowProfile,
+            )
+        },
         overlay = { bottom ->
             // Centred over the field for reach (the jump pill owns the trailing corner), riding the
             // composer up with the keyboard.
@@ -922,6 +929,8 @@ internal fun ConversationContent(
     bottomBar: @Composable () -> Unit = {},
     /** What floats over the list's bottom edge, given the reservation's height: the suggestions. */
     overlay: @Composable BoxScope.(bottom: Dp) -> Unit = {},
+    /** The message sheets (`MessageActionsHost`), drawn inside the screen's `LocalUriHandler` provider. */
+    sheets: @Composable () -> Unit = {},
     onShowMembers: (() -> Unit)? = null,
     onShowInfo: (() -> Unit)? = null,
 ) {
@@ -1040,6 +1049,7 @@ internal fun ConversationContent(
                     modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = bottom + 12.dp),
                 )
                 overlay(bottom)
+                sheets()
             }
         }
     }

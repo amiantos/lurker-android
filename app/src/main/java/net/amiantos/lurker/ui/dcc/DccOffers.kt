@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.dcc
 
+import android.os.SystemClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,6 +43,11 @@ class DccOffers(
      * prompt reads — not every frame, as iOS takes them for its retry, which a Compose dialog doesn't
      * need: nothing here can refuse to present.
      */
+    /** The dialog for [prompt] is on screen — see `DccOfferQueue.shown`. */
+    fun shown(prompt: DccOfferPrompt) {
+        queue.shown(prompt.offer.id, SystemClock.uptimeMillis())
+    }
+
     fun follow() {
         scope.launch {
             model.statePublisher
@@ -64,9 +70,11 @@ class DccOffers(
      */
     fun answer(prompt: DccOfferPrompt, answer: DccAnswer) {
         val offer = prompt.offer
-        // Only the question on screen: a second tap on a dialog that's on its way down is nothing.
-        if (current.value?.offer?.id != offer.id) return
-        current.value = queue.answered(offer.id)
+        // Only the question on screen, and only once its prompt has settled (`DccOfferQueue.answer`):
+        // a second tap on a dialog that's on its way down, or on the next offer that just took its
+        // place, is nothing.
+        if (!queue.answer(offer.id, SystemClock.uptimeMillis())) return
+        current.value = queue.current
         when (answer) {
             DccAnswer.NotNow -> Unit
             DccAnswer.Accept -> scope.launch {

@@ -9,8 +9,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.StateFlow
 import net.amiantos.lurker.ui.theme.LurkerTheme
@@ -24,23 +27,40 @@ import net.amiantos.lurkerkit.model.DccChatOffer
  * A dialog rather than a snackbar because an offer is a decision someone is waiting on. It never
  * auto-accepts — accepting makes the server dial an address the peer chose, so it stays a deliberate
  * act. Hosted by `MainScaffold`, like `ServerErrorDialog`, so it stands over whatever is on screen and
- * survives navigation. Back and a tap outside are Not Now: the offer stands.
+ * survives navigation.
+ *
+ * A tap outside does nothing, as iOS's alert can't be dismissed that way — a stray touch must not
+ * spend the one time an offer is asked about. Back is Not Now (the offer stands), being Android's
+ * cancel: the deliberate "not now" iOS's Cancel button is.
+ *
+ * ⚠ One dialog per offer (keyed by its id), so the next offer arrives as a new dialog rather than the
+ * same one changing its words under a finger — and its answers count only once it has settled
+ * (`DccOfferQueue.SETTLE_MS`).
  */
 @Composable
 fun DccOfferDialog(offers: DccOffers) {
-    DccOfferDialog(offers.prompt, onAnswer = offers::answer)
+    DccOfferDialog(offers.prompt, onShown = offers::shown, onAnswer = offers::answer)
 }
 
 @Composable
-private fun DccOfferDialog(prompt: StateFlow<DccOfferPrompt?>, onAnswer: (DccOfferPrompt, DccAnswer) -> Unit) {
+private fun DccOfferDialog(
+    prompt: StateFlow<DccOfferPrompt?>,
+    onShown: (DccOfferPrompt) -> Unit,
+    onAnswer: (DccOfferPrompt, DccAnswer) -> Unit,
+) {
     val current by prompt.collectAsStateWithLifecycle()
-    current?.let { DccOfferContent(it, onAnswer = { answer -> onAnswer(it, answer) }) }
+    val shown = current ?: return
+    key(shown.offer.id) {
+        LaunchedEffect(Unit) { onShown(shown) }
+        DccOfferContent(shown, onAnswer = { answer -> onAnswer(shown, answer) })
+    }
 }
 
 @Composable
 private fun DccOfferContent(prompt: DccOfferPrompt, onAnswer: (DccAnswer) -> Unit) {
     AlertDialog(
         onDismissRequest = { onAnswer(DccAnswer.NotNow) },
+        properties = DialogProperties(dismissOnClickOutside = false),
         title = { Text(prompt.title) },
         text = { Text(prompt.message) },
         // Accept is the preferred action, trailing-most, as Material puts a dialog's confirm.

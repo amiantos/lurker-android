@@ -7,7 +7,6 @@ import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.ReactionGroup
 import net.amiantos.lurkerkit.model.Reactions
-import net.amiantos.lurkerkit.rendering.IRCFormatting
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 
@@ -67,8 +66,11 @@ object ReactionSheetModel {
         }
     }
 
-    /** The line itself under the title, codes stripped — what you see on screen, so you know which line. */
-    fun quote(message: Message): String? = message.text?.let(IRCFormatting::strip)
+    /**
+     * The line itself under the title, codes stripped and spoilers kept hidden — what you see on
+     * screen, so you know which line, and never the secret a box is hiding (`SpoilerSafeText`).
+     */
+    fun quote(message: Message): SpoilerSafeText? = message.text?.let(SpoilerSafeText::of)
 
     /**
      * The quick picks as two rows of four, not one of eight: eight across a compact phone left each

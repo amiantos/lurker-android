@@ -25,12 +25,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,7 +48,6 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Message
@@ -92,14 +89,10 @@ internal fun ReactionSheet(
     onChoose: (String) -> ReactionChoice,
     onDismiss: () -> Unit,
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val scope = rememberCoroutineScope()
+    val closer = rememberSheetCloser()
     val haptics = LocalHapticFeedback.current
-    // Choosing dismisses, and the buttons stay live through the animation — a second tap would send a
-    // second toggle, taking the first one straight back.
-    val chosen = remember { booleanArrayOf(false) }
     var problem by remember { mutableStateOf<String?>(null) }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = closer.state) {
         ReactionSheetContent(
             message = message,
             target = target,
@@ -107,12 +100,11 @@ internal fun ReactionSheet(
             problem = problem,
             onProblem = { problem = it },
             onChoose = choose@{ value ->
-                if (chosen[0]) return@choose
+                // Choosing dismisses, and the buttons stay live through the animation — a second tap
+                // would send a second toggle, taking the first one straight back.
+                if (closer.isClosing) return@choose
                 when (onChoose(value)) {
-                    ReactionChoice.Sent -> {
-                        chosen[0] = true
-                        scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
-                    }
+                    ReactionChoice.Sent -> closer.closeThen(onDismiss)
                     ReactionChoice.NotConnected -> {
                         problem = ReactionSheetModel.NOT_CONNECTED
                         haptics.performHapticFeedback(HapticFeedbackType.Reject)
@@ -149,7 +141,8 @@ internal fun ReactionSheetContent(
     ) {
         // Who you're reacting to and the line itself, so the sheet can't act on the wrong one without
         // saying so — the job the actions sheet's header does too.
-        SheetHeader(ReactionSheetModel.title(message), ReactionSheetModel.quote(message), detailLines = 2)
+        val quote = ReactionSheetModel.quote(message)
+        SheetHeader(ReactionSheetModel.title(message), quote?.shown, spokenDetail = quote?.spoken, detailLines = 2)
 
         if (inputs.canReact) {
             val mine = inputs.mine

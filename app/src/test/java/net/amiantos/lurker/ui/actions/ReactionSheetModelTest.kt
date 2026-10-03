@@ -22,7 +22,16 @@ class ReactionSheetModelTest {
         assertEquals("React to alice", ReactionSheetModel.title(line()))
         assertEquals("React to your message", ReactionSheetModel.title(line(nick = "me", isSelf = true)))
         assertEquals("React", ReactionSheetModel.title(line(nick = null)))
-        assertEquals("shipped it", ReactionSheetModel.quote(line()))
+        assertEquals("shipped it", ReactionSheetModel.quote(line())?.shown)
+    }
+
+    @Test
+    fun `the quote never prints a hidden spoiler`() {
+        val spoiler = Message(id = 7, type = EventType.Message, nick = "alice", text = "it was \u000300,00\u0002Ros\u0002ebud\u0003!", msgid = "x")
+        val quote = ReactionSheetModel.quote(spoiler)!!
+        assertEquals("it was ███████!", quote.shown)
+        // One box, though a bold splits it into runs: announced once.
+        assertEquals("it was hidden spoiler!", quote.spoken)
     }
 
     @Test

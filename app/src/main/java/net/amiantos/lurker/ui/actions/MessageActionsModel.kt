@@ -11,7 +11,6 @@ import net.amiantos.lurkerkit.model.MessageActionContext
 import net.amiantos.lurkerkit.model.MessageActionKey
 import net.amiantos.lurkerkit.model.MessageActionScope
 import net.amiantos.lurkerkit.model.MessageActions
-import net.amiantos.lurkerkit.rendering.IRCFormatting
 import net.amiantos.lurkerkit.support.Result
 import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import java.net.URI
@@ -51,8 +50,12 @@ enum class ActionGlyph { Reply, React, Copy, Bookmark, Bookmarked, Profile, Open
 /** One row of the sheet: what it does, what it says, and its glyph. */
 data class ActionRow(val key: ActionKey, val title: String, val glyph: ActionGlyph)
 
-/** The sheet's header: who or what it's about, then the line itself — so it can't act on the wrong one unseen. */
-data class ActionHeader(val title: String, val detail: String?)
+/**
+ * The sheet's header: who or what it's about, then the line itself — so it can't act on the wrong one
+ * unseen. [spokenDetail] is what TalkBack hears for the detail when it differs from what's drawn (a
+ * masked spoiler is announced, not read out as blocks).
+ */
+data class ActionHeader(val title: String, val detail: String?, val spokenDetail: String? = detail)
 
 /**
  * The per-message actions sheet, decided without drawing it (lurker-ios#60, lurker-android#37).
@@ -97,7 +100,8 @@ object MessageActionsModel {
 
     /**
      * Title over detail. For a line: the nick names who you're acting on; the body confirms which of
-     * their lines it was — stripped of mIRC codes, deliberately unlike Copy Text, because the header's
+     * their lines it was — stripped of mIRC codes with its spoilers kept hidden (`SpoilerSafeText`),
+     * deliberately unlike Copy Text, because the header's
      * only job is identification and has to match what's on screen. A re-attributed relay line names
      * its bridge ("alice via relaybot") — this sheet is the whole of that provenance on a phone. For a
      * link: the host, which stays legible where a long URL truncates to nothing useful.
@@ -109,9 +113,11 @@ object MessageActionsModel {
                 val nick = message.nick
                 val speaker = if (nick != null && nick.isNotEmpty()) nick else "Message"
                 val bot = message.relayBot
+                val text = message.text?.let(SpoilerSafeText::of)
                 ActionHeader(
                     title = if (bot != null) "$speaker via $bot" else speaker,
-                    detail = message.text?.let(IRCFormatting::strip),
+                    detail = text?.shown,
+                    spokenDetail = text?.spoken,
                 )
             }
             is ActionSubject.Link -> ActionHeader(title = host(subject.url) ?: "Link", detail = subject.url)
@@ -182,6 +188,12 @@ object MessageActionsModel {
         val shown = mask.trimmingWhitespacesAndNewlines().ifEmpty { "∅" }
         return "Messages matching $shown will be hidden ${if (thisNetwork) "on this network" else "on every network"}."
     }
+
+    /**
+     * A Save/Remove Bookmark that found no socket. Its own words, neutral about which way it went:
+     * nothing retries it, and the row will read the same next time.
+     */
+    const val BOOKMARK_NOT_SENT = "Not connected — the bookmark didn't change."
 
     // MARK: - Run
 
