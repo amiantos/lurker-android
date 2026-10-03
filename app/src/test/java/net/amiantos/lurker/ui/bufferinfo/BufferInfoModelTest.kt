@@ -19,6 +19,7 @@ import net.amiantos.lurkerkit.model.StatusLight
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -153,6 +154,36 @@ class BufferInfoModelTest {
         assertTrue(sections(state(), opened = server).isEmpty())
         assertTrue(sections(state(), opened = Buffer.system).isEmpty())
         assertEquals("Lurker", BufferInfoModel.title(Buffer.system, BufferInfoInputs.of(state(), Buffer.system)))
+    }
+
+    @Test
+    fun theSourceTurnsAwayFramesThatMoveNothingItCounts() {
+        val base = state()
+        val a = BufferInfoSource.of(base, channel.key)
+        // Another buffer's traffic, and this buffer's own unread count: nothing the page draws.
+        assertTrue(BufferInfoSource.same(a, BufferInfoSource.of(base.copy(maxEventId = 9), channel.key)))
+        val unread = base.copy(buffers = base.buffers.mapValues { (_, b) -> b.copy(unread = 5) })
+        assertTrue(BufferInfoSource.same(a, BufferInfoSource.of(unread, channel.key)))
+        // A new member list, even an equal one, is counted again; so is a new ignore set and a topic.
+        assertFalse(BufferInfoSource.same(a, BufferInfoSource.of(base.copy(members = mapOf(channel.key.id to base.members.getValue(channel.key.id).toList())), channel.key)))
+        assertFalse(BufferInfoSource.same(a, BufferInfoSource.of(base.copy(ignores = IgnoreSet(global = emptyList())), channel.key)))
+        assertFalse(BufferInfoSource.same(a, BufferInfoSource.of(state(topic = "Changed"), channel.key)))
+    }
+
+    @Test
+    fun theSourcesInputsAreTheFullStatesForEveryKind() {
+        val ignores = IgnoreSet(global = listOf(IgnoreRule(mask = "*!*@spam", levels = listOf("ALL"))))
+        val full = state(ignores = ignores).copy(dccChats = mapOf(1 to listOf("bob")))
+        val buffers = listOf(
+            channel,
+            Buffer(networkId = 1, target = "alice", kind = BufferKind.Dm),
+            Buffer(networkId = 1, target = "=bob", kind = BufferKind.Dcc),
+            Buffer(networkId = 1, target = Buffer.serverTarget(1), kind = BufferKind.Server),
+            Buffer.system,
+        )
+        for (opened in buffers) {
+            assertEquals(opened.target, BufferInfoInputs.of(full, opened), BufferInfoSource.of(full, opened.key).inputs(opened))
+        }
     }
 
     @Test

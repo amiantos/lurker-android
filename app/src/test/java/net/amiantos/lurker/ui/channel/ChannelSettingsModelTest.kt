@@ -179,8 +179,19 @@ class ChannelSettingsModelTest {
         assertEquals("", value.value)
         assertEquals("Key is set", value.placeholder)
         assertTrue(value.isKey)
+        assertTrue(value.keySet)
         val known = build(slice(modes = "ntk"), key = "pw").flatMap { it.items }.single { it.id == "value:k" } as SettingsItem.Value
         assertEquals("pw", known.value)
+        // Switched on by the user with no key yet: one is required, not "set".
+        val s = slice(modes = "nt")
+        val live = ChannelSettingsModel.live(s.modes, null)
+        val fresh = ChannelSettingsModel.build(s, live, ChannelModeDrafts().setOn("k", true, live), emptyList(), stamp)
+            .flatMap { it.items }.single { it.id == "value:k" } as SettingsItem.Value
+        assertFalse(fresh.keySet)
+        assertEquals("Required", fresh.placeholder)
+        // Only the key is ever "set".
+        val limit = build(slice(modes = "ntl", params = mapOf("l" to "5"))).flatMap { it.items }.single { it.id == "value:l" } as SettingsItem.Value
+        assertFalse(limit.keySet)
     }
 
     @Test

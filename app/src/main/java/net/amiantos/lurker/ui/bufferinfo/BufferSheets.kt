@@ -3,40 +3,30 @@
 
 package net.amiantos.lurker.ui.bufferinfo
 
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import net.amiantos.lurker.platform.MomentText
-import net.amiantos.lurker.platform.findActivity
 import net.amiantos.lurker.ui.channel.ChannelSettingsPage
 import net.amiantos.lurker.ui.channel.ChannelSettingsState
 import net.amiantos.lurker.ui.channel.ModeListPage
 import net.amiantos.lurker.ui.channel.ModeListState
 import net.amiantos.lurker.ui.members.MemberListPage
 import net.amiantos.lurker.ui.members.MembersPageState
-import net.amiantos.lurker.ui.networks.FullScreenDialog
 import net.amiantos.lurker.ui.networks.PageExit
+import net.amiantos.lurker.ui.networks.PagedDialog
+import net.amiantos.lurker.ui.networks.PagedFlow
+import net.amiantos.lurker.ui.networks.rememberPagedFlow
 import net.amiantos.lurker.ui.profile.NickNotePage
 import net.amiantos.lurker.ui.profile.NickNoteState
 import net.amiantos.lurker.ui.profile.ProfileState
@@ -100,12 +90,16 @@ internal data class BufferSheetRequest(
  * close mid-edit — a half-typed note or channel key thrown away for a rename the reader didn't do. iOS's
  * sheet stays up over a renamed chat too. What SHOULD close it is iOS's `land(on:)` — a join landing, a
  * DCC chat, Send Message, a notification — and the buffer it's about closing; the scaffold does both
- * ([dismiss], [dismissIfAbout]).
+ * ([dismiss], [dismissIfAbout]). A rename it follows instead ([follow]), so it keeps describing the
+ * buffer it was opened on.
  *
  * One at a time — the dialog covers everything that could open another.
  */
 @Stable
-class BufferSheets internal constructor(private val open: MutableState<BufferSheetRequest?>) {
+class BufferSheets internal constructor(
+    private val open: MutableState<BufferSheetRequest?>,
+    private val renames: MutableState<List<BufferRename>>,
+) {
     /** The nick list — iOS's right-edge swipe and the info sheet's Members row. */
     fun showMembers(key: BufferKey) {
         open.value = BufferSheetRequest(BufferSheetStart.Members, UUID.randomUUID().toString(), key.networkId, key.target)
@@ -124,7 +118,29 @@ class BufferSheets internal constructor(private val open: MutableState<BufferShe
     /** Close whatever is open, discarding its state — iOS's `dismissPresented`, run before `land(on:)`. */
     fun dismiss() {
         open.value = null
+        renames.value = emptyList()
     }
+
+    /**
+     * The store rekeyed a buffer — a DM peer's nick change, a channel rename: the same events the
+     * scaffold follows (`AppEvent.BufferRenamed`, the conversation's `onMoved`). The request moves, so
+     * the dialog is still found as being about that buffer ([dismissIfAbout]) and a process death
+     * restores it on the new name; and the open pages are told ([BufferFlow.follow]), since any of them
+     * may be about it — a profile pushed from a member list, as much as the info page it started on.
+     * Following the same rename twice (both events fire for the open conversation) moves nothing the
+     * second time.
+     */
+    fun follow(from: BufferKey, to: BufferKey) {
+        val request = open.value ?: return
+        val rename = BufferRename(from, to)
+        DialogRenames.request(request, rename)?.let { open.value = it }
+        renames.value = renames.value + rename
+    }
+
+    /** Renames the open flow hasn't been told about yet, oldest first; taking them clears them. */
+    internal val pendingRenames: List<BufferRename> get() = renames.value
+
+    internal fun takeRenames(): List<BufferRename> = renames.value.also { renames.value = emptyList() }
 
     /** The buffer went away (closed here or on another device): a dialog about it has nothing left to describe. */
     fun dismissIfAbout(key: BufferKey) {
@@ -139,7 +155,10 @@ class BufferSheets internal constructor(private val open: MutableState<BufferShe
 @Composable
 fun rememberBufferSheets(): BufferSheets {
     val open = rememberSaveable(stateSaver = BufferSheetRequest.Saver) { mutableStateOf<BufferSheetRequest?>(null) }
-    return remember(open) { BufferSheets(open) }
+    // Not saved: a rename the flow hasn't heard about yet is moot after a process death, whose fresh
+    // flow is built from the (already followed) request.
+    val renames = remember { mutableStateOf<List<BufferRename>>(emptyList()) }
+    return remember(open) { BufferSheets(open, renames) }
 }
 
 /** One page of a buffer dialog, holding its own state so the page under a pushed one keeps it. */
@@ -162,46 +181,42 @@ internal sealed interface BufferPage {
 
 /**
  * Everything one open buffer dialog holds: its page stack, each page's state, and the scope their
- * subscriptions and requests run in — iOS's sheet with its navigation controller.
+ * subscriptions and requests run in — a [PagedFlow], kept in its store across a configuration change.
  *
- * ⚠ Not `remember`ed and not saved: kept in [BufferFlowStore], which outlives a configuration change.
  * A rotation must not drop a half-typed note or the channel settings' drafts — and the drafts can hold
- * a channel key, which has no business in a Bundle written to disk. In memory for the life of the
- * dialog, then dropped. The page states subscribe to the store and to `channelEvents` here rather than
- * in composition, for the same reason: a live `MODE ±k` that lands during a rotation still counts.
+ * a channel key, which has no business in a Bundle written to disk. The page states subscribe to the
+ * store and to `channelEvents` in their own scopes rather than in composition, for the same reason: a
+ * live `MODE ±k` that lands during a rotation still counts.
  */
-internal class BufferFlow(private val model: ChatViewModel, request: BufferSheetRequest, private val moments: MomentText) {
-    // `Main`, not `Main.immediate`: the flow is built inside composition, and its pages start their
-    // subscriptions and requests in their `init` — dispatched, they begin after the frame.
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-
-    /** The page stack, root first. Never empty: back from the root dismisses the dialog instead. */
-    val pages = mutableStateListOf<BufferPage>()
-
+internal class BufferFlow(private val model: ChatViewModel, request: BufferSheetRequest, private val moments: MomentText) :
+    PagedFlow<BufferPage>() {
     init {
         val key = request.key
         when (request.start) {
             BufferSheetStart.Members -> pushMembers(key)
-            BufferSheetStart.Info -> {
-                // The row as the store has it, or synthesized: the page reads the live row anyway.
-                val buffer = model.state.buffers[key.id] ?: Buffer(networkId = key.networkId, target = key.target, kind = BufferKind.of(key.networkId, key.target))
-                push { scope, job -> BufferPage.Info(BufferInfoState(model, buffer, scope), job) }
-            }
+            BufferSheetStart.Info -> pages.add(info(key))
             BufferSheetStart.Profile -> request.networkId?.let { pushProfile(it, request.target) }
         }
     }
 
     /** A page's own scope: a child of the flow's, so popping the page stops its subscriptions. */
-    private fun push(make: (CoroutineScope, Job) -> BufferPage) {
+    private fun page(make: (CoroutineScope, Job) -> BufferPage): BufferPage {
         val job = SupervisorJob(scope.coroutineContext[Job])
-        pages.add(make(CoroutineScope(scope.coroutineContext + job), job))
+        return make(CoroutineScope(scope.coroutineContext + job), job)
     }
 
-    /** Pop the top page. False at the root, where back means dismissing the dialog. */
-    fun back(): Boolean {
-        if (pages.size <= 1) return false
-        pages.removeAt(pages.lastIndex).job.cancel()
-        return true
+    private fun push(make: (CoroutineScope, Job) -> BufferPage) {
+        pages.add(page(make))
+    }
+
+    override fun popped(page: BufferPage) {
+        page.job.cancel()
+    }
+
+    /** The row as the store has it, or synthesized: the page reads the live row anyway. */
+    private fun info(key: BufferKey): BufferPage {
+        val buffer = model.state.buffers[key.id] ?: Buffer(networkId = key.networkId, target = key.target, kind = BufferKind.of(key.networkId, key.target))
+        return page { scope, job -> BufferPage.Info(BufferInfoState(model, buffer, scope), job) }
     }
 
     fun pushMembers(key: BufferKey) {
@@ -214,8 +229,12 @@ internal class BufferFlow(private val model: ChatViewModel, request: BufferSheet
      * Message all mean him. Peeled here, the one door every profile comes through (lurker#270).
      */
     fun pushProfile(networkId: Int, nick: String) {
+        pages.add(profile(networkId, nick))
+    }
+
+    private fun profile(networkId: Int, nick: String): BufferPage {
         val peer = DccChat.peer(nick)
-        push { scope, job -> BufferPage.Profile(ProfileState(model, networkId, peer, scope), job) }
+        return page { scope, job -> BufferPage.Profile(ProfileState(model, networkId, peer, scope), job) }
     }
 
     fun pushNickNote(networkId: Int, nick: String) {
@@ -223,35 +242,47 @@ internal class BufferFlow(private val model: ChatViewModel, request: BufferSheet
     }
 
     fun pushChannelSettings(key: BufferKey) {
-        push { scope, job -> BufferPage.ChannelSettings(ChannelSettingsState(model, key, scope, moments::dateTime), job) }
+        pages.add(channelSettings(key))
     }
+
+    private fun channelSettings(key: BufferKey): BufferPage =
+        page { scope, job -> BufferPage.ChannelSettings(ChannelSettingsState(model, key, scope, moments::dateTime), job) }
 
     fun pushModeList(key: BufferKey, letter: String, name: String) {
-        push { scope, job -> BufferPage.ModeList(ModeListState(model, key, letter, name, scope), job) }
+        pages.add(modeList(key, letter, name))
     }
 
-    fun close() {
-        scope.cancel()
-    }
-}
+    private fun modeList(key: BufferKey, letter: String, name: String): BufferPage =
+        page { scope, job -> BufferPage.ModeList(ModeListState(model, key, letter, name, scope), job) }
 
-/**
- * The open buffer dialogs' state, kept across configuration changes — see [BufferFlow]. Keyed by the
- * token the opener saves, so a dialog restored after a rotation finds its flow, and one restored after
- * a process death (token saved, store empty) starts fresh at its first page.
- */
-internal class BufferFlowStore : ViewModel() {
-    private val flows = mutableMapOf<String, BufferFlow>()
-
-    fun flow(token: String, create: () -> BufferFlow): BufferFlow = flows.getOrPut(token, create)
-
-    fun discard(token: String) {
-        flows.remove(token)?.close()
-    }
-
-    override fun onCleared() {
-        flows.values.forEach { it.close() }
-        flows.clear()
+    /**
+     * A buffer was renamed under the dialog: every page about it is rebuilt about the new name, in
+     * place, and its old subscriptions stop. What the reader typed comes across — the member filter, a
+     * note's draft. The channel settings and a list page start over: their state is the channel's, read
+     * afresh under the new name (the list refetches, as it does after a reconnect), and a channel rename
+     * is rare enough that redoing an unsaved toggle is the honest cost (see the project's note on
+     * renames).
+     */
+    fun follow(rename: BufferRename) {
+        for (index in pages.indices) {
+            val old = pages[index]
+            val next: BufferPage? = when (old) {
+                is BufferPage.Members -> DialogRenames.key(old.state.key, rename)?.let { key ->
+                    page { _, job -> BufferPage.Members(MembersPageState(key).also { it.query = old.state.query }, job) }
+                }
+                is BufferPage.Info -> DialogRenames.key(old.state.buffer.key, rename)?.let(::info)
+                is BufferPage.Profile -> DialogRenames.nick(old.state.networkId, old.state.nick, rename)?.let { profile(old.state.networkId, it) }
+                is BufferPage.NickNote -> DialogRenames.nick(old.state.networkId, old.state.nick, rename)?.let { nick ->
+                    page { _, job -> BufferPage.NickNote(NickNoteState(model, old.state.networkId, nick).also { it.draft = old.state.draft }, job) }
+                }
+                is BufferPage.ChannelSettings -> DialogRenames.key(old.state.key, rename)?.let(::channelSettings)
+                is BufferPage.ModeList -> DialogRenames.key(old.state.key, rename)?.let { modeList(it, old.state.letter, old.state.name) }
+            }
+            if (next != null) {
+                old.job.cancel()
+                pages[index] = next
+            }
+        }
     }
 }
 
@@ -267,16 +298,10 @@ fun BufferSheetsHost(sheets: BufferSheets, model: ChatViewModel, onOpenBuffer: (
     val request = sheets.current ?: return
     val context = LocalContext.current
     val moments = remember(context) { MomentText(context) }
-    val store: BufferFlowStore = viewModel()
-    val flow = store.flow(request.token) { BufferFlow(model, request, moments) }
-    val activity = context.findActivity()
-    // ⚠ Dropped when the dialog closes, and when this host leaves composition for good (sign-out swaps
-    // the whole scaffold out) — but NOT across a configuration change, the one disposal the flow exists
-    // to survive.
-    DisposableEffect(request.token) {
-        onDispose {
-            if (sheets.current?.token != request.token || activity?.isChangingConfigurations != true) store.discard(request.token)
-        }
+    val flow = rememberPagedFlow(request.token, isOpen = { sheets.current?.token == request.token }) { BufferFlow(model, request, moments) }
+    val renames = sheets.pendingRenames
+    LaunchedEffect(flow, renames) {
+        if (renames.isNotEmpty()) sheets.takeRenames().forEach(flow::follow)
     }
     BufferDialog(
         model = model,
@@ -290,11 +315,7 @@ fun BufferSheetsHost(sheets: BufferSheets, model: ChatViewModel, onOpenBuffer: (
     )
 }
 
-/**
- * A buffer dialog: its page stack, drawn top page only. Back pops a pushed page (predictive back
- * included), then dismisses. Inner navigation is the flow's own, not the app's navigator — a detour
- * inside one dialog, as U4's networks dialog is.
- */
+/** A buffer dialog: its page stack, as a [PagedDialog] — the networks dialogs' mechanics. */
 @Composable
 private fun BufferDialog(
     model: ChatViewModel,
@@ -311,68 +332,56 @@ private fun BufferDialog(
         }
         return
     }
-    FullScreenDialog(onDismissRequest = onDismiss) {
-        BackHandler(enabled = flow.pages.size > 1) { flow.back() }
-        AnimatedContent(
-            targetState = flow.pages.size to flow.pages.last(),
-            transitionSpec = {
-                // A push slides in from the end, a pop back from the start — the platform's forward and back.
-                val forward = targetState.first >= initialState.first
-                (slideInHorizontally { width -> if (forward) width / 4 else -width / 4 } + fadeIn())
-                    .togetherWith(slideOutHorizontally { width -> if (forward) -width / 4 else width / 4 } + fadeOut())
-            },
-            label = "buffer page",
-        ) { (depth, page) ->
-            val exit = if (depth == 1) PageExit.Close else PageExit.Back
-            val onExit: () -> Unit = { if (!flow.back()) onDismiss() }
-            when (page) {
-                is BufferPage.Members -> MemberListPage(
-                    model = model,
+    PagedDialog(flow = flow, onDismiss = onDismiss, label = "buffer page") { depth, page ->
+        val exit = if (depth == 1) PageExit.Close else PageExit.Back
+        val onExit: () -> Unit = { if (!flow.back()) onDismiss() }
+        when (page) {
+            is BufferPage.Members -> MemberListPage(
+                model = model,
+                state = page.state,
+                exit = exit,
+                onExit = onExit,
+                // Pushed into this dialog rather than presented, so the profile arrives inside the
+                // list you were scanning and Back returns to it.
+                onOpenProfile = page.state.key.networkId?.let { networkId -> { nick -> flow.pushProfile(networkId, nick) } },
+            )
+            is BufferPage.Info -> {
+                val key = page.state.buffer.key
+                BufferInfoPage(
                     state = page.state,
                     exit = exit,
                     onExit = onExit,
-                    // Pushed into this dialog rather than presented, so the profile arrives inside the
-                    // list you were scanning and Back returns to it.
-                    onOpenProfile = page.state.key.networkId?.let { networkId -> { nick -> flow.pushProfile(networkId, nick) } },
+                    actions = BufferInfoActions(
+                        onMembers = { flow.pushMembers(key) },
+                        onWhois = { key.networkId?.let { flow.pushProfile(it, key.target) } },
+                        onChannelSettings = { flow.pushChannelSettings(key) },
+                        onModeList = { letter, name -> flow.pushModeList(key, letter, name) },
+                        onNetworkVerb = page.state::perform,
+                        onDccVerb = page.state::perform,
+                    ),
                 )
-                is BufferPage.Info -> {
-                    val key = page.state.buffer.key
-                    BufferInfoPage(
-                        state = page.state,
-                        exit = exit,
-                        onExit = onExit,
-                        actions = BufferInfoActions(
-                            onMembers = { flow.pushMembers(key) },
-                            onWhois = { key.networkId?.let { flow.pushProfile(it, key.target) } },
-                            onChannelSettings = { flow.pushChannelSettings(key) },
-                            onModeList = { letter, name -> flow.pushModeList(key, letter, name) },
-                            onNetworkVerb = page.state::perform,
-                            onDccVerb = page.state::perform,
-                        ),
-                    )
-                }
-                is BufferPage.Profile -> {
-                    val state = page.state
-                    UserProfilePage(
-                        state = state,
-                        exit = exit,
-                        onExit = onExit,
-                        onEditNote = { flow.pushNickNote(state.networkId, state.nick) },
-                        onSendMessage = {
-                            // Mint or reopen the DM row first — the server refuses to activate a buffer
-                            // that doesn't exist, and the same socket delivers the row before we ask to
-                            // show it. ⚠ A WRITE (the DM appears on every device).
-                            val dm = BufferKey(networkId = state.networkId, target = state.nick)
-                            model.openBuffer(dm)
-                            onOpenBuffer(dm)
-                        },
-                        onJoinChannel = { channel -> model.requestJoin(networkId = state.networkId, channel = channel, opens = true) },
-                    )
-                }
-                is BufferPage.NickNote -> NickNotePage(state = page.state, onBack = { flow.back() }, onDone = { flow.back() })
-                is BufferPage.ChannelSettings -> ChannelSettingsPage(state = page.state, onBack = { flow.back() })
-                is BufferPage.ModeList -> ModeListPage(state = page.state, dateTime = moments::dateTime, onBack = { flow.back() })
             }
+            is BufferPage.Profile -> {
+                val state = page.state
+                UserProfilePage(
+                    state = state,
+                    exit = exit,
+                    onExit = onExit,
+                    onEditNote = { flow.pushNickNote(state.networkId, state.nick) },
+                    onSendMessage = {
+                        // Mint or reopen the DM row first — the server refuses to activate a buffer
+                        // that doesn't exist, and the same socket delivers the row before we ask to
+                        // show it. ⚠ A WRITE (the DM appears on every device).
+                        val dm = BufferKey(networkId = state.networkId, target = state.nick)
+                        model.openBuffer(dm)
+                        onOpenBuffer(dm)
+                    },
+                    onJoinChannel = { channel -> model.requestJoin(networkId = state.networkId, channel = channel, opens = true) },
+                )
+            }
+            is BufferPage.NickNote -> NickNotePage(state = page.state, onBack = { flow.back() }, onDone = { flow.back() })
+            is BufferPage.ChannelSettings -> ChannelSettingsPage(state = page.state, onBack = { flow.back() })
+            is BufferPage.ModeList -> ModeListPage(state = page.state, dateTime = moments::dateTime, onBack = { flow.back() })
         }
     }
 }

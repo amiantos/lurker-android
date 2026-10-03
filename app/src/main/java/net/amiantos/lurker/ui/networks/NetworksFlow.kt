@@ -5,15 +5,10 @@ package net.amiantos.lurker.ui.networks
 
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.ViewModel
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.amiantos.lurkerkit.model.BuiltinNetworks
@@ -54,29 +49,18 @@ internal sealed interface NetworksPage {
 
 /**
  * Everything one open networks dialog holds: its page stack and each page's state, and the scope
- * their requests run in.
+ * their requests run in — a [PagedFlow], kept in its store across a configuration change.
  *
- * ⚠ Not `remember`ed in the dialog, and not `rememberSaveable`d: kept in [NetworksFlowStore], which
- * outlives a configuration change. A rotation recreates the activity, and a form that lost its draft
- * to one would be the worst kind of Android bug — but the draft holds typed passwords and possibly an
- * imported private key, and the saved-instance Bundle is written to disk across a process death, so
- * none of it may go there. In memory for the life of the dialog, then dropped.
+ * ⚠ The draft holds typed passwords and possibly an imported private key, which is why none of it is
+ * saved to the instance Bundle (see [PagedFlow]).
  *
  * The scope outlives each page, so a reply that lands after its page was popped still reaches the
  * page under it (a certificate written, then Back before the answer: the list still hears about it
- * — iOS holds its form until the reply for the same reason). It's cancelled with the dialog, when
- * there's no one left to tell; the writes themselves run `NonCancellable`, since a request torn
- * down mid-flight is one the server may or may not have acted on.
+ * — iOS holds its form until the reply for the same reason). The writes themselves run
+ * `NonCancellable`, since a request torn down mid-flight is one the server may or may not have acted
+ * on.
  */
-internal class NetworksFlow(private val model: ChatViewModel, start: NetworksStart) {
-    // `Main`, not `Main.immediate`: the flow is built inside composition (`NetworkSheetsHost`), and
-    // its pages start loading in their `init`. Dispatched, those requests begin after the frame
-    // rather than inline in the composition pass that created them.
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-
-    /** The page stack, root first. Never empty: back from the root dismisses the dialog instead. */
-    val pages = mutableStateListOf<NetworksPage>()
-
+internal class NetworksFlow(private val model: ChatViewModel, start: NetworksStart) : PagedFlow<NetworksPage>() {
     /** Set when the flow is done and the dialog should go — an add from the buffer list, saved. */
     var finished by mutableStateOf(false)
         private set
@@ -86,13 +70,6 @@ internal class NetworksFlow(private val model: ChatViewModel, start: NetworksSta
     init {
         list = if (start == NetworksStart.List) NetworksListState(model, scope) else null
         pages.add(if (list != null) NetworksPage.List(list) else NetworksPage.Picker(NetworkPickerState(model, scope)))
-    }
-
-    /** Pop the top page. False at the root, where back means dismissing the dialog. */
-    fun back(): Boolean {
-        if (pages.size <= 1) return false
-        pages.removeAt(pages.lastIndex)
-        return true
     }
 
     /** Adding starts with "which network?", not with a blank hostname field. */
@@ -157,30 +134,6 @@ internal class NetworksFlow(private val model: ChatViewModel, start: NetworksSta
         } else {
             finished = true
         }
-    }
-
-    fun close() {
-        scope.cancel()
-    }
-}
-
-/**
- * The open networks dialogs' state, kept across configuration changes — see [NetworksFlow]. Keyed by
- * a token the opener saves, so a dialog restored after a rotation finds its flow, and one restored
- * after a process death (token saved, store empty) starts fresh at its root.
- */
-internal class NetworksFlowStore : ViewModel() {
-    private val flows = mutableMapOf<String, NetworksFlow>()
-
-    fun flow(token: String, create: () -> NetworksFlow): NetworksFlow = flows.getOrPut(token, create)
-
-    fun discard(token: String) {
-        flows.remove(token)?.close()
-    }
-
-    override fun onCleared() {
-        flows.values.forEach { it.close() }
-        flows.clear()
     }
 }
 

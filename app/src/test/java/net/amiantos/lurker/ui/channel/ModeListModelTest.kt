@@ -137,6 +137,24 @@ class ModeListModelTest {
     }
 
     @Test
+    fun aPullToRefreshKeepsTheListOnScreenUntilItsAnswer() {
+        val held = listOf(ModeListEntry("*!*@a", setBy = null, setAt = null), ModeListEntry("*!*@b", setBy = null, setAt = null))
+        assertEquals(held, ModeListModel.shown(ModeListStatus.Loading, emptyList(), "b", held))
+        // A live -b during the refresh still takes its row off what's held.
+        val removed = Message(id = 1, type = EventType.Mode, nick = "op", text = null, modes = listOf(ModeChange("-b", "*!*@A", ModeChangeKind.List)))
+        assertEquals(listOf(held[1]), ModeListModel.shown(ModeListStatus.Loading, listOf(removed), "b", held))
+        // A first load holds nothing; a failure shows its sentence, not stale rows.
+        assertTrue(ModeListModel.shown(ModeListStatus.Loading, emptyList(), "b").isEmpty())
+        assertTrue(ModeListModel.shown(ModeListStatus.Failed("x"), emptyList(), "b", held).isEmpty())
+    }
+
+    @Test
+    fun aMaskListedTwiceIsShownOnceSoRowsCanKeyByIt() {
+        val twice = ModeListStatus.Ready(listOf(ModeListEntry("x!*@*", "a", null), ModeListEntry("x!*@*", "b", null)))
+        assertEquals(listOf(ModeListEntry("x!*@*", "a", null)), ModeListModel.shown(twice, emptyList(), "b"))
+    }
+
+    @Test
     fun anEntrySaysWhoAndWhenItKnows() {
         val stamp: (Instant) -> String = { "T${it.epochSecond}" }
         assertEquals("by alice · T5", ModeListModel.meta(ModeListEntry("m", "alice!a@h", Instant.ofEpochSecond(5)), stamp))

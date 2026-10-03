@@ -44,6 +44,16 @@ class MemberListModelTest {
     }
 
     @Test
+    fun twoEntriesForOneNickBecomeOneRowTheFirstWinning() {
+        // The store's nick-change fold can leave two entries that fold to one nick; the list keys by the
+        // folded nick, and two equal keys crash it.
+        val rows = MemberListModel.rows(listOf(Member("Bob", modes = listOf("o")), Member("alice"), Member("bob", away = true)))
+        assertEquals(listOf("Bob", "alice"), rows.map { it.nick })
+        assertEquals(MemberRow("Bob", "@", away = false), rows.first())
+        assertEquals(rows.size, rows.map { it.id }.toSet().size)
+    }
+
+    @Test
     fun awayIsCarriedNotSortedToTheBottom() {
         val rows = MemberListModel.rows(listOf(Member("bob", away = true), Member("alice")))
         assertEquals(listOf("alice", "bob"), rows.map { it.nick })

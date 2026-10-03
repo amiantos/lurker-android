@@ -149,12 +149,24 @@ object ModeListModel {
         return null
     }
 
-    /** What the list shows: the fetched entries, patched by every live row since. */
-    fun shown(status: ModeListStatus, rowsSinceFetch: List<Message>, letter: String): List<ModeListEntry> =
-        when (status) {
-            is ModeListStatus.Ready -> ChannelModeForm.patch(status.entries, rows = rowsSinceFetch, letter = letter)
-            ModeListStatus.Loading, is ModeListStatus.Failed -> emptyList()
+    /**
+     * What the list shows: the fetched entries, patched by every live row since.
+     *
+     * @param held what was on screen when a pull to refresh went out. While that fetch is in the air
+     *   the list keeps it — patched by rows since, which are reset as the fetch goes out — rather than
+     *   emptying under the reader's thumb. A first load, or a retry after a failure, holds nothing.
+     *
+     * One entry per mask, the first winning: the page keys its rows by mask, and a server that lists a
+     * mask twice would otherwise crash it. (Live rows can't add a duplicate — `patch` folds case.)
+     */
+    fun shown(status: ModeListStatus, rowsSinceFetch: List<Message>, letter: String, held: List<ModeListEntry>? = null): List<ModeListEntry> {
+        val base = when (status) {
+            is ModeListStatus.Ready -> status.entries
+            ModeListStatus.Loading -> held ?: return emptyList()
+            is ModeListStatus.Failed -> return emptyList()
         }
+        return ChannelModeForm.patch(base, rows = rowsSinceFetch, letter = letter).distinctBy { it.mask }
+    }
 
     /** "by alice · 1 Sep 2026, 10:00", from what the server knew; null when it knew neither. */
     fun meta(entry: ModeListEntry, dateTime: (Instant) -> String): String? {

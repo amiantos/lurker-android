@@ -356,7 +356,7 @@ private fun SettingsItemView(
  */
 @Composable
 private fun KeyField(item: SettingsItem.Value, revealed: Boolean, onValue: (String, String) -> Unit, onToggleReveal: () -> Unit) {
-    val keySet = item.placeholder != "Required"
+    val keySet = item.keySet
     OutlinedTextField(
         value = item.value,
         onValueChange = { onValue(item.letter, it) },
