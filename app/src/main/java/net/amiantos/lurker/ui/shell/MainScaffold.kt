@@ -7,6 +7,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import net.amiantos.lurker.ui.settings.SettingsDialog
+import net.amiantos.lurker.ui.bufferinfo.BufferSheetsHost
+import net.amiantos.lurker.ui.bufferinfo.rememberBufferSheets
 import net.amiantos.lurker.ui.networks.rememberNetworkSheets
 import net.amiantos.lurker.ui.networks.NetworkSheetsHost
 import net.amiantos.lurker.platform.findActivity
@@ -82,6 +84,11 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
     fun navigate(move: suspend () -> Unit) {
         scope.launch { navigation.withLock { move() } }
     }
+
+    // The conversation's members, info and profile dialogs (U5) — here for the networks dialogs' reason:
+    // the conversation is rebuilt under a new key when its buffer is renamed, and a dialog hosted inside
+    // it would close mid-edit. See `BufferSheets`.
+    val bufferSheets = rememberBufferSheets()
 
     // Whether a settled list has been drawn this session — the buffer list's burst gate
     // (`BufferListModel.drawsList`). Here rather than in the list because on a phone the list pane
@@ -267,6 +274,8 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
     // Forgotten as the relaunch target too, for the same reason a close is: restoring into a buffer
     // that isn't there lands on a spinner.
     fun leave(key: BufferKey) {
+        // A members or info dialog about it has nothing left to describe (U5).
+        bufferSheets.dismissIfAbout(key)
         navigate {
             // Already on the way out — a pop in flight, or the reader moved on — so don't stack a
             // second one.
@@ -361,6 +370,7 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
                 // conversation hydrates it.
                 is AppEvent.OpenBuffer -> {
                     sheets.dismiss()
+                    bufferSheets.dismiss()
                     showingSettings = false
                     open(event.key, jumpTo = event.jumpTo)
                 }
@@ -420,6 +430,9 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
                             uiPreferences = uiPreferences,
                             // `/msg` and `/query` — the same move as a pick.
                             onOpenBuffer = { to -> open(to) },
+                            onShowMembers = { bufferSheets.showMembers(bufferKey) },
+                            onShowInfo = { bufferSheets.showInfo(bufferKey) },
+                            onShowProfile = { networkId, nick -> bufferSheets.showProfile(networkId, nick) },
                         )
                     }
                 }
@@ -445,6 +458,8 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
                 },
             )
         }
+        // Over the conversation it's about: Send Message closes it and opens the DM, as iOS's `leaveSheet`.
+        BufferSheetsHost(sheets = bufferSheets, model = model, onOpenBuffer = { key -> open(key) })
         // After Settings, so a networks list opened from it is the window on top.
         NetworkSheetsHost(sheets = sheets, model = model) { networkId, channel ->
             model.requestJoin(networkId = networkId, channel = channel, opens = true)
