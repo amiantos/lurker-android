@@ -16,7 +16,8 @@ import androidx.compose.ui.unit.dp
  * this build, and `material-icons-extended` is a multi-megabyte dependency for a handful of
  * shapes. The path data is Material's own (`edit`, `more_vert`, `add`, `close`, `arrow_back`,
  * `keyboard`, `visibility`, `visibility_off`, `search`, `warning`, `keyboard_arrow_up`,
- * `keyboard_arrow_down`, `language`, `chevron_right`, `check`, `arrow_drop_down`, `remove` —
+ * `keyboard_arrow_down`, `language`, `chevron_right`, `check`, `arrow_drop_down`, `remove`,
+ * `arrow_upward`, `cancel` —
  * Apache-2.0), so a
  * glyph here is the one every Android user already reads. Tinted by the `Icon` that draws it.
  */
@@ -153,6 +154,20 @@ object LurkerIcons {
 
     /** A stepper's decrement — its increment is [Add]. */
     val Remove: ImageVector by lazy { icon("Remove", "M19,13H5v-2h14v2z") }
+
+    /** The composer's send button — iOS's `arrow.up`. */
+    val ArrowUpward: ImageVector by lazy {
+        icon("ArrowUpward", "M4,12l1.41,1.41L11,7.83V20h2V7.83l5.58,5.59L20,12l-8,-8 -8,8z")
+    }
+
+    /** Cancel the pending reply — iOS's `xmark.circle.fill`. */
+    val Cancel: ImageVector by lazy {
+        icon(
+            "Cancel",
+            "M12,2C6.47,2 2,6.47 2,12s4.47,10 10,10 10,-4.47 10,-10S17.53,2 12,2z" +
+                "M17,15.59L15.59,17 12,13.41 8.41,17 7,15.59 10.59,12 7,8.41 8.41,7 12,10.59 15.59,7 17,8.41 13.41,12 17,15.59z",
+        )
+    }
 
     private fun icon(name: String, path: String, autoMirror: Boolean = false): ImageVector =
         ImageVector.Builder(

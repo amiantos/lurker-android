@@ -49,7 +49,7 @@ class UiPreferences(private val prefs: StringPrefs) {
      * closes, and there's no server frame to ride in on the way every other setting does. iOS posts
      * `composerKeyboardPreferencesDidChange` for the same reason.
      *
-     * U3: the composer reads this into its `KeyboardOptions.capitalization` (Sentences / None).
+     * The composer reads this into its `KeyboardOptions.capitalization` (Sentences / None).
      */
     val composerAutocapitalizes: StateFlow<Boolean> = autocapitalizes.asStateFlow()
 

@@ -6,8 +6,11 @@ package net.amiantos.lurker.platform
 import androidx.compose.runtime.staticCompositionLocalOf
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
@@ -38,7 +41,8 @@ sealed interface AppEvent {
 }
 
 /**
- * The hand-off itself, in two parts.
+ * The hand-off itself, in two parts — plus a third, the composer's refusal nudge ([refusals]), which
+ * every composer hears and none queues.
  *
  * **Navigation** (`OpenBuffer`, `BufferRenamed`) rides a channel with one collector, `MainScaffold`,
  * so a rename that lands while the activity is being recreated still reaches the navigator.
@@ -72,6 +76,25 @@ class AppEvents {
     val noticeHosts: StateFlow<List<Any>> = hosts.asStateFlow()
 
     private var attached = false
+
+    private val refused = MutableSharedFlow<BufferKey>(extraBufferCapacity = 64)
+
+    /**
+     * The server refused a line typed in this buffer, and it is waiting in the kit's hold
+     * (`ChatViewModel.onSendRefused`, lurker-ios#128). For the composer showing that buffer, which
+     * takes it back with `takeUnsent`.
+     *
+     * ⚠ A nudge, not the delivery, and nothing replays it: the line waits in the kit, not here. A
+     * composer that isn't on screen — another buffer is open, or the app is between activities —
+     * drains the hold itself the next time it appears, as iOS's `viewDidAppear` does. Not gated on
+     * [attach] for the same reason: dropping a nudge loses nothing.
+     */
+    val refusals: SharedFlow<BufferKey> = refused.asSharedFlow()
+
+    /** See [refusals]. */
+    fun sendRefused(key: BufferKey) {
+        refused.tryEmit(key)
+    }
 
     fun send(event: AppEvent) {
         when (event) {

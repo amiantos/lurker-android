@@ -44,6 +44,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import net.amiantos.lurker.ui.composer.collapsedHeight
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 
@@ -165,8 +166,6 @@ internal fun JumpToLatestButton(visible: Boolean, newCount: Int, onClick: () -> 
     }
 }
 
-/** The pill's diameter. iOS matches its composer's send button; U3: match the composer's. */
-private val PILL = 44.dp
 
 /** The badge's height — a tab bar's badge. */
 private val BADGE = 18.dp
@@ -186,7 +185,9 @@ private fun LatestPill(newCount: Int, enabled: Boolean, onClick: () -> Unit) {
         Box(
             Modifier
                 .padding(top = 6.dp, end = 6.dp)
-                .size(PILL)
+                // The composer's send button's diameter, which it floats just above: two circles a
+                // few points apart at different sizes read as a mistake.
+                .size(collapsedHeight())
                 .floatingCapsule(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .clickable(enabled = enabled, onClick = onClick),
             contentAlignment = Alignment.Center,
