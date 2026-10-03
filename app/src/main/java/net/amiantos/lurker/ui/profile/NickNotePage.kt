@@ -31,6 +31,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormActionRow
+import net.amiantos.lurker.ui.networks.FormErrorRow
 import net.amiantos.lurker.ui.networks.FormInset
 import net.amiantos.lurker.ui.networks.FormSectionFooter
 import net.amiantos.lurker.ui.networks.PageExit
@@ -53,19 +54,30 @@ class NickNoteState(private val model: ChatViewModel, val networkId: Int, val ni
 
     var confirmingDelete by mutableStateOf(false)
 
+    /** Why the last Save or Delete couldn't go out — shown under the field, the editor still open. */
+    var refusal by mutableStateOf<String?>(null)
+        private set
+
     /**
      * ⚠ Sent verbatim; the server trims and decides. A whitespace-only note is a DELETE there, so
      * pre-trimming here would only hide which of the two happened — the `nick-note-updated` echo
-     * settles it either way. ⚠ A WRITE, to every device.
+     * settles it either way. ⚠ A WRITE, to every device. False (and [refusal] set) when there's no
+     * socket to send it down — see `NickNoteModel.sendRefusal`.
      */
-    fun save() {
-        model.setNickNote(networkId = networkId, nick = nick, note = draft.text)
-    }
+    fun save(): Boolean = send(draft.text)
 
     /** An empty note IS the delete verb — the server's own encoding. ⚠ A WRITE, to every device. */
-    fun delete() {
+    fun delete(): Boolean {
         confirmingDelete = false
-        model.setNickNote(networkId = networkId, nick = nick, note = "")
+        return send("")
+    }
+
+    private fun send(note: String): Boolean {
+        val state = model.state
+        refusal = NickNoteModel.sendRefusal(state.connection, state.reachable)
+        if (refusal != null) return false
+        model.setNickNote(networkId = networkId, nick = nick, note = note)
+        return true
     }
 }
 
@@ -91,10 +103,8 @@ internal fun NickNotePage(state: NickNoteState, onBack: () -> Unit, onDone: () -
         onDraftChange = { state.draft = it },
         offersDelete = NickNoteModel.offersDelete(state.original),
         onBack = onBack,
-        onSave = {
-            state.save()
-            onDone()
-        },
+        refusal = state.refusal,
+        onSave = { if (state.save()) onDone() },
         onDelete = { state.confirmingDelete = true },
         focusOnOpen = true,
     )
@@ -105,10 +115,7 @@ internal fun NickNotePage(state: NickNoteState, onBack: () -> Unit, onDone: () -
             text = { Text(NickNoteModel.deleteMessage(state.nick)) },
             confirmButton = {
                 TextButton(
-                    onClick = {
-                        state.delete()
-                        onDone()
-                    },
+                    onClick = { if (state.delete()) onDone() },
                 ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = { TextButton(onClick = { state.confirmingDelete = false }) { Text("Cancel") } },
@@ -126,6 +133,7 @@ private fun NickNoteContent(
     onSave: () -> Unit,
     onDelete: () -> Unit,
     focusOnOpen: Boolean,
+    refusal: String? = null,
 ) {
     val focus = remember { FocusRequester() }
     // A page whose only content is one field should not need a tap to start typing.
@@ -144,6 +152,7 @@ private fun NickNoteContent(
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
             )
             FormSectionFooter(UserProfileModel.NOTE_FOOTER)
+            refusal?.let { FormErrorRow(it) }
             // Only once there is something to delete — see `NickNoteModel`.
             if (offersDelete) FormActionRow(title = "Delete Note", onClick = onDelete, destructive = true)
         }

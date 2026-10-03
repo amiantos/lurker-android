@@ -72,6 +72,9 @@ class ModeListFetches {
     private var owed = false
     private var last: ModeListSlice? = null
 
+    /** The page holds a fetched list — one the server gave, not refused. */
+    private var fetched = false
+
     /** The latest fetch. A refresh while one is out starts a newer one, which owns the page. */
     var generation = 0
         private set
@@ -84,10 +87,21 @@ class ModeListFetches {
         return generation
     }
 
-    /** The store moved. True when an owed fetch should go out now. */
+    /**
+     * The store moved. True when an owed fetch should go out now.
+     *
+     * A fetched list stops being kept current the moment readiness is lost — an IRC reconnect or a
+     * part, which are no new snapshot — since the changes in the gap won't arrive as live rows. So it's
+     * owed a fetch on the next rising edge. A REFUSED fetch isn't: losing readiness is no reason to ask
+     * a server that said no.
+     */
     fun linkMoved(slice: ModeListSlice): Boolean {
         val wasReady = last?.ready ?: false
         last = slice
+        if (wasReady && !slice.ready && fetched) {
+            fetched = false
+            owed = true
+        }
         if (owed && slice.ready && !wasReady) {
             owed = false
             return true
@@ -112,13 +126,18 @@ class ModeListFetches {
     fun answered(generation: Int, result: ModeListResult): ModeListStatus? {
         if (generation != this.generation) return null
         return when (result) {
-            is ModeListResult.Entries -> ModeListStatus.Ready(result.entries)
+            is ModeListResult.Entries -> {
+                fetched = true
+                ModeListStatus.Ready(result.entries)
+            }
             ModeListResult.Offline -> {
+                fetched = false
                 // Asked again when the link comes up.
                 owed = true
                 ModeListStatus.Failed("Not connected.")
             }
             is ModeListResult.Failed -> {
+                fetched = false
                 // Asked before the link was ready (the vocabulary hadn't arrived, say): ask again when
                 // it is. A refusal from a ready link stands until the user refreshes.
                 if (last?.ready != true) owed = true

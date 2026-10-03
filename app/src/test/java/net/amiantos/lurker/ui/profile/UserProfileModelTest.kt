@@ -188,6 +188,14 @@ class UserProfileModelTest {
     }
 
     @Test
+    fun aNoteGoesOutOnlyOverAConnectedSocket() {
+        assertEquals(null, NickNoteModel.sendRefusal(SocketStatus.Connected, reachable = true))
+        assertEquals(NickNoteModel.NOT_CONNECTED, NickNoteModel.sendRefusal(SocketStatus.Reconnecting, reachable = true))
+        assertEquals(NickNoteModel.NOT_CONNECTED, NickNoteModel.sendRefusal(SocketStatus.Connected, reachable = false))
+        assertEquals("Not connected — try again when you're back online", NickNoteModel.NOT_CONNECTED)
+    }
+
+    @Test
     fun theNoteEditorOffersDeleteOnlyWhenThereWasANote() {
         assertFalse(NickNoteModel.offersDelete(""))
         assertTrue(NickNoteModel.offersDelete("x"))

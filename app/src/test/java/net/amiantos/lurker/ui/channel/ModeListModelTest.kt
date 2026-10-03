@@ -107,6 +107,28 @@ class ModeListModelTest {
     }
 
     @Test
+    fun aFetchedListThatLosesReadinessIsFetchedAgainWhenItsBack() {
+        for (lost in listOf(slice(linkUp = false), slice(joined = false))) {
+            val fetches = ModeListFetches()
+            fetches.linkMoved(slice())
+            fetches.answered(fetches.start(), ModeListResult.Entries(emptyList()))
+            // An IRC reconnect, or a part: the gap won't come as live rows.
+            assertFalse(fetches.linkMoved(lost))
+            assertTrue(fetches.linkMoved(slice()))
+            assertFalse(fetches.linkMoved(slice()))
+        }
+    }
+
+    @Test
+    fun aRefusedListIsntRetriedJustBecauseTheLinkBounced() {
+        val fetches = ModeListFetches()
+        fetches.linkMoved(slice())
+        fetches.answered(fetches.start(), ModeListResult.Failed("Only channel operators can see this list."))
+        fetches.linkMoved(slice(linkUp = false))
+        assertFalse(fetches.linkMoved(slice()))
+    }
+
+    @Test
     fun aSupersededFetchAnswersNothing() {
         val fetches = ModeListFetches()
         val old = fetches.start()

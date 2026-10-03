@@ -291,7 +291,9 @@ internal class BufferFlow(private val model: ChatViewModel, request: BufferSheet
  *
  * @param onOpenBuffer go to a conversation — a profile's Send Message. The dialog has closed by the
  *   time this runs, as iOS dismisses before navigating: a screen arriving under a dialog still on its
- *   way out is an animation fighting itself.
+ *   way out is an animation fighting itself. ⚠ The DM may not be listed yet — `open-buffer` is only a
+ *   request — so the caller must wait for its row before navigating (`MainScaffold.openWhenListed`),
+ *   or the conversation reads the missing row as a close and bounces back to the list.
  */
 @Composable
 fun BufferSheetsHost(sheets: BufferSheets, model: ChatViewModel, onOpenBuffer: (BufferKey) -> Unit) {
