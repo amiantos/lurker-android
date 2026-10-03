@@ -44,13 +44,6 @@ class FeedSheetsTest {
     }
 
     @Test
-    fun everyFeedGlyphBuilds() {
-        for (icon in listOf(FeedIcons.AlternateEmail, FeedIcons.Bookmark, FeedIcons.BookmarkRemove)) {
-            assertTrue(icon.name, icon.root.iterator().hasNext())
-        }
-    }
-
-    @Test
     fun theHistoryFeedsSayWhatTheyAre() {
         assertEquals("Activity", HistoryFeed.Activity.title)
         assertEquals("No recent activity", HistoryFeed.Activity.words(FeedPlaceholder.Empty).title)

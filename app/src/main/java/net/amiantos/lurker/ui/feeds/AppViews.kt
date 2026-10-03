@@ -39,8 +39,8 @@ enum class AppView(val title: String) {
     val icon: ImageVector
         get() = when (this) {
             Search -> LurkerIcons.Search
-            Activity -> FeedIcons.AlternateEmail
-            Bookmarks -> FeedIcons.Bookmark
+            Activity -> LurkerIcons.AlternateEmail
+            Bookmarks -> LurkerIcons.BookmarkBorder
         }
 }
 

@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.feeds
 
+import net.amiantos.lurker.ui.theme.LurkerIcons
 import android.content.Context
 import android.text.format.DateUtils
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -367,7 +368,7 @@ private fun SwipeToRemove(row: FeedRow, onSelect: (HighlightItem) -> Unit, onRem
                 horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(FeedIcons.BookmarkRemove, contentDescription = null, tint = MaterialTheme.colorScheme.onError)
+                Icon(LurkerIcons.BookmarkRemove, contentDescription = null, tint = MaterialTheme.colorScheme.onError)
                 // Titled for the bookmark, not the "Save" verb: this is a row in the Bookmarks list.
                 Text("Remove", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onError)
             }

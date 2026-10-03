@@ -20,7 +20,7 @@ import androidx.compose.ui.unit.dp
  * `arrow_upward`, `cancel`, `info_outline`, `group`, `account_circle`, `content_copy`, `refresh`,
  * `chat_bubble_outline`, `tune`, `list`, `help_outline`, `more_horiz`, `check_circle_outline`,
  * `security`, `memory`, `wifi_tethering`, `reply`, `sentiment_satisfied`, `bookmark_border`, `bookmark`,
- * `open_in_new`, `share`, `block` — Apache-2.0), so a
+ * `open_in_new`, `share`, `block`, `alternate_email`, `bookmark_remove` — Apache-2.0), so a
  * glyph here is the one every Android user already reads. Tinted by the `Icon` that draws it.
  */
 object LurkerIcons {
@@ -371,6 +371,27 @@ object LurkerIcons {
             "M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2z" +
                 "M4,12c0,-4.42 3.58,-8 8,-8 1.85,0 3.55,0.63 4.9,1.69L5.69,16.9C4.63,15.55 4,13.85 4,12z" +
                 "M12,20c-1.85,0 -3.55,-0.63 -4.9,-1.69L18.31,7.1C19.37,8.45 20,10.15 20,12c0,4.42 -3.58,8 -8,8z",
+        )
+    }
+
+    // U7 — the activity feed and bookmarks.
+
+    /** The activity feed — iOS's `at` (Material's `alternate_email`). */
+    val AlternateEmail: ImageVector by lazy {
+        icon(
+            "AlternateEmail",
+            "M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10h5v-2h-5c-4.34,0 -8,-3.66 -8,-8s3.66,-8 8,-8 8,3.66 8,8v1.43" +
+                "c0,0.79 -0.71,1.57 -1.5,1.57s-1.5,-0.78 -1.5,-1.57L17,12c0,-2.76 -2.24,-5 -5,-5s-5,2.24 -5,5 2.24,5 5,5" +
+                "c1.38,0 2.64,-0.56 3.54,-1.47 0.65,0.89 1.77,1.47 2.96,1.47 1.97,0 3.5,-1.6 3.5,-3.57L22,12" +
+                "c0,-5.52 -4.48,-10 -10,-10zM12,15c-1.66,0 -3,-1.34 -3,-3s1.34,-3 3,-3 3,1.34 3,3 -1.34,3 -3,3z",
+        )
+    }
+
+    /** A bookmark's swipe-to-remove — iOS's `bookmark.slash` (Material's `bookmark_remove`). */
+    val BookmarkRemove: ImageVector by lazy {
+        icon(
+            "BookmarkRemove",
+            "M17,11v6.97l-5,-2.14l-5,2.14V5h6V3H7C5.9,3 5,3.9 5,5v16l7,-3l7,3V11H17zM21,7h-6V5h6V7z",
         )
     }
 
