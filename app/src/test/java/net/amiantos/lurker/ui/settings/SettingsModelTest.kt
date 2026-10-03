@@ -333,4 +333,18 @@ class SettingsModelTest {
         assertEquals("Version 1.0 (1)", SettingsModel.versionString("1.0", 1))
         assertEquals("Version — (—)", SettingsModel.versionString(null, null))
     }
+
+    // Port-only (review round):
+
+    @Test
+    fun aDependentRowFollowsAPendingToggle() {
+        val joins = bool("chat.consolidate_joins", default = false)
+        val max = SettingOption(
+            "chat.consolidate_max_names", "", "", SettingType.Int, SettingValue.Int(5),
+            dependsOn = listOf(SettingDependency("chat.consolidate_joins", listOf(SettingValue.Bool(true)))),
+        )
+        val registry = mapOf(joins.key to joins, max.key to max)
+        val flipped = SettingsEdits().began(joins.key, SettingValue.Bool(true))
+        assertTrue(SettingsModel.rowState(SettingRow("Max", max), Settings(registry, emptyMap()), flipped).enabled)
+    }
 }

@@ -3,6 +3,21 @@
 
 package net.amiantos.lurker.ui.settings
 
+import net.amiantos.lurker.ui.networks.FormErrorRow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitEachGesture
 import android.content.Context
 import android.content.pm.PackageManager
 import androidx.compose.foundation.clickable
@@ -153,6 +168,9 @@ internal fun SettingsDialog(
                     TextButton(
                         onClick = {
                             confirmingSignOut = false
+                            // A stepper value still settling goes out first, while the session it
+                            // belongs to still exists — the dispose-time flush would race the logout.
+                            writer.flush()
                             onSignOut()
                         },
                     ) { Text("Sign Out", color = MaterialTheme.colorScheme.error) }
@@ -335,14 +353,8 @@ private fun SettingRowView(row: SettingRowState, actions: SettingsActions) {
                 style = MaterialTheme.typography.bodyLarge,
             )
         }
-        if (row.error != null) {
-            Text(
-                row.error,
-                modifier = Modifier.fillMaxWidth().padding(start = FormInset, end = FormInset, bottom = 8.dp),
-                style = MaterialTheme.typography.bodyMedium,
-                color = LurkerTheme.colors.badText,
-            )
-        }
+        // The network forms' refusal row — one look, and one "Error" for TalkBack, for every refusal.
+        if (row.error != null) FormErrorRow(row.error)
     }
 }
 
@@ -370,14 +382,62 @@ private fun StepperRow(label: String, control: SettingControl.Stepper, enabled: 
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = if (enabled) 1f else 0.38f),
             )
         }
-        IconButton(onClick = { onChange(control.stepped(-1)) }, enabled = enabled && control.canDecrement) {
+        RepeatingStepButton(enabled = enabled && control.canDecrement, onStep = { onChange(control.stepped(-1)) }) {
             Icon(LurkerIcons.Remove, contentDescription = "Decrease $label")
         }
-        IconButton(onClick = { onChange(control.stepped(1)) }, enabled = enabled && control.canIncrement) {
+        RepeatingStepButton(enabled = enabled && control.canIncrement, onStep = { onChange(control.stepped(1)) }) {
             Icon(LurkerIcons.Add, contentDescription = "Increase $label")
         }
     }
 }
+
+/**
+ * One stepper button: a step on press, then steps repeating while it's held — iOS's `UIStepper`
+ * autorepeat. Without it the smart filter's windows (0–1440 minutes) were most of their range out of
+ * reach: 105 taps from 15 to 120. The writer's settle (`SettingsWriter`) turns a held run into one
+ * write.
+ *
+ * Each repeat reads the latest [onStep], which the step itself recomposed with the new value, and
+ * stops at the bound, where [enabled] goes false. TalkBack gets a plain button: one step per
+ * activation.
+ */
+@Composable
+private fun RepeatingStepButton(enabled: Boolean, onStep: () -> Unit, content: @Composable () -> Unit) {
+    val currentStep by rememberUpdatedState(onStep)
+    val currentEnabled by rememberUpdatedState(enabled)
+    val scope = rememberCoroutineScope()
+    Box(
+        Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .alpha(if (enabled) 1f else 0.38f)
+            .semantics {
+                role = Role.Button
+                if (enabled) onClick { currentStep(); true } else disabled()
+            }
+            .pointerInput(Unit) {
+                awaitEachGesture {
+                    awaitFirstDown()
+                    if (!currentEnabled) return@awaitEachGesture
+                    currentStep()
+                    val repeating = scope.launch {
+                        delay(STEP_REPEAT_DELAY_MS)
+                        while (currentEnabled) {
+                            currentStep()
+                            delay(STEP_REPEAT_INTERVAL_MS)
+                        }
+                    }
+                    waitForUpOrCancellation()
+                    repeating.cancel()
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) { content() }
+}
+
+/** How long a press is held before it starts repeating, and how fast it repeats then (iOS's feel). */
+private const val STEP_REPEAT_DELAY_MS = 400L
+private const val STEP_REPEAT_INTERVAL_MS = 70L
 
 /**
  * A pull-down showing the value in force — iOS's menu button. A menu rather than a segmented control:
