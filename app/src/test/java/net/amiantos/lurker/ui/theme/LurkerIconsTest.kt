@@ -23,6 +23,7 @@ class LurkerIconsTest {
             LurkerIcons.CheckCircle, LurkerIcons.Shield, LurkerIcons.Memory, LurkerIcons.Antenna,
             LurkerIcons.Reply, LurkerIcons.Smile, LurkerIcons.BookmarkBorder, LurkerIcons.BookmarkFilled, LurkerIcons.AlternateEmail, LurkerIcons.BookmarkRemove, LurkerIcons.OpenInNew,
             LurkerIcons.Share, LurkerIcons.Block,
+            LurkerIcons.PlayCircle, LurkerIcons.GraphicEq, LurkerIcons.Image,
         )
         for (icon in icons) assertTrue(icon.name, icon.root.iterator().hasNext())
     }

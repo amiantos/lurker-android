@@ -190,8 +190,8 @@ object MessageText {
      * inside the body as the web.
      *
      * @param revealed which of this message's spoilers the reader has opened, by ordinal.
-     * @param hiddenUrls the addresses a link preview stands in for, taken out of the text. U8: empty
-     *   until previews draw.
+     * @param hiddenUrls the addresses a link preview stands in for, taken out of the text — the row's
+     *   `PreviewPlan.hidden`.
      * @param onToggleSpoiler what a tap on spoiler `n` does; null where there's nothing to toggle.
      */
     fun renderCompactBody(
@@ -920,7 +920,7 @@ object MessageText {
         // ⚠⚠ The deletions happen HERE, last, after every pass that holds ranges into the assembled
         // string — `mircColored`, `spoilered` and `links` are plain offsets and do not move when
         // characters do. The rule itself is the kit's (`PreviewText`), so it is tested where the
-        // decision lives: it takes the `<…>` off a bracketed link on every message, and (U8) the
+        // decision lives: it takes the `<…>` off a bracketed link on every message, and the
         // address a preview stands in for.
         PreviewText.stripHiddenUrls(body, hidden = hiddenUrls, spoilered = spoilered)
         return body

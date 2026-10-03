@@ -35,6 +35,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -96,6 +97,11 @@ import net.amiantos.lurker.ui.composer.SuggestionsView
 import net.amiantos.lurker.ui.feeds.AppView
 import net.amiantos.lurker.ui.feeds.ConversationViewsActions
 import net.amiantos.lurker.ui.composer.rememberComposerState
+import net.amiantos.lurker.ui.media.MediaSource
+import net.amiantos.lurker.ui.media.PreviewContext
+import net.amiantos.lurker.ui.media.PreviewPlan
+import net.amiantos.lurker.ui.media.PreviewToggles
+import net.amiantos.lurker.ui.media.PreviewUpdates
 import net.amiantos.lurker.ui.message.MessageListContext
 import net.amiantos.lurker.ui.message.MessageListLayout
 import net.amiantos.lurker.ui.message.MessageListRow
@@ -116,6 +122,7 @@ import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.BufferPlaceholder
 import net.amiantos.lurkerkit.model.ConnectionBannerState
+import net.amiantos.lurkerkit.model.LinkPreview
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageRow
 import net.amiantos.lurkerkit.model.Reactions
@@ -160,7 +167,9 @@ import java.time.ZoneOffset
  * A long press on a row opens its actions sheet (lurker-android#37): the line's, a link's, or — on
  * the chips — who reacted. Reply goes through `ComposerState.startReply`. See `MessageActionsHost`.
  *
- * U8: link previews.
+ * Link previews and inline media draw under the rows that carry them (lurker-android#15): the kit
+ * resolves them at ingest, and a batch landing for something on screen re-plans the rows that show it
+ * (`PreviewUpdates`). A tap on a picture opens [onOpenMedia]'s viewer.
  *
  * @param jump the message to land on rather than the bottom (`BufferRoute.jump`) — a new request on
  *   the same buffer arrives here without rebuilding the screen.
@@ -183,6 +192,8 @@ import java.time.ZoneOffset
  * @param onShowInfo the bar's info button (U5) — this buffer's info and settings, on every buffer.
  * @param sideBySide whether the list is beside this screen — the bar's views come out as buttons (U7).
  * @param onOpenView the bar's views — Search, Activity, Bookmarks (U7), which `MainScaffold` hosts.
+ * @param onOpenMedia the media viewer `MainScaffold` hosts, over a message's pictures and positioned on
+ *   one; null and a tap on a picture opens its address.
  */
 @Composable
 fun ConversationScreen(
@@ -203,6 +214,7 @@ fun ConversationScreen(
     onShowInfo: () -> Unit = {},
     sideBySide: Boolean = false,
     onOpenView: ((AppView) -> Unit)? = null,
+    onOpenMedia: ((List<LinkPreview>, Int) -> Unit)? = null,
 ) {
     val kind = remember(key) { BufferKind.of(networkId = key.networkId, target = key.target) }
 
@@ -579,6 +591,40 @@ fun ConversationScreen(
         if (next.isEmpty()) revealed.remove(message.id) else revealed[message.id] = next
     }
 
+    // MARK: - Link previews
+
+    // Bumped when preview state moved for something on screen, so the rows showing it re-plan: the
+    // store isn't observable state, and a resolved preview changes no message. Off by default — both
+    // settings and the instance's flag (`PreviewToggles`) — and then nothing here runs past one test.
+    var previewRevision by remember(key) { mutableIntStateOf(0) }
+    DisposableEffect(model, key) {
+        val stop = PreviewUpdates.listen { urls ->
+            // ⚠⚠ Is any of this on SCREEN? The store is shared by every buffer, and most of what
+            // resolves during a connect burst belongs to another one; recomposing this list's rows
+            // for each batch would be work for nothing. Read off the rows on screen (and a few past
+            // either edge, which the list may already have composed), the same way the rows read them.
+            val toggles = PreviewToggles.resolve(model.features.linkPreviews, model.state.settings) ?: return@listen
+            val rows = current.rows
+            val items = listState.layoutInfo.visibleItemsInfo
+            if (rows.isEmpty() || items.isEmpty()) return@listen
+            val newest = rows.size - 1 - (items.minOf { it.index } - PREVIEW_MARGIN_ROWS).coerceAtLeast(0)
+            val oldest = rows.size - 1 - (items.maxOf { it.index } + PREVIEW_MARGIN_ROWS).coerceAtMost(rows.size - 1)
+            val shows = (oldest..newest).any { index ->
+                val message = rows.getOrNull(index)?.message ?: return@any false
+                PreviewPlan.mentionsAny(message, urls, toggles)
+            }
+            if (shows) previewRevision++
+        }
+        onDispose(stop)
+    }
+    val currentOnOpenMedia by rememberUpdatedState(onOpenMedia)
+    val openMedia: ((List<LinkPreview>, Int) -> Unit)? = if (onOpenMedia == null) {
+        null
+    } else {
+        remember { { previews: List<LinkPreview>, index: Int -> currentOnOpenMedia?.invoke(previews, index) } }
+    }
+    val previewMedia = remember(model) { MediaSource.of(model) }
+
     val day = clock.value
     val style = rememberMessageTextStyle()
     val haptics = LocalHapticFeedback.current
@@ -603,7 +649,11 @@ fun ConversationScreen(
     }
 
     // Keyed on everything the resolvers capture, the sheets' state and the keyboard's included.
-    val context = remember(rows, inputs, highlighter, style, day, actions, keyboard, focusManager, haptics) {
+    val context = remember(rows, inputs, highlighter, style, day, actions, keyboard, focusManager, haptics, previewRevision, openMedia) {
+        // ⚠ The instance flag is read here, on every rebuild, rather than once: it isn't state, and
+        // it's re-read from `/api/config` on each reconnect. Turning on primes every loaded buffer,
+        // whose answers come back through `PreviewUpdates` and rebuild this.
+        val previewToggles = PreviewToggles.resolve(model.features.linkPreviews, inputs.settings)
         MessageListContext(
             style = style,
             networkName = { message -> ConversationModel.networkName(message, key, inputs.networks) },
@@ -640,6 +690,8 @@ fun ConversationScreen(
             onLongPress = ::onLongPress,
             zone = day.zone,
             today = day.today,
+            previews = previewToggles?.let { PreviewContext(model.linkPreviews, previewMedia, it, previewRevision) },
+            onOpenMedia = openMedia,
         )
     }
 
@@ -837,6 +889,12 @@ private val PAGING_DISTANCE = 300.dp
  * correction for rows still composing under it.
  */
 private const val JUMP_PASSES = 3
+
+/**
+ * Rows past either edge of the screen a preview batch is checked against — the list composes a little
+ * ahead of what it shows, and a row composed before its preview landed would otherwise keep a stale plan.
+ */
+private const val PREVIEW_MARGIN_ROWS = 8
 
 /** How long a converging pass waits for the list to measure a new build. */
 private const val LAYOUT_WAIT_MS = 1_000L

@@ -60,6 +60,9 @@ import net.amiantos.lurker.ui.dcc.DccOfferDialog
 import net.amiantos.lurker.ui.dcc.DccOffers
 import net.amiantos.lurker.ui.list.BufferListModel
 import net.amiantos.lurker.ui.list.BufferListScreen
+import net.amiantos.lurker.ui.media.MediaSource
+import net.amiantos.lurker.ui.media.MediaViewerHost
+import net.amiantos.lurker.ui.media.rememberMediaViewer
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.session.ChatViewModel
@@ -398,6 +401,11 @@ fun MainScaffold(
     // the dialog and opens the buffer at that line, through `open` like every other way in.
     val feedSheets = rememberFeedSheets()
 
+    // The media viewer (lurker-android#15) — here for the same reason: a phone's navigation must not
+    // drop it, and a conversation rebuilt under a rename must not close it.
+    val mediaViewer = rememberMediaViewer()
+    val media = remember(model) { MediaSource.of(model) }
+
     // The kit's asks of the screen (`AppEvents`), taken for as long as this scaffold is composed.
     // Attached across a configuration change — that gap is what the queue bridges — and detached
     // when the screen goes for good, so nothing waits for a launch hours later.
@@ -416,6 +424,7 @@ fun MainScaffold(
                     sheets.dismiss()
                     bufferSheets.dismiss()
                     feedSheets.dismiss()
+                    mediaViewer.dismiss()
                     showingSettings = false
                     open(event.key, jumpTo = event.jumpTo)
                 }
@@ -481,6 +490,7 @@ fun MainScaffold(
                             onShowProfile = { networkId, nick -> bufferSheets.showProfile(networkId, nick) },
                             sideBySide = sideBySide,
                             onOpenView = { view -> feedSheets.show(view) },
+                            onOpenMedia = mediaViewer::show,
                         )
                     }
                 }
@@ -516,6 +526,8 @@ fun MainScaffold(
         NetworkSheetsHost(sheets = sheets, model = model) { networkId, channel ->
             model.requestJoin(networkId = networkId, channel = channel, opens = true)
         }
+        // Last, so a picture opened from anywhere is the window on top.
+        MediaViewerHost(mediaViewer, media)
     }
     }
 }

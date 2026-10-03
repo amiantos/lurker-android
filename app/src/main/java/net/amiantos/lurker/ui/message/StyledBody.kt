@@ -20,7 +20,7 @@ import net.amiantos.lurkerkit.support.TextRange
  *
  * Its own type because Compose's `AnnotatedString.Builder` can only append, and a body has to lose
  * characters after it's styled: `PreviewText.stripHiddenUrls` takes the `<…>` off a bracketed link
- * (on every message) and, once link previews land (U8), the address a picture stands in for. That
+ * (on every message) and the address a link preview's picture stands in for. That
  * function is the kit's, and it asks for an [AttributedBody]: this is the app's one.
  *
  * ⚠ The contract the kit spells out on [AttributedBody] — the styling of the text that survives a
