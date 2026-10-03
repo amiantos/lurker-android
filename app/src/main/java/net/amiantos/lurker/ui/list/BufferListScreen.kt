@@ -4,9 +4,7 @@
 package net.amiantos.lurker.ui.list
 
 import kotlinx.coroutines.flow.conflate
-import net.amiantos.lurker.prefs.LocalUiPreferences
 import net.amiantos.lurker.ui.networks.NetworkSheets
-import net.amiantos.lurker.ui.settings.SettingsDialog
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -46,7 +44,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -110,7 +107,7 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
  *   `marksOpenBuffer`. It gates the open mark, and the banner: side by side the conversation pane
  *   carries it, so the two never draw over each other or are read out twice.
  * @param onClose leaves a channel or closes a buffer — the swipe and the menu both come here.
- * @param onSignOut ends the session — reached from Settings, behind its confirmation.
+ * @param onOpenSettings opens Settings, which `MainScaffold` hosts (with Sign Out inside it).
  * @param sheets the networks dialogs, hosted by `MainScaffold`: "+" opens Join Channel and Add
  *   Network, and Settings → Networks opens the networks list over Settings.
  */
@@ -123,7 +120,7 @@ fun BufferListScreen(
     sideBySide: Boolean,
     onOpen: (Buffer) -> Unit,
     onClose: (Buffer) -> Unit,
-    onSignOut: () -> Unit,
+    onOpenSettings: () -> Unit,
     sheets: NetworkSheets,
 ) {
     // Stage one: map every frame to what the list draws, and drop the frames that change none of
@@ -171,26 +168,6 @@ fun BufferListScreen(
     val latestBuilt by rememberUpdatedState(built)
     val sections = drag?.rendered() ?: built
     val placeholder = BufferListModel.placeholder(inputs, built, draws)
-
-    // Settings, over the list — iOS presents it as a sheet from its list. Hosted here rather than with
-    // the networks dialogs in `MainScaffold`, since only this screen opens it; a navigation that takes
-    // the list away on a phone (a join landing, `AppEvent.OpenBuffer`) takes Settings with it, as
-    // iOS's `land(on:)` dismisses whatever is presented. Saved, so a rotation keeps it up.
-    var showingSettings by rememberSaveable { mutableStateOf(false) }
-    if (showingSettings) {
-        SettingsDialog(
-            model = model,
-            uiPreferences = LocalUiPreferences.current,
-            onDismiss = { showingSettings = false },
-            // Over Settings, not instead of it: closing the networks list comes back here, as Back
-            // from iOS's pushed networks screen does.
-            onOpenNetworks = sheets::showNetworks,
-            onSignOut = {
-                showingSettings = false
-                onSignOut()
-            },
-        )
-    }
 
     val actions = BufferListActions(
         onOpen = { row ->
@@ -258,7 +235,7 @@ fun BufferListScreen(
         // its row hasn't arrived from the server yet.
         onOpenSystem = { onOpen(model.state.buffers[Buffer.system.key.id] ?: Buffer.system) },
         onMarkAllRead = model::markAllRead,
-        onOpenSettings = { showingSettings = true },
+        onOpenSettings = onOpenSettings,
         // Read as the "+" menu opens, not when the bar was drawn — see `AddMenu`.
         hasNetworks = { model.state.networks.isNotEmpty() },
         onJoinChannel = sheets::showJoinChannel,

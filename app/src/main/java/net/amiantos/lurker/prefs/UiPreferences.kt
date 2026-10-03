@@ -3,7 +3,6 @@
 
 package net.amiantos.lurker.prefs
 
-import androidx.compose.runtime.staticCompositionLocalOf
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -142,11 +141,3 @@ class UiPreferences(private val prefs: StringPrefs) {
         private const val COMPOSER_AUTOCAPITALIZATION = "composerAutocapitalization"
     }
 }
-
-/**
- * The app's [UiPreferences], for screens below `MainScaffold` that need one it doesn't pass down —
- * the settings dialog, opened from the buffer list. Provided by `AppRoot`, which is handed the
- * instance by `LurkerApp`, so what the app proper reads and writes is still visible at the root
- * rather than looked up from the Application inside composition.
- */
-val LocalUiPreferences = staticCompositionLocalOf<UiPreferences> { error("No UiPreferences provided") }
