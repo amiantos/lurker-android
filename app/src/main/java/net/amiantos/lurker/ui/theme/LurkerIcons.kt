@@ -22,7 +22,8 @@ import androidx.compose.ui.unit.dp
  * `security`, `memory`, `wifi_tethering`, `reply`, `sentiment_satisfied`, `bookmark_border`, `bookmark`,
  * `open_in_new`, `share`, `block`, `alternate_email`, `bookmark_remove`, `play_circle_filled`,
  * `graphic_eq`, `image`, `attach_file`, `photo_library`, `star`, `star_border`, `movie`, `audiotrack`,
- * `description`, `insert_drive_file`, `delete`, `filter_list`, `link` — Apache-2.0), so a
+ * `description`, `insert_drive_file`, `delete`, `filter_list`, `link`, `error_outline`, `dns`,
+ * `auto_awesome`, `forum`, `public_off` — Apache-2.0), so a
  * glyph here is the one every Android user already reads. Tinted by the `Icon` that draws it.
  */
 object LurkerIcons {
@@ -492,6 +493,57 @@ object LurkerIcons {
             "Link",
             "M3.9,12c0,-1.71 1.39,-3.1 3.1,-3.1h4V7H7c-2.76,0 -5,2.24 -5,5s2.24,5 5,5h4v-1.9H7c-1.71,0 -3.1,-1.39 -3.1,-3.1z" +
                 "M8,13h8v-2H8v2zM17,7h-4v1.9h4c1.71,0 3.1,1.39 3.1,3.1s-1.39,3.1 -3.1,3.1h-4V17h4c2.76,0 5,-2.24 5,-5s-2.24,-5 -5,-5z",
+        )
+    }
+
+    /** A notice that something went wrong — iOS's `exclamationmark.circle` (`error_outline`). */
+    val ErrorOutline: ImageVector by lazy {
+        icon(
+            "ErrorOutline",
+            "M11,15h2v2h-2zM11,7h2v6h-2zM11.99,2C6.47,2 2,6.48 2,12s4.47,10 9.99,10C17.52,22 22,17.52 22,12S17.52,2 11.99,2z" +
+                "M12,20c-4.42,0 -8,-3.58 -8,-8s3.58,-8 8,-8 8,3.58 8,8 -3.58,8 -8,8z",
+        )
+    }
+
+    /** An empty server log — iOS's `server.rack` (`dns`). */
+    val Dns: ImageVector by lazy {
+        icon(
+            "Dns",
+            "M20,13H4c-0.55,0 -1,0.45 -1,1v6c0,0.55 0.45,1 1,1h16c0.55,0 1,-0.45 1,-1v-6c0,-0.55 -0.45,-1 -1,-1z" +
+                "M7,19c-1.1,0 -2,-0.9 -2,-2s0.9,-2 2,-2 2,0.9 2,2 -0.9,2 -2,2z" +
+                "M20,3H4c-0.55,0 -1,0.45 -1,1v6c0,0.55 0.45,1 1,1h16c0.55,0 1,-0.45 1,-1V4c0,-0.55 -0.45,-1 -1,-1z" +
+                "M7,9c-1.1,0 -2,-0.9 -2,-2s0.9,-2 2,-2 2,0.9 2,2 -0.9,2 -2,2z",
+        )
+    }
+
+    /** The system buffer's welcome — iOS's `sparkles` (`auto_awesome`). */
+    val AutoAwesome: ImageVector by lazy {
+        icon(
+            "AutoAwesome",
+            "M19,9l1.25,-2.75L23,5l-2.75,-1.25L19,1l-1.25,2.75L15,5l2.75,1.25L19,9z" +
+                "M11.5,9.5L9,4 6.5,9.5 1,12l5.5,2.5L9,20l2.5,-5.5L17,12l-5.5,-2.5z" +
+                "M19,15l-1.25,2.75L15,19l2.75,1.25L19,23l1.25,-2.75L23,19l-2.75,-1.25L19,15z",
+        )
+    }
+
+    /** An empty buffer list — iOS's `bubble.left.and.bubble.right` (`forum`). */
+    val Forum: ImageVector by lazy {
+        icon(
+            "Forum",
+            "M21,6h-2v9H6v2c0,0.55 0.45,1 1,1h11l4,4V7c0,-0.55 -0.45,-1 -1,-1z" +
+                "M17,12V3c0,-0.55 -0.45,-1 -1,-1H3c-0.55,0 -1,0.45 -1,1v14l4,-4h10c0.55,0 1,-0.45 1,-1z",
+        )
+    }
+
+    /** No networks on offer in the picker — iOS's `network.slash` (`public_off`). */
+    val PublicOff: ImageVector by lazy {
+        icon(
+            "PublicOff",
+            "M11,8.17L6.49,3.66C8.07,2.61 9.96,2 12,2c5.52,0 10,4.48 10,10c0,2.04 -0.61,3.93 -1.66,5.51l-1.46,-1.46" +
+                "C19.59,14.87 20,13.48 20,12c0,-3.35 -2.07,-6.22 -5,-7.41V5c0,1.1 -0.9,2 -2,2h-2V8.17z" +
+                "M21.19,21.19l-1.41,1.41l-2.27,-2.27C15.93,21.39 14.04,22 12,22C6.48,22 2,17.52 2,12" +
+                "c0,-2.04 0.61,-3.93 1.66,-5.51L1.39,4.22l1.41,-1.41L21.19,21.19z" +
+                "M11,18c-1.1,0 -2,-0.9 -2,-2v-1l-4.79,-4.79C4.08,10.79 4,11.38 4,12c0,4.08 3.05,7.44 7,7.93V18z",
         )
     }
 

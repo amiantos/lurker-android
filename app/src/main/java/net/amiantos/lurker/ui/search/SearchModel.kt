@@ -4,6 +4,7 @@
 package net.amiantos.lurker.ui.search
 
 import net.amiantos.lurker.ui.feeds.StateWords
+import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurkerkit.model.SearchQuery
 
 /**
@@ -121,18 +122,19 @@ object SearchWords {
                 "Search your history",
                 "Type to search every network — narrow it with from:nick, in:#channel, or on:network. " +
                     "Messages that match your highlight rules show up here too.",
+                StateSymbol.Search,
             )
             // Says the rule rather than just withholding results, so a field that has visibly stopped
             // responding is explained instead of looking broken.
-            SearchShowing.TooShort -> StateWords("Keep typing", "Searches start at two characters.")
-            SearchShowing.Results -> StateWords("No matches", "Nothing in your history matches $query.")
+            SearchShowing.TooShort -> StateWords("Keep typing", "Searches start at two characters.", StateSymbol.Ellipsis)
+            SearchShowing.Results -> StateWords("No matches", "Nothing in your history matches $query.", StateSymbol.Search)
         }
 
     /** Both halves are ordinary REST reads, so both get the ordinary advice. */
     fun error(showing: SearchShowing): StateWords =
         if (showing == SearchShowing.Landing) {
-            StateWords("Couldn't load highlights", "Pull to try again.")
+            StateWords("Couldn't load highlights", "Pull to try again.", StateSymbol.Warning)
         } else {
-            StateWords("Couldn't search", "Pull to try again, or edit your search.")
+            StateWords("Couldn't search", "Pull to try again, or edit your search.", StateSymbol.Warning)
         }
 }

@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.networks
 
+import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurkerkit.model.ClientCertificate
 import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.Network
@@ -59,11 +60,11 @@ class NetworksListModelTest {
     fun placeholdersSayIosWords() {
         assertEquals(NetworksPlaceholder(title = "Loading networks…", isLoading = true), NetworksListModel.placeholder(NetworksLoad.Loading))
         assertEquals(
-            NetworksPlaceholder("Couldn't load networks", "Check your connection and try again.", "Try Again"),
+            NetworksPlaceholder("Couldn't load networks", "Check your connection and try again.", "Try Again", symbol = StateSymbol.Warning),
             NetworksListModel.placeholder(NetworksLoad.Failed),
         )
         assertEquals(
-            NetworksPlaceholder("No networks yet", "Add the IRC network you want to talk on.", "Add Network"),
+            NetworksPlaceholder("No networks yet", "Add the IRC network you want to talk on.", "Add Network", symbol = StateSymbol.Network),
             NetworksListModel.placeholder(NetworksLoad.Loaded(emptyList())),
         )
         assertNull(NetworksListModel.placeholder(NetworksLoad.Loaded(listOf(config(1)))))

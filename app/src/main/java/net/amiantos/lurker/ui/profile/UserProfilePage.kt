@@ -20,6 +20,10 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
@@ -161,6 +165,13 @@ private fun ProfileRowView(row: ProfileRow, onRow: (ProfileRow) -> Unit) {
     val clear = ListItemDefaults.colors(containerColor = Color.Transparent)
     when (row) {
         is ProfileRow.Status -> ListItem(
+            // The lookup's answer lands while the reader waits — "Looking up alice…" turning into
+            // "alice isn't on this network." is read out (#20). One description on the row, so the
+            // change is the live region's own.
+            modifier = Modifier.clearAndSetSemantics {
+                contentDescription = row.text
+                liveRegion = LiveRegionMode.Polite
+            },
             colors = clear,
             leadingContent = {
                 Icon(if (row.line == ProfileStatus.StatusLine.NotFound) LurkerIcons.HelpOutline else LurkerIcons.MoreHoriz, null, tint = muted)

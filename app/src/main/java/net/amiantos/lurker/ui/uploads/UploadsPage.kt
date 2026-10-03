@@ -11,6 +11,8 @@ import android.content.Intent
 import android.icu.text.DisplayContext
 import android.icu.text.RelativeDateTimeFormatter
 import android.icu.util.ULocale
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
 import androidx.core.net.toUri
 import android.text.format.Formatter
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -206,7 +208,18 @@ internal fun UploadsPage(
                 val placeholder = grid.placeholder
                 // A pull shows its own spinner, so the page's stays away while one is out.
                 if (placeholder != null && !(placeholder.isLoading && grid.refreshing)) {
-                    StateView(title = placeholder.title, subtitle = placeholder.subtitle, isLoading = placeholder.isLoading)
+                    StateView(
+                        title = placeholder.title,
+                        symbol = placeholder.symbol,
+                        subtitle = placeholder.subtitle,
+                        isLoading = placeholder.isLoading,
+                        // "Pull to try again." — a pull TalkBack can't make, so offered as an action too.
+                        onRetry = if (!placeholder.isLoading && grid.loadFailed) {
+                            { state.reload(byPull = true) }
+                        } else {
+                            null
+                        },
+                    )
                 }
             }
         }
@@ -543,7 +556,8 @@ private fun RetryRow(onRetry: () -> Unit) {
     ) {
         Text(
             "Couldn't load more.",
-            modifier = Modifier.weight(1f),
+            // Appears under the reader as they scroll — said, not just drawn.
+            modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite },
             style = MaterialTheme.typography.bodyMedium,
             color = LurkerTheme.colors.fgMuted,
         )
@@ -620,7 +634,7 @@ private fun EmptyPreview(dark: Boolean) {
     LurkerTheme(darkTheme = dark) {
         Box(Modifier.background(MaterialTheme.colorScheme.background).size(360.dp, 400.dp)) {
             val placeholder = UploadsGrid().placeholder!!
-            StateView(title = placeholder.title, subtitle = placeholder.subtitle)
+            StateView(title = placeholder.title, symbol = placeholder.symbol, subtitle = placeholder.subtitle)
         }
     }
 }

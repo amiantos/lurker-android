@@ -98,7 +98,7 @@ private fun NetworkPickerContent(
             val placeholder = NetworkPickerModel.placeholder(offered, allowsCustom, query)
             if (placeholder != null) {
                 Box(Modifier.fillMaxSize().padding(bottom = padding.calculateBottomPadding())) {
-                    StateView(title = placeholder.title, subtitle = placeholder.subtitle)
+                    StateView(title = placeholder.title, symbol = placeholder.symbol, subtitle = placeholder.subtitle)
                 }
                 return@Column
             }

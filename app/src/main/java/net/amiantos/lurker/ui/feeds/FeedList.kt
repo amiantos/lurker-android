@@ -42,11 +42,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -224,7 +226,14 @@ internal fun FeedListContent(
         val placeholder = snapshot.placeholder
         if (placeholder != null && !(placeholder == FeedPlaceholder.Loading && snapshot.refreshing)) {
             val said = words(placeholder)
-            StateView(title = said.title, subtitle = said.subtitle, isLoading = placeholder == FeedPlaceholder.Loading)
+            StateView(
+                title = said.title,
+                symbol = said.symbol,
+                subtitle = said.subtitle,
+                isLoading = placeholder == FeedPlaceholder.Loading,
+                // "Pull to try again." — a pull TalkBack can't make, so offered as an action too.
+                onRetry = if (placeholder == FeedPlaceholder.Error) onRefresh else null,
+            )
         }
     }
 }
@@ -241,7 +250,8 @@ private fun RetryRow(onRetry: () -> Unit) {
     ) {
         Text(
             "Couldn't load more.",
-            modifier = Modifier.weight(1f),
+            // Appears under the reader as they scroll — said, not just drawn.
+            modifier = Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite },
             style = MaterialTheme.typography.bodyMedium,
             color = LurkerTheme.colors.fgMuted,
         )

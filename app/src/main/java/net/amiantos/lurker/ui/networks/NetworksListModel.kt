@@ -4,6 +4,7 @@
 package net.amiantos.lurker.ui.networks
 
 import net.amiantos.lurker.ui.list.label
+import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurkerkit.model.ClientCertificate
 import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.NetworkAction
@@ -40,6 +41,7 @@ data class NetworksPlaceholder(
     val subtitle: String? = null,
     val actionTitle: String? = null,
     val isLoading: Boolean = false,
+    val symbol: StateSymbol? = null,
 )
 
 /**
@@ -95,12 +97,14 @@ object NetworksListModel {
                 title = "Couldn't load networks",
                 subtitle = "Check your connection and try again.",
                 actionTitle = "Try Again",
+                symbol = StateSymbol.Warning,
             )
             is NetworksLoad.Loaded -> if (load.configs.isEmpty()) {
                 NetworksPlaceholder(
                     title = "No networks yet",
                     subtitle = "Add the IRC network you want to talk on.",
                     actionTitle = "Add Network",
+                    symbol = StateSymbol.Network,
                 )
             } else {
                 null

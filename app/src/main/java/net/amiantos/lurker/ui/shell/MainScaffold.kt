@@ -89,6 +89,12 @@ import net.amiantos.lurkerkit.session.ChatViewModel
  *
  * Built fresh for every session: `AppRoot` swaps it out on sign-out, which is what resets the
  * burst latch and the launch restore below without either having to notice a session change.
+ *
+ * [sessionLive] false is the session already over while `AppRoot` fades this out: every dialog goes
+ * at once rather than with the fade. A dialog is a window of its own and takes none of the fade's
+ * alpha, so it would otherwise sit fully drawn — and still taking taps, for an account that's gone —
+ * over the incoming sign-in screen, the way iOS's sheets would have sat over its login had it not
+ * dismissed them before swapping the root.
  */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
@@ -99,6 +105,7 @@ fun MainScaffold(
     dccOffers: DccOffers,
     uploads: UploadServices,
     onSignOut: () -> Unit,
+    sessionLive: Boolean = true,
 ) {
     // The content key is the buffer the detail pane shows, in parts a Bundle can hold — the
     // navigator saves its history, so the conversation survives rotation and process death.
@@ -544,45 +551,48 @@ fun MainScaffold(
             },
         )
         NoticeHost(events, Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
-        ServerErrorDialog(model)
-        // A DCC chat offer, asked about over whatever is on screen — here for the error dialog's
-        // reason, so it neither waits behind the list on a phone nor closes when a conversation opens.
-        DccOfferDialog(dccOffers)
-        // Joining is also switching: you asked for a channel, so land in it — once the server says
-        // you're in (lurker-ios#57). Nothing navigates before then: a join can be refused, and a
-        // screen for a channel you never got into has nothing to show. `requestJoin` opens the
-        // channel when `channel-joined` lands (`AppEvent.OpenBuffer`), and says why when it doesn't
-        // (`AppEvent.Notice`).
-        if (showingSettings) {
-            SettingsDialog(
-                model = model,
-                uiPreferences = uiPreferences,
-                onDismiss = { showingSettings = false },
-                // Over Settings, not instead of it: closing the networks list comes back here.
-                onOpenNetworks = sheets::showNetworks,
-                onSignOut = {
-                    showingSettings = false
-                    onSignOut()
-                },
-            )
+        // Every window below goes the moment the session ends — see [sessionLive].
+        if (sessionLive) {
+            ServerErrorDialog(model)
+            // A DCC chat offer, asked about over whatever is on screen — here for the error dialog's
+            // reason, so it neither waits behind the list on a phone nor closes when a conversation opens.
+            DccOfferDialog(dccOffers)
+            // Joining is also switching: you asked for a channel, so land in it — once the server says
+            // you're in (lurker-ios#57). Nothing navigates before then: a join can be refused, and a
+            // screen for a channel you never got into has nothing to show. `requestJoin` opens the
+            // channel when `channel-joined` lands (`AppEvent.OpenBuffer`), and says why when it doesn't
+            // (`AppEvent.Notice`).
+            if (showingSettings) {
+                SettingsDialog(
+                    model = model,
+                    uiPreferences = uiPreferences,
+                    onDismiss = { showingSettings = false },
+                    // Over Settings, not instead of it: closing the networks list comes back here.
+                    onOpenNetworks = sheets::showNetworks,
+                    onSignOut = {
+                        showingSettings = false
+                        onSignOut()
+                    },
+                )
+            }
+            // Over the conversation it's about: Send Message closes it and opens the DM, as iOS's `leaveSheet`.
+            BufferSheetsHost(sheets = bufferSheets, model = model, onOpenBuffer = { key -> openWhenListed(key) }, onSearch = feedSheets::showSearch)
+            FeedSheetsHost(sheets = feedSheets, model = model, onJump = { key, messageId -> open(key, jumpTo = messageId) })
+            // Add to Message: the file's address into the composer of the conversation that opened the browser
+            // — on screen behind it now, or as soon as it is again.
+            UploadsSheetsHost(sheets = uploadsSheets, model = model) { key, url -> uploads.inserts.insert(key, url) }
+            // A finished run's one dialog, over whatever is up (the run outlives the buffer it started in).
+            UploadReportDialog(uploads.runner)
+            // A share waiting for its conversation — asked as soon as the signed-in app is up.
+            val share by uploads.shares.share.collectAsStateWithLifecycle()
+            if (share != null) SharePickerDialog(model = model, onPick = ::sendShare, onDismiss = { uploads.shares.take() })
+            // After Settings, so a networks list opened from it is the window on top.
+            NetworkSheetsHost(sheets = sheets, model = model) { networkId, channel ->
+                model.requestJoin(networkId = networkId, channel = channel, opens = true)
+            }
+            // Last, so a picture opened from anywhere is the window on top.
+            MediaViewerHost(mediaViewer, media)
         }
-        // Over the conversation it's about: Send Message closes it and opens the DM, as iOS's `leaveSheet`.
-        BufferSheetsHost(sheets = bufferSheets, model = model, onOpenBuffer = { key -> openWhenListed(key) }, onSearch = feedSheets::showSearch)
-        FeedSheetsHost(sheets = feedSheets, model = model, onJump = { key, messageId -> open(key, jumpTo = messageId) })
-        // Add to Message: the file's address into the composer of the conversation that opened the browser
-        // — on screen behind it now, or as soon as it is again.
-        UploadsSheetsHost(sheets = uploadsSheets, model = model) { key, url -> uploads.inserts.insert(key, url) }
-        // A finished run's one dialog, over whatever is up (the run outlives the buffer it started in).
-        UploadReportDialog(uploads.runner)
-        // A share waiting for its conversation — asked as soon as the signed-in app is up.
-        val share by uploads.shares.share.collectAsStateWithLifecycle()
-        if (share != null) SharePickerDialog(model = model, onPick = ::sendShare, onDismiss = { uploads.shares.take() })
-        // After Settings, so a networks list opened from it is the window on top.
-        NetworkSheetsHost(sheets = sheets, model = model) { networkId, channel ->
-            model.requestJoin(networkId = networkId, channel = channel, opens = true)
-        }
-        // Last, so a picture opened from anywhere is the window on top.
-        MediaViewerHost(mediaViewer, media)
     }
     }
 }

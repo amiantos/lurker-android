@@ -67,6 +67,8 @@ import net.amiantos.lurker.ui.feeds.AppView
 import net.amiantos.lurker.ui.feeds.AppViewMenuItem
 import net.amiantos.lurker.ui.feeds.ViewsLayout
 import net.amiantos.lurker.ui.shell.ConnectionBanner
+import net.amiantos.lurker.ui.shell.StateModel
+import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.shell.StatusTitle
 import net.amiantos.lurker.ui.shell.StatusTitleText
@@ -350,8 +352,8 @@ internal fun BufferListContent(
                     end = padding.calculateEndPadding(direction),
                 ),
         ) {
-            when (placeholder) {
-                BufferListPlaceholder.None -> RosterList(
+            if (placeholder == BufferListPlaceholder.None) {
+                RosterList(
                     sections = sections,
                     openKey = openKey,
                     marksOpenBuffer = marksOpenBuffer,
@@ -359,21 +361,28 @@ internal fun BufferListContent(
                     actions = actions,
                     contentPadding = PaddingValues(bottom = padding.calculateBottomPadding() + RosterMetrics.groupGap),
                 )
-                BufferListPlaceholder.Loading -> StateView(title = "Loading buffers…", isLoading = true)
-                // The button is the whole point of this state: it used to say "add a network" to a
-                // person with nowhere to do it, which is the dead end lurker-ios#11 exists to close.
-                BufferListPlaceholder.NoNetworks -> StateView(
-                    title = "No networks yet",
-                    subtitle = "Add a network to start a conversation.",
-                    actionTitle = "Add Network",
-                    onAction = actions.onAddNetwork,
-                )
-                // They've done the adding already — the next step is joining something, and saying
-                // "add a network" here would read as the app not knowing its own state.
-                BufferListPlaceholder.NoBuffers -> StateView(
-                    title = "No buffers yet",
-                    subtitle = "Join a channel or start a DM to see it here.",
-                )
+            } else {
+                // One `StateView` for every state, so a change between them (loading settling to "No
+                // buffers yet") is read out by TalkBack — see `StateView`.
+                val state = when (placeholder) {
+                    BufferListPlaceholder.Loading -> StateModel("Loading buffers…", isLoading = true)
+                    // The button is the whole point of this state: it used to say "add a network" to a
+                    // person with nowhere to do it, which is the dead end lurker-ios#11 exists to close.
+                    BufferListPlaceholder.NoNetworks -> StateModel(
+                        title = "No networks yet",
+                        symbol = StateSymbol.Buffers,
+                        subtitle = "Add a network to start a conversation.",
+                        actionTitle = "Add Network",
+                    )
+                    // They've done the adding already — the next step is joining something, and saying
+                    // "add a network" here would read as the app not knowing its own state.
+                    else -> StateModel(
+                        title = "No buffers yet",
+                        symbol = StateSymbol.Buffers,
+                        subtitle = "Join a channel or start a DM to see it here.",
+                    )
+                }
+                StateView(state, onAction = actions.onAddNetwork)
             }
             // Over the rows, not above them: it floats, and the list scrolls under it.
             ConnectionBanner(

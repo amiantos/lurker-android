@@ -57,6 +57,9 @@ fun AppRoot(
                     dccOffers = dccOffers,
                     uploads = uploads,
                     onSignOut = model::logout,
+                    // False while the scaffold fades out after a sign-out or a 401: its dialogs go at
+                    // once rather than sitting over the sign-in screen for the fade.
+                    sessionLive = session == ChatViewModel.SessionState.LoggedIn,
                 )
             } else {
                 SignInScreen(model = model, notice = signInNotice, initialServer = lastServerURL(), onSignIn = onSignIn)
