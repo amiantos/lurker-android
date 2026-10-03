@@ -4,6 +4,12 @@
 package net.amiantos.lurkerkit.client
 
 import net.amiantos.lurkerkit.support.trimmingWhitespaces
+import okhttp3.MediaType
+import okhttp3.RequestBody
+import okio.Buffer
+import okio.BufferedSink
+import okio.ForwardingSink
+import okio.buffer
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -504,4 +510,67 @@ internal object MultipartBody {
     }
 }
 
-// UploadProgressDelegate: waits for the OkHttp client port (see LEDGER).
+/**
+ * Per-upload delegate that turns the HTTP client's byte-sent callbacks into a 0…1 fraction. This
+ * is the device→server leg only; the slower server→provider leg is narrated over the WS as
+ * `UploadServerProgress`, and `UploadProgress` folds the two together.
+ *
+ * Port note: LurkerKit's is a `URLSessionTaskDelegate`, which `URLSession` calls. OkHttp has no
+ * delegate; the bytes are counted by [UploadProgressBody], which hands each count to
+ * [didSendBodyData] — the coalescing below is this type's whole job, as it is LurkerKit's.
+ */
+internal class UploadProgressDelegate(private val onProgress: (Double) -> Unit) {
+    /**
+     * Last whole-percent forwarded. The HTTP client reports bytes sent far more often than a
+     * bar can repaint, so we coalesce to ~101 updates over the whole upload instead of one
+     * per chunk (which each spawn a main-thread hop downstream). The counts arrive on one
+     * thread at a time — the one writing the request body — so this unsynchronized state is
+     * race-free.
+     */
+    private var lastPercent = -1
+
+    fun didSendBodyData(totalBytesSent: Long, totalBytesExpectedToSend: Long) {
+        if (totalBytesExpectedToSend <= 0) return
+        val percent = (totalBytesSent.toDouble() / totalBytesExpectedToSend.toDouble() * 100).toInt()
+        if (percent == lastPercent) return
+        lastPercent = percent
+        onProgress(percent.toDouble() / 100)
+    }
+}
+
+/**
+ * A request body that counts its bytes as they are written: `URLSession`'s
+ * `didSendBodyData`, for OkHttp. Port-only.
+ *
+ * `onProgress` gets the running total and [contentLength] (-1 when unknown, which
+ * [UploadProgressDelegate] ignores, as LurkerKit ignores an unknown expected total). The count
+ * starts again from zero when OkHttp writes the body again — a retry, a redirect — which
+ * `UploadProgress.apply(deviceFraction)` reads as the restart it is. Called on the thread
+ * writing the body, never the main thread.
+ */
+internal class UploadProgressBody(
+    private val delegate: RequestBody,
+    private val onProgress: (sent: Long, total: Long) -> Unit,
+) : RequestBody() {
+    override fun contentType(): MediaType? = delegate.contentType()
+
+    override fun contentLength(): Long = delegate.contentLength()
+
+    override fun isOneShot(): Boolean = delegate.isOneShot()
+
+    override fun writeTo(sink: BufferedSink) {
+        val total = contentLength()
+        val counting = object : ForwardingSink(sink) {
+            private var sent = 0L
+
+            override fun write(source: Buffer, byteCount: Long) {
+                super.write(source, byteCount)
+                sent += byteCount
+                onProgress(sent, total)
+            }
+        }
+        val buffered = counting.buffer()
+        delegate.writeTo(buffered)
+        buffered.emit()
+    }
+}

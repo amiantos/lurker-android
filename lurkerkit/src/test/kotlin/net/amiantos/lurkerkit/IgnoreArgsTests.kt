@@ -3,9 +3,22 @@
 
 package net.amiantos.lurkerkit
 
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.LurkerClient
+import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.client.asString
+import net.amiantos.lurkerkit.client.strings
 import net.amiantos.lurkerkit.commands.IgnoreArgs
 import net.amiantos.lurkerkit.model.ISOTime
 import net.amiantos.lurkerkit.model.IgnorePatternKind
+import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.support.Result
 import java.time.Instant
 import kotlin.test.Test
@@ -405,6 +418,44 @@ class IgnoreArgsTests {
 
     // MARK: - The wire
 
+    @Test
+    fun testTheEncodedRuleRoundTripsThroughTheFrameDecoder() {
+        // `ruleJSON` and `FrameParser`'s decoder are held together only by agreeing on these
+        // key names: a rule sent from here has to come back from the server's fan-out as the
+        // same rule, or the client would be authoring a broader one than it shows.
+        val rule = parse("-except -regexp -pattern (a|b) *zzz* #chan -time 1day NICKS").rule
+        val payload = buildJsonObject {
+            put("kind", "ignore-list-updated")
+            put("networkId", 3)
+            put("masks", JsonArray(listOf(LurkerClient.ruleJSON(rule))))
+        }
+        val text = Json.encodeToString(JsonObject.serializer(), payload)
+        val frame = FrameParser.parseWs(text) as? ServerFrame.IgnoreListUpdated
+            ?: fail("expected an ignore-list-updated frame")
+        assertEquals(3, frame.networkId)
+        // Everything but the id, which is the server's to assign and isn't sent.
+        assertEquals(rule, frame.rules.firstOrNull())
+    }
+
+    @Test
+    fun testTheEncoderOmitsUnsetDimensionsRatherThanSendingNulls() {
+        val json = LurkerClient.ruleJSON(IgnoreRule(mask = "bob", levels = listOf("ALL")))
+        assertEquals("bob", json["mask"].asString())
+        assertEquals(listOf("ALL"), json.strings("levels"))
+        assertEquals("substr", json["patternKind"].asString())
+        assertEquals(false, (json["isExcept"] as? JsonPrimitive)?.booleanOrNull)
+        for (absent in listOf("channels", "pattern", "expiresAt")) {
+            assertNull(json[absent], "$absent should be omitted, not null")
+        }
+        // The whole payload has to survive the encoder — an unencodable value would otherwise
+        // drop the verb at `send` with no error.
+        //
+        // Port note: `JSONSerialization.isValidJSONObject` has no counterpart for a `JsonObject`,
+        // which is JSON by construction; what is asserted is that it encodes and reads back as
+        // itself.
+        assertEquals(json, Json.parseToJsonElement(Json.encodeToString(JsonObject.serializer(), json)))
+    }
+
     // Port-only:
 
     /**
@@ -427,7 +478,4 @@ class IgnoreArgsTests {
         assertEquals(ISOTime.parse("2126-05-25T00:00:00.000Z"), parse("-time 36500d bob").rule.expiresAt)
         assertEquals(true, error("-time 36501d bob").contains("invalid -time"))
     }
-
-    // Waiting on LurkerClient (`ruleJSON`): testTheEncodedRuleRoundTripsThroughTheFrameDecoder,
-    // testTheEncoderOmitsUnsetDimensionsRatherThanSendingNulls
 }

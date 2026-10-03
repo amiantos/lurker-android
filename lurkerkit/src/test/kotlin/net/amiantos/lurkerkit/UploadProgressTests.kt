@@ -8,7 +8,12 @@ import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.client.UploadBatch
 import net.amiantos.lurkerkit.client.UploadError
 import net.amiantos.lurkerkit.client.UploadProgress
+import net.amiantos.lurkerkit.client.UploadProgressBody
+import net.amiantos.lurkerkit.client.UploadProgressDelegate
 import net.amiantos.lurkerkit.client.UploadServerProgress
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.RequestBody.Companion.toRequestBody
+import okio.Buffer
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -525,5 +530,49 @@ class UploadProgressTests {
         )
         assertEquals(unheard.stage, heard.stage)
         assertNotEquals(unheard, heard)
+    }
+
+    // Port-only: the device leg's counter. LurkerKit's is a `URLSessionTaskDelegate` that
+    // `URLSession` calls; here a counting `RequestBody` calls it.
+
+    /** One callback per whole percent, never one per chunk, and nothing for an unknown total. */
+    @Test
+    fun testTheDelegateCoalescesToWholePercents() {
+        val reported = mutableListOf<Double>()
+        val delegate = UploadProgressDelegate(onProgress = { reported.add(it) })
+        delegate.didSendBodyData(totalBytesSent = 1, totalBytesExpectedToSend = 1000)
+        delegate.didSendBodyData(totalBytesSent = 9, totalBytesExpectedToSend = 1000)
+        delegate.didSendBodyData(totalBytesSent = 10, totalBytesExpectedToSend = 1000)
+        delegate.didSendBodyData(totalBytesSent = 15, totalBytesExpectedToSend = 1000)
+        delegate.didSendBodyData(totalBytesSent = 1000, totalBytesExpectedToSend = 1000)
+        delegate.didSendBodyData(totalBytesSent = 5, totalBytesExpectedToSend = -1)
+        assertEquals(listOf(0.0, 0.01, 1.0), reported)
+    }
+
+    /**
+     * The body counts every byte it writes, ends on its own length, and starts again from zero
+     * when it is written a second time (a retried request) — which the delegate passes on as
+     * the fraction going backwards.
+     */
+    @Test
+    fun testTheBodyCountsWhatItWritesAndRestartsWithARetry() {
+        val payload = ByteArray(200_000) { it.toByte() }
+        val counts = mutableListOf<Pair<Long, Long>>()
+        val body = UploadProgressBody(payload.toRequestBody("application/octet-stream".toMediaType())) { sent, total ->
+            counts.add(sent to total)
+        }
+        assertEquals(200_000L, body.contentLength())
+        assertEquals("application/octet-stream", body.contentType().toString())
+
+        val first = Buffer()
+        body.writeTo(first)
+        assertEquals(payload.toList(), first.readByteArray().toList())
+        assertEquals(200_000L to 200_000L, counts.last())
+        assertTrue(counts.zipWithNext().all { (a, b) -> a.first < b.first }, "running totals only climb")
+
+        counts.clear()
+        body.writeTo(Buffer())
+        assertTrue(counts.first().first < 200_000L, "a second write counts from zero again")
+        assertEquals(200_000L to 200_000L, counts.last())
     }
 }

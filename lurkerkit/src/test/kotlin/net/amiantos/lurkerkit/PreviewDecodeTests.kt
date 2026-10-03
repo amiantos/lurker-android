@@ -6,33 +6,148 @@ package net.amiantos.lurkerkit
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import net.amiantos.lurkerkit.client.LurkerClient
 import net.amiantos.lurkerkit.client.decodeEach
 import net.amiantos.lurkerkit.model.LinkPreview
 import net.amiantos.lurkerkit.model.PreviewKind
+import kotlinx.coroutines.test.runTest
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.ByteString.Companion.encodeUtf8
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 /**
  * One unrecognised element must not discard the batch it arrived in.
  *
- * Port note: a Swift Testing suite in LurkerKit ("Preview response decoding"). Every case in it
- * goes through `LurkerClient` — `decodePreviews`, `parseConfig`, `configRequest` — and the suite
- * says why it must: it is "the SHIPPED function, not a rebuilt envelope" that is under test. So
- * none of it is ported until `LurkerClient` is, and what is here meanwhile is port-only.
+ * Port note: a Swift Testing suite in LurkerKit ("Preview response decoding"). The method names
+ * are kept and each display name is the comment above it.
  */
 class PreviewDecodeTests {
 
-    // Waiting on LurkerClient (`decodePreviews`): unknownKindDoesNotDiscardTheBatch,
-    // unknownStatusDoesNotDiscardTheBatch, happyPathIsUnchanged
-    //
+    /**
+     * ⚠⚠ The SHIPPED function, not a rebuilt envelope. The first version of this suite decoded
+     * its own `[FailableDecodable<LinkPreview>]`, which passed happily against a client that had
+     * gone back to an all-or-nothing array decode — it was asserting a fact about
+     * `FailableDecodable`, not about what the client does with it. The drill caught it.
+     */
+    private fun decodeShipped(json: String): List<LinkPreview> = LurkerClient.decodePreviews(json.encodeUtf8())
+
+    // "a descriptor with an unknown kind costs its own row and nothing else"
+    @Test
+    fun unknownKindDoesNotDiscardTheBatch() {
+        // ⚠⚠ `kind` and `status` are non-optional raw-value enums with no unknown case, so a
+        // plain `List<LinkPreview>` decode is all-or-nothing: one descriptor from a newer instance
+        // throws and takes all twenty with it. One layer up that is indistinguishable from a
+        // transport failure, so the store arms the whole batch for retry — and because a decode
+        // failure is deterministic, every retry fails identically. Nineteen good previews never
+        // render and all twenty poll to the ceiling forever.
+        //
+        // It cannot fire against today's server, whose union matches the enum exactly. It is
+        // pinned because this is a self-hosted product: operators upgrade on their own schedule
+        // and store builds lag, and the repo treats that skew as normal everywhere else.
+        val got = decodeShipped(
+            """
+            {"previews":[
+              {"url":"https://e.test/a","status":"ok","kind":"image"},
+              {"url":"https://e.test/b","status":"ok","kind":"hologram"},
+              {"url":"https://e.test/c","status":"ok","kind":"page"}
+            ]}
+            """,
+        )
+        assertEquals(listOf("https://e.test/a", "https://e.test/c"), got.map { it.url })
+    }
+
+    // "an unknown status is contained the same way"
+    @Test
+    fun unknownStatusDoesNotDiscardTheBatch() {
+        val got = decodeShipped(
+            """
+            {"previews":[
+              {"url":"https://e.test/a","status":"quarantined","kind":"page"},
+              {"url":"https://e.test/b","status":"ok","kind":"page"}
+            ]}
+            """,
+        )
+        assertEquals(listOf("https://e.test/b"), got.map { it.url })
+    }
+
+    // "a well-formed batch is unaffected"
+    @Test
+    fun happyPathIsUnchanged() {
+        val got = decodeShipped(
+            """
+            {"previews":[
+              {"url":"https://e.test/a","status":"ok","kind":"image","thumbWidth":1200},
+              {"url":"https://e.test/b","status":"unavailable","kind":"page"}
+            ]}
+            """,
+        )
+        assertEquals(2, got.size)
+        assertEquals(1200, got[0].thumbWidth)
+    }
+
     // MARK: - Feature flags
-    //
-    // Waiting on LurkerClient (`parseConfig`, `configRequest`): failureIsNotAVerdict,
-    // absentFeaturesIsAVerdict, configRequestIsAuthenticated, configRequestWithoutATokenIsStillValid,
-    // flagIsRead
+
+    // "a failed or malformed answer is UNKNOWN, not 'the server says no'"
+    @Test
+    fun failureIsNotAVerdict() {
+        // ⚠⚠ These collapsed into an all-off value, so one 502 or DNS hiccup on the single
+        // /api/config call at cold launch silently disabled link previews for the whole app
+        // session on an instance that has them on — with no retry and nothing to notice. A
+        // default is not a statement.
+        assertNull(LurkerClient.parseConfig("{}".encodeUtf8(), code = 502))
+        assertNull(LurkerClient.parseConfig("not json".encodeUtf8(), code = 200))
+        assertNull(LurkerClient.parseConfig("[]".encodeUtf8(), code = 200))
+    }
+
+    // "an absent features object IS an answer — an older instance without the feature"
+    @Test
+    fun absentFeaturesIsAVerdict() {
+        assertEquals(false, LurkerClient.parseConfig("{}".encodeUtf8(), code = 200)?.features?.linkPreviews)
+        assertEquals(
+            false,
+            LurkerClient.parseConfig("{\"features\":{}}".encodeUtf8(), code = 200)?.features?.linkPreviews,
+        )
+    }
+
+    // "the config request carries the session token, or hosted can't route it"
+    @Test
+    fun configRequestIsAuthenticated() {
+        // ⚠⚠ The server documents this endpoint as public and unauthenticated, and that is true
+        // of a self-hosted instance and false of a hosted one: on lurker.chat the control plane
+        // proxies /api/… to a CELL and works out which one from the caller's session. Anonymous,
+        // it answers 401 "not routable" — read (correctly) as "no answer", which left link
+        // previews off forever on the deployment most people use, with the settings rows hidden
+        // so nothing on screen suggested anything was wrong. The browser never noticed: its
+        // fetch carries the session cookie.
+        val request = LurkerClient.configRequest(baseURL = "https://app.lurker.chat", token = "t0k")
+        assertEquals("https://app.lurker.chat/api/config", request?.url?.toString())
+        assertEquals("Bearer t0k", request?.header("Authorization"))
+    }
+
+    // "and asks anonymously before there is a session, which self-hosted allows"
+    @Test
+    fun configRequestWithoutATokenIsStillValid() {
+        val request = LurkerClient.configRequest(baseURL = "https://irc.example", token = null)
+        assertNotNull(request)
+        assertNull(request.header("Authorization"))
+    }
+
+    // "reads the flag when the server sets it"
+    @Test
+    fun flagIsRead() {
+        val on = "{\"features\":{\"linkPreviews\":true}}".encodeUtf8()
+        assertEquals(true, LurkerClient.parseConfig(on, code = 200)?.features?.linkPreviews)
+        val off = "{\"features\":{\"linkPreviews\":false}}".encodeUtf8()
+        assertEquals(false, LurkerClient.parseConfig(off, code = 200)?.features?.linkPreviews)
+    }
 
     // Port-only: what one `LinkPreview` makes of a descriptor, which Swift's synthesised
     // `Codable` settles without a line of code and kotlinx settles by configuration. Each
@@ -170,8 +285,8 @@ class PreviewDecodeTests {
     /** the envelope's elements are decoded one by one, so a bad one costs only itself */
     @Test
     fun decodeEachContainsABadDescriptor() {
-        // The shape `LurkerClient.decodePreviews` will have, built from the ported parts; the
-        // suite above pins the shipped function once there is one.
+        // The shape `LurkerClient.decodePreviews` has, built from its parts; the suite above
+        // pins the shipped function.
         val envelope = Json.parseToJsonElement(
             """
             {"previews":[
@@ -195,5 +310,39 @@ class PreviewDecodeTests {
             Json.parseToJsonElement("""{"url":"https://e.test/a","status":"ok","kind":"video-embed","thumbWidth":10}"""),
             Json.encodeToJsonElement(LinkPreview.serializer(), preview),
         )
+    }
+
+    /**
+     * `fetchConfig`, sent: the bearer goes with it, its own 10 s timeout is the one in force
+     * (LurkerKit's `timeoutInterval`, carried here as a request tag), and an answer to a session
+     * that has since ended is no answer.
+     */
+    @Test
+    fun fetchConfigSendsTheTokenWithItsOwnTimeout() = runTest {
+        val seen = mutableListOf<Pair<String?, Int>>()
+        var client: LurkerClient? = null
+        var signOutMidFlight = false
+        val http = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                seen.add(chain.request().header("Authorization") to chain.readTimeoutMillis())
+                // On OkHttp's thread, while the test's coroutine is suspended waiting for this
+                // answer — so nothing else touches the client meanwhile.
+                if (signOutMidFlight) client?.close()
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("canned")
+                    .body("""{"features":{"linkPreviews":true},"protocolVersion":1}""".toResponseBody(null))
+                    .build()
+            }
+            .build()
+        client = LurkerClient(scope = this, onFrame = {}, httpClient = http)
+        client.restore(server = "https://app.lurker.chat", token = "t0k")
+        assertEquals(true, client.fetchConfig()?.features?.linkPreviews)
+        assertEquals(listOf<Pair<String?, Int>>("Bearer t0k" to 10_000), seen)
+
+        signOutMidFlight = true
+        assertNull(client.fetchConfig())
     }
 }
