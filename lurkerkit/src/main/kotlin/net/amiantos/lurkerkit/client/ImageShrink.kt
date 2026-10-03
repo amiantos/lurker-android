@@ -59,6 +59,17 @@ object ImageShrink {
          *
          * Compared exactly, as LurkerKit compares the UTI; the MIME types Android's decoders
          * report are lower-case.
+         *
+         * ⚠⚠ Two obligations on the app that fills this, both because a MIME string carries less
+         * than a UTI:
+         * - **A HEIF image sequence is `image/heif-sequence`** (or `image/heic-sequence`), never
+         *   `image/heif`. LurkerKit relies on ImageIO naming an animated HEIF `public.heics`, a
+         *   type `isHEIC` doesn't match, so the HEIC conversion — which runs before the animation
+         *   check — never flattens one to its first frame. Android's decoders may report a
+         *   sequence as plain `image/heif`; the app decides from the frame count and writes the
+         *   sequence type, the IANA names that stand for `public.heics`.
+         * - **The decoder's name, never `ContentResolver.getType` or the picker's**, which can say
+         *   `image/jpg` or `image/HEIC` and would take the wrong branch here without a word.
          */
         val typeIdentifier: String,
         val hasAlpha: Boolean,
@@ -78,10 +89,7 @@ object ImageShrink {
          * same string as `mime`. Both names are kept.
          */
         val typeIdentifier: String
-            get() = when (this) {
-                Jpeg -> "image/jpeg"
-                Png -> "image/png"
-            }
+            get() = mime
 
         val mime: String
             get() = when (this) {

@@ -1663,17 +1663,17 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                 is ServerFrame.SettingsChanged -> {
                     // Patch, never replace — the frame carries only what moved, so assigning it
                     // wholesale would drop every other stored setting until the next bootstrap.
-                    var next = state.copy(settings = state.settings.apply(frame.changes))
                     // ⚠⚠ Conditional, for the same reason: the limits ride this frame ONLY when one
                     // of them changed. Assigning them unconditionally would clear the advertised
                     // numbers every time the user toggled anything else, quietly putting the
                     // compressor back on the fallback — and photos back to full size — until the
                     // next reconnect.
-                    val bytes = frame.uploadLimits.maxUploadBytes
-                    if (bytes != null) next = next.copy(maxUploadBytes = bytes)
-                    val dimension = frame.uploadLimits.maxStaticImageDimension
-                    if (dimension != null) next = next.copy(maxStaticImageDimension = dimension)
-                    next
+                    state.copy(
+                        settings = state.settings.apply(frame.changes),
+                        maxUploadBytes = frame.uploadLimits.maxUploadBytes ?: state.maxUploadBytes,
+                        maxStaticImageDimension =
+                            frame.uploadLimits.maxStaticImageDimension ?: state.maxStaticImageDimension,
+                    )
                 }
                 is ServerFrame.SettingsValues -> {
                     // Replace: this one IS the full stored set, and it can be smaller than what
