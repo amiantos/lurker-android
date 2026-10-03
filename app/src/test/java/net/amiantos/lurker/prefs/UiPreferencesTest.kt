@@ -6,7 +6,9 @@ package net.amiantos.lurker.prefs
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.ServerAddress
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UiPreferencesTest {
@@ -90,5 +92,31 @@ class UiPreferencesTest {
         ui.recordLastOpenBuffer(BufferKey(networkId = 1, target = "bob"))
         ui.rewriteBuffer(from = BufferKey(networkId = 2, target = "bob"), to = BufferKey(networkId = 2, target = "robert"))
         assertEquals(BufferKey(networkId = 1, target = "bob"), ui.lastOpenBufferKey)
+    }
+
+    // MARK: - Composer
+
+    @Test
+    fun autocapitalizationIsOnUntilAskedOff() {
+        assertTrue(UiPreferences(MapPrefs()).composerAutocapitalizes.value)
+    }
+
+    @Test
+    fun autocapitalizationOffIsRememberedUnderIosKey() {
+        val prefs = MapPrefs()
+        val ui = UiPreferences(prefs)
+        ui.setComposerAutocapitalizes(false)
+        // The flow moves at once, for a composer already on screen.
+        assertFalse(ui.composerAutocapitalizes.value)
+        assertEquals("false", prefs.values["composerAutocapitalization"])
+        assertFalse(UiPreferences(prefs).composerAutocapitalizes.value)
+        ui.setComposerAutocapitalizes(true)
+        assertTrue(UiPreferences(prefs).composerAutocapitalizes.value)
+    }
+
+    @Test
+    fun anUnreadableAutocapitalizationValueIsNotARequestForOff() {
+        val prefs = MapPrefs(mutableMapOf("composerAutocapitalization" to "maybe"))
+        assertTrue(UiPreferences(prefs).composerAutocapitalizes.value)
     }
 }

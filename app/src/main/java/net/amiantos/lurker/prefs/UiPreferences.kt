@@ -3,6 +3,10 @@
 
 package net.amiantos.lurker.prefs
 
+import androidx.compose.runtime.staticCompositionLocalOf
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.ServerAddress
 
@@ -22,6 +26,45 @@ class UiPreferences(private val prefs: StringPrefs) {
     var lastServerURL: String
         get() = prefs.getString(LAST_SERVER_URL) ?: ServerAddress.lurkerChat
         set(value) = prefs.putString(LAST_SERVER_URL, value)
+
+    // MARK: - Composer
+
+    private val autocapitalizes = MutableStateFlow(readComposerAutocapitalizes())
+
+    /**
+     * Whether the composer capitalizes sentences as you type. On by default.
+     *
+     * It was off outright for the iOS app's first releases, on the reasoning that IRC is
+     * lowercase-native — nicks, `/commands`, `#channels`. That's true of the *first token of a line*
+     * and not of the prose after it, and it made the composer the one field on the phone that
+     * behaved unlike every other one, with no way to say otherwise. So: capitals by default, and off
+     * is something you ask for.
+     *
+     * Device-local, unlike the settings it sits under on the settings screen. It configures this
+     * phone's keyboard, and there is nothing on the other end of a sync to configure — the web
+     * client can't offer the choice at all (Safari re-applies sentence caps whenever autocorrect is
+     * on, which is why its settings couple the two).
+     *
+     * A flow rather than a plain property, because the composer is already on screen when the value
+     * changes: Settings is a dialog over the conversation, nothing under it is rebuilt when it
+     * closes, and there's no server frame to ride in on the way every other setting does. iOS posts
+     * `composerKeyboardPreferencesDidChange` for the same reason.
+     *
+     * U3: the composer reads this into its `KeyboardOptions.capitalization` (Sentences / None).
+     */
+    val composerAutocapitalizes: StateFlow<Boolean> = autocapitalizes.asStateFlow()
+
+    fun setComposerAutocapitalizes(on: Boolean) {
+        prefs.putString(COMPOSER_AUTOCAPITALIZATION, on.toString())
+        autocapitalizes.value = on
+    }
+
+    /**
+     * Absent is on — the default iOS registers, since a missing bool there (and here) would
+     * otherwise read as off, the opposite of what this one means when it hasn't been set. So is
+     * anything unreadable: a stored value that isn't a bool is not a request to turn capitals off.
+     */
+    private fun readComposerAutocapitalizes(): Boolean = prefs.getString(COMPOSER_AUTOCAPITALIZATION) != "false"
 
     /**
      * The buffer that was on screen when the app was last used, so a relaunch lands where you
@@ -94,5 +137,16 @@ class UiPreferences(private val prefs: StringPrefs) {
         private const val LAST_SERVER_URL = "lastServerURL"
         private const val LAST_BUFFER_TARGET = "lastBufferTarget"
         private const val LAST_BUFFER_NETWORK_ID = "lastBufferNetworkId"
+
+        /** iOS's key, kept so the two apps' preference files read the same. */
+        private const val COMPOSER_AUTOCAPITALIZATION = "composerAutocapitalization"
     }
 }
+
+/**
+ * The app's [UiPreferences], for screens below `MainScaffold` that need one it doesn't pass down —
+ * the settings dialog, opened from the buffer list. Provided by `AppRoot`, which is handed the
+ * instance by `LurkerApp`, so what the app proper reads and writes is still visible at the root
+ * rather than looked up from the Application inside composition.
+ */
+val LocalUiPreferences = staticCompositionLocalOf<UiPreferences> { error("No UiPreferences provided") }

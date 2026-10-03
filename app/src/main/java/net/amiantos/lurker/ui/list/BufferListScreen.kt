@@ -4,7 +4,9 @@
 package net.amiantos.lurker.ui.list
 
 import kotlinx.coroutines.flow.conflate
+import net.amiantos.lurker.prefs.LocalUiPreferences
 import net.amiantos.lurker.ui.networks.NetworkSheets
+import net.amiantos.lurker.ui.settings.SettingsDialog
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -23,7 +25,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -37,7 +38,6 @@ import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxState
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -110,6 +110,9 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
  *   `marksOpenBuffer`. It gates the open mark, and the banner: side by side the conversation pane
  *   carries it, so the two never draw over each other or are read out twice.
  * @param onClose leaves a channel or closes a buffer — the swipe and the menu both come here.
+ * @param onSignOut ends the session — reached from Settings, behind its confirmation.
+ * @param sheets the networks dialogs, hosted by `MainScaffold`: "+" opens Join Channel and Add
+ *   Network, and Settings → Networks opens the networks list over Settings.
  */
 @Composable
 fun BufferListScreen(
@@ -168,6 +171,26 @@ fun BufferListScreen(
     val latestBuilt by rememberUpdatedState(built)
     val sections = drag?.rendered() ?: built
     val placeholder = BufferListModel.placeholder(inputs, built, draws)
+
+    // Settings, over the list — iOS presents it as a sheet from its list. Hosted here rather than with
+    // the networks dialogs in `MainScaffold`, since only this screen opens it; a navigation that takes
+    // the list away on a phone (a join landing, `AppEvent.OpenBuffer`) takes Settings with it, as
+    // iOS's `land(on:)` dismisses whatever is presented. Saved, so a rotation keeps it up.
+    var showingSettings by rememberSaveable { mutableStateOf(false) }
+    if (showingSettings) {
+        SettingsDialog(
+            model = model,
+            uiPreferences = LocalUiPreferences.current,
+            onDismiss = { showingSettings = false },
+            // Over Settings, not instead of it: closing the networks list comes back here, as Back
+            // from iOS's pushed networks screen does.
+            onOpenNetworks = sheets::showNetworks,
+            onSignOut = {
+                showingSettings = false
+                onSignOut()
+            },
+        )
+    }
 
     val actions = BufferListActions(
         onOpen = { row ->
@@ -235,12 +258,11 @@ fun BufferListScreen(
         // its row hasn't arrived from the server yet.
         onOpenSystem = { onOpen(model.state.buffers[Buffer.system.key.id] ?: Buffer.system) },
         onMarkAllRead = model::markAllRead,
-        onSignOut = onSignOut,
+        onOpenSettings = { showingSettings = true },
         // Read as the "+" menu opens, not when the bar was drawn — see `AddMenu`.
         hasNetworks = { model.state.networks.isNotEmpty() },
         onJoinChannel = sheets::showJoinChannel,
         onAddNetwork = sheets::showAddNetwork,
-        onOpenNetworks = sheets::showNetworks,
     )
 
     BufferListContent(
@@ -273,12 +295,11 @@ internal class BufferListActions(
     val onDragStopped: (cancelled: Boolean) -> Unit,
     val onOpenSystem: () -> Unit,
     val onMarkAllRead: () -> Unit,
-    val onSignOut: () -> Unit,
+    val onOpenSettings: () -> Unit,
     /** Whether the account has any network — what the "+" menu offers depends on it. */
     val hasNetworks: () -> Boolean,
     val onJoinChannel: () -> Unit,
     val onAddNetwork: () -> Unit,
-    val onOpenNetworks: () -> Unit,
 ) {
     companion object {
         /** Touches that do nothing — for previews. */
@@ -293,11 +314,10 @@ internal class BufferListActions(
             onDragStopped = {},
             onOpenSystem = {},
             onMarkAllRead = {},
-            onSignOut = {},
+            onOpenSettings = {},
             hasNetworks = { true },
             onJoinChannel = {},
             onAddNetwork = {},
-            onOpenNetworks = {},
         )
     }
 }
@@ -314,7 +334,6 @@ internal fun BufferListContent(
     draggingSection: SectionId?,
     actions: BufferListActions,
 ) {
-    var confirmingSignOut by rememberSaveable { mutableStateOf(false) }
     Scaffold(
         containerColor = LurkerTheme.colors.rosterGround,
         topBar = {
@@ -323,7 +342,7 @@ internal fun BufferListContent(
                 title = { StatusTitleText(title) },
                 actions = {
                     AddMenu(actions = actions)
-                    OverflowMenu(actions = actions, onSignOut = { confirmingSignOut = true })
+                    OverflowMenu(actions = actions)
                 },
             )
         },
@@ -369,26 +388,6 @@ internal fun BufferListContent(
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp, start = 16.dp, end = 16.dp),
             )
         }
-    }
-    if (confirmingSignOut) {
-        // U10: sign-out moves into Settings, behind this same confirmation, as it did on iOS.
-        //
-        // Sign-out asks first: it ends the session on the server, and the way back in is a password
-        // the user may not have to hand. iOS's copy.
-        AlertDialog(
-            onDismissRequest = { confirmingSignOut = false },
-            title = { Text("Sign out of Lurker?") },
-            text = { Text("You'll need your password to sign back in.") },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        confirmingSignOut = false
-                        actions.onSignOut()
-                    },
-                ) { Text("Sign Out", color = MaterialTheme.colorScheme.error) }
-            },
-            dismissButton = { TextButton(onClick = { confirmingSignOut = false }) { Text("Cancel") } },
-        )
     }
 }
 
@@ -444,10 +443,14 @@ private fun AddMenu(actions: BufferListActions) {
 
 /**
  * The app-wide menu: the things that outlast whichever conversation you're reading. One "⋮" —
- * Android's idiom for what iOS splits between a cog and its own "…".
+ * Android's idiom for what iOS splits between a cog and its own "…" (and folds into the "…" side by
+ * side, where it holds the Lurker buffer and Settings — this menu, item for item).
+ *
+ * Networks and Sign Out live in Settings, as on iOS: Networks is Settings' first row, and sign-out
+ * sits behind a confirmation there rather than one slipped thumb away in a menu.
  */
 @Composable
-private fun OverflowMenu(actions: BufferListActions, onSignOut: () -> Unit) {
+private fun OverflowMenu(actions: BufferListActions) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
@@ -473,21 +476,12 @@ private fun OverflowMenu(actions: BufferListActions, onSignOut: () -> Unit) {
             )
             // U7: Highlights and Bookmarks go here (search is the list's own field on iOS).
             // U8: and Uploads.
-            // U10: moves into Settings (iOS's Settings → Networks), which doesn't exist yet. Until then
-            // it's here, because the networks screen is the one place to connect, edit or delete one.
-            DropdownMenuItem(
-                text = { Text("Networks") },
-                onClick = {
-                    expanded = false
-                    actions.onOpenNetworks()
-                },
-            )
             HorizontalDivider()
             DropdownMenuItem(
-                text = { Text("Sign Out") },
+                text = { Text("Settings") },
                 onClick = {
                     expanded = false
-                    onSignOut()
+                    actions.onOpenSettings()
                 },
             )
         }
