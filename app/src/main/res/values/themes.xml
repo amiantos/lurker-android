@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-
-    <style name="Theme.Lurker" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- Only the window: everything drawn is Compose's LurkerTheme. Dark in values-night. -->
+    <style name="Theme.Lurker" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/lurker_bg</item>
+    </style>
 </resources>

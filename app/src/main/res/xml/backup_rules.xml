@@ -3,7 +3,12 @@
    Auto Backup, for devices before API 31. The session token is a bearer credential and stays
    on this device (see KeystoreSecureStorage); the Keystore key it is encrypted with would not
    travel anyway, so a restored copy could only be unreadable noise.
+
+   lurker_defaults holds the kit's settings cache, which is an account's preferences, and this
+   install's OAuth client ids (see PrefsDefaultsStorage). A restored device starts signed out,
+   so whoever signs in there next would inherit the settings; they stay here too.
 -->
 <full-backup-content>
     <exclude domain="sharedpref" path="lurker_session.xml" />
+    <exclude domain="sharedpref" path="lurker_defaults.xml" />
 </full-backup-content>

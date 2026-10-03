@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   Cleartext is permitted everywhere because it can't be permitted only where it is wanted: a
+   self-hoster's LAN box is an IP, a .local name or a single-word host, none of which can be
+   listed here ahead of time. The policy lives in the kit instead — ServerAddress refuses
+   http:// to anything but those local host classes, with sign-in copy rather than a failed
+   connect — and it runs before every sign-in and every restore (lurker-android#17).
+-->
+<network-security-config xmlns:tools="http://schemas.android.com/tools">
+    <base-config
+        cleartextTrafficPermitted="true"
+        tools:ignore="InsecureBaseConfiguration">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>
