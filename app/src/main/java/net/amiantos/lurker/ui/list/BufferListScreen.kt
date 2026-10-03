@@ -63,6 +63,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import net.amiantos.lurker.ui.feeds.AppView
+import net.amiantos.lurker.ui.feeds.ViewsLayout
 import net.amiantos.lurker.ui.shell.ConnectionBanner
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.shell.StatusTitle
@@ -110,6 +112,8 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
  * @param onOpenSettings opens Settings, which `MainScaffold` hosts (with Sign Out inside it).
  * @param sheets the networks dialogs, hosted by `MainScaffold`: "+" opens Join Channel and Add
  *   Network, and Settings → Networks opens the networks list over Settings.
+ * @param onOpenView opens Search, Activity or Bookmarks — the feeds `MainScaffold` hosts. Offered here
+ *   only on its own screen (`ViewsLayout`): side by side the conversation column carries them.
  */
 @Composable
 fun BufferListScreen(
@@ -122,6 +126,7 @@ fun BufferListScreen(
     onClose: (Buffer) -> Unit,
     onOpenSettings: () -> Unit,
     sheets: NetworkSheets,
+    onOpenView: (AppView) -> Unit = {},
 ) {
     // Stage one: map every frame to what the list draws, and drop the frames that change none of
     // it. Stage two (below) builds the sections from what's left.
@@ -240,6 +245,7 @@ fun BufferListScreen(
         hasNetworks = { model.state.networks.isNotEmpty() },
         onJoinChannel = sheets::showJoinChannel,
         onAddNetwork = sheets::showAddNetwork,
+        onOpenView = onOpenView,
     )
 
     BufferListContent(
@@ -277,6 +283,8 @@ internal class BufferListActions(
     val hasNetworks: () -> Boolean,
     val onJoinChannel: () -> Unit,
     val onAddNetwork: () -> Unit,
+    /** Search, Activity, Bookmarks (U7). */
+    val onOpenView: (AppView) -> Unit = {},
 ) {
     companion object {
         /** Touches that do nothing — for previews. */
@@ -318,8 +326,15 @@ internal fun BufferListContent(
                 // Inline: the bar's own row is enough to say what the screen is.
                 title = { StatusTitleText(title) },
                 actions = {
+                    // Android's search action, where iOS puts a field in the bottom toolbar — on its own
+                    // screen only: side by side the conversation column carries search (`ViewsLayout`).
+                    if (ViewsLayout.listSearch(sideBySide = marksOpenBuffer)) {
+                        IconButton(onClick = { actions.onOpenView(AppView.Search) }) {
+                            Icon(AppView.Search.icon, contentDescription = AppView.Search.title)
+                        }
+                    }
                     AddMenu(actions = actions)
-                    OverflowMenu(actions = actions)
+                    OverflowMenu(actions = actions, sideBySide = marksOpenBuffer)
                 },
             )
         },
@@ -425,9 +440,13 @@ private fun AddMenu(actions: BufferListActions) {
  *
  * Networks and Sign Out live in Settings, as on iOS: Networks is Settings' first row, and sign-out
  * sits behind a confirmation there rather than one slipped thumb away in a menu.
+ *
+ * On its own screen it also carries the views — Activity and Bookmarks, app-scoped, so reaching them
+ * only from inside some conversation would be an artifact (iOS's `viewsMenuElements`). Side by side
+ * they're the conversation column's, and a copy here would be the same thing twice on one screen.
  */
 @Composable
-private fun OverflowMenu(actions: BufferListActions) {
+private fun OverflowMenu(actions: BufferListActions, sideBySide: Boolean) {
     var expanded by remember { mutableStateOf(false) }
     Box {
         IconButton(onClick = { expanded = true }) {
@@ -451,7 +470,18 @@ private fun OverflowMenu(actions: BufferListActions) {
                     actions.onMarkAllRead()
                 },
             )
-            // U7: Highlights and Bookmarks go here (search is the list's own field on iOS).
+            val views = ViewsLayout.listMenu(sideBySide)
+            if (views.isNotEmpty()) HorizontalDivider()
+            for (view in views) {
+                DropdownMenuItem(
+                    text = { Text(view.title) },
+                    leadingIcon = { Icon(view.icon, contentDescription = null) },
+                    onClick = {
+                        expanded = false
+                        actions.onOpenView(view)
+                    },
+                )
+            }
             // U8: and Uploads.
             HorizontalDivider()
             DropdownMenuItem(

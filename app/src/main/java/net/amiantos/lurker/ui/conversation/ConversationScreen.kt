@@ -93,6 +93,8 @@ import net.amiantos.lurker.ui.composer.ComposerBar
 import net.amiantos.lurker.ui.composer.ComposerModel
 import net.amiantos.lurker.ui.composer.SendScroll
 import net.amiantos.lurker.ui.composer.SuggestionsView
+import net.amiantos.lurker.ui.feeds.AppView
+import net.amiantos.lurker.ui.feeds.ConversationViewsActions
 import net.amiantos.lurker.ui.composer.rememberComposerState
 import net.amiantos.lurker.ui.message.MessageListContext
 import net.amiantos.lurker.ui.message.MessageListLayout
@@ -179,6 +181,8 @@ import java.time.ZoneOffset
  * @param onShowProfile `/whois` asks for this person's profile — `BufferSheets.showProfile`.
  * @param onShowMembers the bar's members button (U5) — offered on channels only.
  * @param onShowInfo the bar's info button (U5) — this buffer's info and settings, on every buffer.
+ * @param sideBySide whether the list is beside this screen — the bar's views come out as buttons (U7).
+ * @param onOpenView the bar's views — Search, Activity, Bookmarks (U7), which `MainScaffold` hosts.
  */
 @Composable
 fun ConversationScreen(
@@ -197,6 +201,8 @@ fun ConversationScreen(
     onShowProfile: (networkId: Int, nick: String) -> Unit = { _, _ -> },
     onShowMembers: () -> Unit = {},
     onShowInfo: () -> Unit = {},
+    sideBySide: Boolean = false,
+    onOpenView: ((AppView) -> Unit)? = null,
 ) {
     val kind = remember(key) { BufferKind.of(networkId = key.networkId, target = key.target) }
 
@@ -695,6 +701,8 @@ fun ConversationScreen(
         // sheet's Members row; on Android that edge is the system's back gesture, so it's a button here.
         onShowMembers = if (kind == BufferKind.Channel) onShowMembers else null,
         onShowInfo = onShowInfo,
+        sideBySide = sideBySide,
+        onOpenView = onOpenView,
         banner = banner,
         onConnectionBannerShown = { connectionShown = it },
         rows = rows,
@@ -933,6 +941,8 @@ internal fun ConversationContent(
     sheets: @Composable () -> Unit = {},
     onShowMembers: (() -> Unit)? = null,
     onShowInfo: (() -> Unit)? = null,
+    sideBySide: Boolean = false,
+    onOpenView: ((AppView) -> Unit)? = null,
 ) {
     val colors = LurkerTheme.colors
     Scaffold(
@@ -965,8 +975,10 @@ internal fun ConversationContent(
                     if (onShowInfo != null) {
                         IconButton(onClick = onShowInfo) { Icon(LurkerIcons.Info, contentDescription = "Info") }
                     }
-                    // U7: the views menu — Search, Highlights, Bookmarks, Uploads behind one "…", trailing-most.
-                    // iOS sets these per layout (`applyBarLayout`), beside the list or on top of it.
+                    // The views — Search, Activity, Bookmarks — trailing-most, per layout (iOS's
+                    // `applyBarLayout`): behind one ⋮ on top of the list, Search a button beside it.
+                    // U8: Uploads joins them.
+                    if (onOpenView != null) ConversationViewsActions(sideBySide = sideBySide, onOpenView = onOpenView)
                 },
             )
         },

@@ -294,9 +294,11 @@ internal class BufferFlow(private val model: ChatViewModel, request: BufferSheet
  *   way out is an animation fighting itself. ⚠ The DM may not be listed yet — `open-buffer` is only a
  *   request — so the caller must wait for its row before navigating (`MainScaffold.openWhenListed`),
  *   or the conversation reads the missing row as a close and bounces back to the list.
+ * @param onSearch open search seeded with a buffer's scope — the info page's "Search This
+ *   Conversation" (U7). Closed first too, as iOS dismisses the sheet before presenting search.
  */
 @Composable
-fun BufferSheetsHost(sheets: BufferSheets, model: ChatViewModel, onOpenBuffer: (BufferKey) -> Unit) {
+fun BufferSheetsHost(sheets: BufferSheets, model: ChatViewModel, onOpenBuffer: (BufferKey) -> Unit, onSearch: (String) -> Unit = {}) {
     val request = sheets.current ?: return
     val context = LocalContext.current
     val moments = remember(context) { MomentText(context) }
@@ -314,6 +316,10 @@ fun BufferSheetsHost(sheets: BufferSheets, model: ChatViewModel, onOpenBuffer: (
             sheets.dismiss()
             onOpenBuffer(key)
         },
+        onSearch = { scope ->
+            sheets.dismiss()
+            onSearch(scope)
+        },
     )
 }
 
@@ -325,6 +331,7 @@ private fun BufferDialog(
     moments: MomentText,
     onDismiss: () -> Unit,
     onOpenBuffer: (BufferKey) -> Unit,
+    onSearch: (String) -> Unit,
 ) {
     // An empty stack — a profile request with no network, which nothing sends — has nothing to draw.
     if (flow.pages.isEmpty()) {
@@ -360,6 +367,7 @@ private fun BufferDialog(
                         onModeList = { letter, name -> flow.pushModeList(key, letter, name) },
                         onNetworkVerb = page.state::perform,
                         onDccVerb = page.state::perform,
+                        onSearch = onSearch,
                     ),
                 )
             }
