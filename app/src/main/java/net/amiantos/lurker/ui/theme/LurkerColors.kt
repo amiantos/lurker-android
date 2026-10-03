@@ -179,6 +179,31 @@ class LurkerColors private constructor(
      */
     val highlightBubble: Color = warn.copy(alpha = 0.16f)
 
+    // MARK: - The buffer list (lurker-ios `BufferRowCell.swift`)
+
+    /**
+     * What the buffer list and every roster row stand on. The list paints it and so does each
+     * row — opaque, because a row sliding over its swipe action shows whatever is behind it.
+     *
+     * iOS's is `systemBackground`, the system's plain-list ground rather than the message list's.
+     * Android has no system ground that is Lurker's — the window's ground is [bg] (U0's
+     * `background`) — so this is [bg], named for its role so the list says what it stands on.
+     */
+    val rosterGround: Color = bg
+
+    /**
+     * The open row's band: a translucent wash of the foreground, so it's a step off the ground in
+     * either scheme.
+     */
+    val rosterRaised: Color = fg.copy(alpha = 0.07f)
+
+    /**
+     * The tree guides, the rule between groups and the pinned break. Derived from [fgMuted]
+     * rather than the web's `border`: a wash of the muted text reads on the ground in either
+     * scheme.
+     */
+    val rosterGuide: Color = fgMuted.copy(alpha = 0.4f)
+
     // MARK: - IRC colour tables
 
     /**

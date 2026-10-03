@@ -1,0 +1,845 @@
+// Copyright (c) 2026 Brad Root
+// SPDX-License-Identifier: MPL-2.0
+
+package net.amiantos.lurker.ui.list
+
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitLongPressOrCancellation
+import androidx.compose.foundation.gestures.awaitTouchSlopOrCancellation
+import androidx.compose.foundation.gestures.drag
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyItemScope
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxState
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.input.pointer.PointerInputChange
+import androidx.compose.ui.input.pointer.PointerInputScope
+import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import net.amiantos.lurker.ui.shell.ConnectionBanner
+import net.amiantos.lurker.ui.shell.StateView
+import net.amiantos.lurker.ui.shell.StatusTitle
+import net.amiantos.lurker.ui.shell.StatusTitleText
+import net.amiantos.lurker.ui.theme.LurkerIcons
+import net.amiantos.lurker.ui.theme.LurkerTheme
+import net.amiantos.lurkerkit.model.Buffer
+import net.amiantos.lurkerkit.model.BufferKey
+import net.amiantos.lurkerkit.model.BufferKind
+import net.amiantos.lurkerkit.model.BufferListPlaceholder
+import net.amiantos.lurkerkit.model.ComposerDraft
+import net.amiantos.lurkerkit.model.ConnectionBannerState
+import net.amiantos.lurkerkit.model.ConnectionState
+import net.amiantos.lurkerkit.model.FavoriteEntry
+import net.amiantos.lurkerkit.model.Network
+import net.amiantos.lurkerkit.model.PresenceState
+import net.amiantos.lurkerkit.session.ChatViewModel
+import net.amiantos.lurkerkit.store.ChatState
+import net.amiantos.lurkerkit.store.SocketStatus
+import sh.calvin.reorderable.DragGestureDetector
+import sh.calvin.reorderable.ReorderableItem
+import sh.calvin.reorderable.ReorderableLazyListState
+import sh.calvin.reorderable.rememberReorderableLazyListState
+
+/**
+ * The app's home screen: every buffer you have, and the way into all of them. lurker-ios's
+ * `BufferListViewController`.
+ *
+ * The list pane of `MainScaffold`'s list–detail scaffold: on a phone it is the screen you go into a
+ * conversation from and come back to, with predictive back; side by side it is the sidebar beside
+ * the conversation. It reports a pick through [onOpen] and doesn't know what happens next.
+ *
+ * ⚠ The store is read in two stages, never collected raw — see [BufferListInputs]. And there is no
+ * "is this screen on screen" gate, as iOS needs (its list outlives every conversation pushed over
+ * it, so it rebuilt for a screen nobody could see): a pane that isn't shown isn't composed, so
+ * nothing here runs while a conversation covers it on a phone.
+ *
+ * @param hasRenderedList the burst latch, hoisted to `MainScaffold` so it survives this pane leaving
+ *   composition and a configuration change — see [BufferListModel.drawsList].
+ * @param openKey the buffer in the conversation pane, or null.
+ * @param sideBySide whether the list is beside the conversation rather than instead of it — iOS's
+ *   `marksOpenBuffer`. It gates the open mark, and the banner: side by side the conversation pane
+ *   carries it, so the two never draw over each other or are read out twice.
+ * @param onClose leaves a channel or closes a buffer — the swipe and the menu both come here.
+ */
+@Composable
+fun BufferListScreen(
+    model: ChatViewModel,
+    hasRenderedList: Boolean,
+    onListRendered: () -> Unit,
+    openKey: BufferKey?,
+    sideBySide: Boolean,
+    onOpen: (Buffer) -> Unit,
+    onClose: (Buffer) -> Unit,
+    onSignOut: () -> Unit,
+) {
+    // Stage one: map every frame to what the list draws, and drop the frames that change none of
+    // it. Stage two (below) builds the sections from what's left.
+    val inputsFlow = remember(model) {
+        model.statePublisher
+            .map(BufferListInputs::of)
+            .distinctUntilChanged { old, new -> BufferListInputs.same(old, new) }
+    }
+    val initialInputs = remember(model) { BufferListInputs.of(model.state) }
+    val inputs by inputsFlow.collectAsStateWithLifecycle(initialValue = initialInputs)
+
+    var optimistic by remember { mutableStateOf<OptimisticFavorites?>(null) }
+    var drag by remember { mutableStateOf<DragSession?>(null) }
+
+    // ⚠⚠ The burst gate. `hasRenderedList` is NEVER reset here. On iOS it used to be cleared
+    // whenever `backlogComplete` was false — meant as "a fresh session waits again" — which
+    // silently disarmed the fallback below: the timer set the flag, the next rebuild cleared it
+    // again, so the list blanked and re-armed on a 4-second loop forever. On a server that never
+    // sends the terminator that is a permanent flashing spinner over a full store: the exact
+    // failure the fallback exists to prevent, caused by the fallback. A new session gets a new
+    // latch anyway — sign-out swaps `MainScaffold` out entirely (`AppRoot`), and the latch with it
+    // — so nothing has to notice a session change to do it.
+    val draws = BufferListModel.drawsList(rosterSettled = inputs.rosterSettled, hasRenderedList = hasRenderedList)
+    // A settled list has been drawn: latch it. The fallback that latches it when the burst never
+    // settles is `MainScaffold`'s, which runs for the session rather than for this pane.
+    if (draws && !hasRenderedList) {
+        SideEffect { onListRendered() }
+    }
+
+    // ANY favorites change (the echo, or another device's edit) is authoritative, and drops the
+    // shadow order — see `orderedFavorites`.
+    LaunchedEffect(inputs.favorites) {
+        if (optimistic?.isCurrent(inputs.favorites) == false) optimistic = null
+    }
+
+    // Stage two. `inputs` compares by identity, so this rebuilds exactly when stage one let a frame
+    // through, or the shadow order moved.
+    val built = remember(inputs, optimistic, draws) {
+        if (draws) BufferListModel.buildSections(inputs, optimistic) else emptyList()
+    }
+    val latestBuilt by rememberUpdatedState(built)
+    val sections = drag?.rendered() ?: built
+    val placeholder = BufferListModel.placeholder(inputs, built, draws)
+
+    val actions = BufferListActions(
+        onOpen = { row ->
+            // A friend's DM often isn't a materialized buffer — a DM that's closed server-side has
+            // no row in `state.buffers`, and the conversation's hydrate only fires for a buffer that
+            // already has one. Send open-buffer explicitly here (as /query does) so the server ships
+            // that DM's backlog and it opens, instead of hanging on the loading spinner.
+            //
+            // Gated on the row being ABSENT, which is the only case that describes. On iOS it used
+            // to fire on every friend tap, on the reasoning that a redundant one just re-hydrates —
+            // no longer true. `open-buffer` is a WRITE: it announces to every other device the user
+            // owns, it's refused outright for a paused account, and the conversation's own hydrate
+            // would fetch the same backlog a second time. Gated on the explicit Friends-row flag,
+            // not a presence proxy: presence is styling every DM row carries, not a fact about where
+            // the buffer came from.
+            if (row.isFriend && model.state.buffers[row.buffer.key.id] == null) {
+                model.openBuffer(row.buffer.key)
+            }
+            onOpen(row.buffer)
+        },
+        onClose = onClose,
+        menuFor = { buffer -> BufferListModel.rowMenu(model.state, buffer) },
+        onJoin = { buffer ->
+            // No navigation — the row lighting up is the answer — and a refusal says why
+            // (lurker-ios#57; U4 draws that notice).
+            val networkId = buffer.networkId
+            if (networkId != null) model.requestJoin(networkId = networkId, channel = buffer.target, opens = false)
+        },
+        onToggleFavorite = { buffer, isFavorite ->
+            val networkId = buffer.networkId
+            if (networkId != null) {
+                if (isFavorite) {
+                    model.unfavoriteBuffer(networkId = networkId, target = buffer.target)
+                } else {
+                    model.favoriteBuffer(networkId = networkId, target = buffer.target)
+                }
+            }
+        },
+        onDragStarted = { sectionId, key ->
+            drag = DragSession.begin(latestBuilt, sectionId, key, inputs.favorites)
+        },
+        onMove = move@{ fromLazyKey, toLazyKey ->
+            val session = drag ?: return@move
+            val token = session.sectionId.token
+            // Confined to the row's OWN group — the two are kind-filtered views of one list, and a
+            // row dropped anywhere foreign would snap back on the next rebuild.
+            if (ItemId.sectionTokenOf(fromLazyKey) != token || ItemId.sectionTokenOf(toLazyKey) != token) return@move
+            drag = session.moved(ItemId.rowKeyOf(fromLazyKey), ItemId.rowKeyOf(toLazyKey))
+        },
+        onDragStopped = stop@{ cancelled ->
+            val session = drag ?: return@stop
+            // Released FIRST, and on a cancelled drag as surely as on a drop — a drag abandoned
+            // would otherwise leave the list frozen on whatever it held when the row was lifted.
+            drag = null
+            if (cancelled) return@stop
+            val current = inputs.favorites
+            val order = session.dropOrder(current, optimistic) ?: return@stop
+            model.reorderFavorites(bufferIds = order)
+            // Shadow the new order until the echo folds — the list released above would otherwise
+            // redraw the store's pre-drop order (a visible snap home, and a corrupt base for a
+            // quick second drag).
+            optimistic = OptimisticFavorites(order = order, favoritesAtDrop = current)
+        },
+        // The system buffer is app-scoped and always exists, so fall back to the synthetic one if
+        // its row hasn't arrived from the server yet.
+        onOpenSystem = { onOpen(model.state.buffers[Buffer.system.key.id] ?: Buffer.system) },
+        onMarkAllRead = model::markAllRead,
+        onSignOut = onSignOut,
+    )
+
+    BufferListContent(
+        title = BufferListModel.statusTitle(inputs),
+        sections = sections,
+        placeholder = placeholder,
+        // The banner is about the connection, not the roster, so it follows every frame regardless
+        // of whether the list below is drawn yet. It yields to the conversation pane side by side.
+        banner = if (sideBySide) {
+            ConnectionBannerState.Hidden
+        } else {
+            ConnectionBannerState.of(reachable = inputs.reachable, connection = inputs.connection)
+        },
+        openKey = openKey,
+        marksOpenBuffer = sideBySide,
+        draggingSection = drag?.sectionId,
+        actions = actions,
+    )
+}
+
+/** What the list's touches do. One object so the content composable stays stateless (previews). */
+internal class BufferListActions(
+    val onOpen: (Row) -> Unit,
+    val onClose: (Buffer) -> Unit,
+    val menuFor: (Buffer) -> RowMenu?,
+    val onJoin: (Buffer) -> Unit,
+    val onToggleFavorite: (Buffer, isFavorite: Boolean) -> Unit,
+    val onDragStarted: (SectionId, key: String) -> Unit,
+    val onMove: (fromLazyKey: String, toLazyKey: String) -> Unit,
+    val onDragStopped: (cancelled: Boolean) -> Unit,
+    val onOpenSystem: () -> Unit,
+    val onMarkAllRead: () -> Unit,
+    val onSignOut: () -> Unit,
+) {
+    companion object {
+        /** Touches that do nothing — for previews. */
+        val None = BufferListActions(
+            onOpen = {},
+            onClose = {},
+            menuFor = { null },
+            onJoin = {},
+            onToggleFavorite = { _, _ -> },
+            onDragStarted = { _, _ -> },
+            onMove = { _, _ -> },
+            onDragStopped = {},
+            onOpenSystem = {},
+            onMarkAllRead = {},
+            onSignOut = {},
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun BufferListContent(
+    title: StatusTitle,
+    sections: List<Section>,
+    placeholder: BufferListPlaceholder,
+    banner: ConnectionBannerState,
+    openKey: BufferKey?,
+    marksOpenBuffer: Boolean,
+    draggingSection: SectionId?,
+    actions: BufferListActions,
+) {
+    var confirmingSignOut by rememberSaveable { mutableStateOf(false) }
+    Scaffold(
+        containerColor = LurkerTheme.colors.rosterGround,
+        topBar = {
+            TopAppBar(
+                // Inline: the bar's own row is enough to say what the screen is.
+                title = { StatusTitleText(title) },
+                actions = {
+                    // U4: the "+" — "Join Channel…" and, under a divider, "Add Network…" (iOS's
+                    // `joinItem`) — sits here, left of "More".
+                    OverflowMenu(actions = actions, onSignOut = { confirmingSignOut = true })
+                },
+            )
+        },
+    ) { padding ->
+        val direction = LocalLayoutDirection.current
+        Box(
+            Modifier
+                .fillMaxSize()
+                .padding(
+                    top = padding.calculateTopPadding(),
+                    start = padding.calculateStartPadding(direction),
+                    end = padding.calculateEndPadding(direction),
+                ),
+        ) {
+            when (placeholder) {
+                BufferListPlaceholder.None -> RosterList(
+                    sections = sections,
+                    openKey = openKey,
+                    marksOpenBuffer = marksOpenBuffer,
+                    draggingSection = draggingSection,
+                    actions = actions,
+                    contentPadding = PaddingValues(bottom = padding.calculateBottomPadding() + RosterMetrics.groupGap),
+                )
+                BufferListPlaceholder.Loading -> StateView(title = "Loading buffers…", isLoading = true)
+                // U4: this state's "Add Network" button goes here — the whole point of the state on
+                // iOS, where it used to say "add a network" to a person with nowhere to do it.
+                BufferListPlaceholder.NoNetworks -> StateView(
+                    title = "No networks yet",
+                    subtitle = "Add a network to start a conversation.",
+                )
+                // They've done the adding already — the next step is joining something, and saying
+                // "add a network" here would read as the app not knowing its own state.
+                BufferListPlaceholder.NoBuffers -> StateView(
+                    title = "No buffers yet",
+                    subtitle = "Join a channel or start a DM to see it here.",
+                )
+            }
+            // Over the rows, not above them: it floats, and the list scrolls under it.
+            ConnectionBanner(
+                state = banner,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp, start = 16.dp, end = 16.dp),
+            )
+        }
+    }
+    if (confirmingSignOut) {
+        // U10: sign-out moves into Settings, behind this same confirmation, as it did on iOS.
+        //
+        // Sign-out asks first: it ends the session on the server, and the way back in is a password
+        // the user may not have to hand. iOS's copy.
+        AlertDialog(
+            onDismissRequest = { confirmingSignOut = false },
+            title = { Text("Sign out of Lurker?") },
+            text = { Text("You'll need your password to sign back in.") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmingSignOut = false
+                        actions.onSignOut()
+                    },
+                ) { Text("Sign Out", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmingSignOut = false }) { Text("Cancel") } },
+        )
+    }
+}
+
+/**
+ * The app-wide menu: the things that outlast whichever conversation you're reading. One "⋮" —
+ * Android's idiom for what iOS splits between a cog and its own "…".
+ */
+@Composable
+private fun OverflowMenu(actions: BufferListActions, onSignOut: () -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        IconButton(onClick = { expanded = true }) {
+            Icon(LurkerIcons.MoreVert, contentDescription = "More")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            // Set apart at the top because it's a buffer you open, not a view over all of them. The
+            // Lurker buffer has no row in the list; this is its door.
+            DropdownMenuItem(
+                text = { Text("Lurker") },
+                onClick = {
+                    expanded = false
+                    actions.onOpenSystem()
+                },
+            )
+            // Not on iOS — issue #9 asks for it, and it's the web's.
+            DropdownMenuItem(
+                text = { Text("Mark All as Read") },
+                onClick = {
+                    expanded = false
+                    actions.onMarkAllRead()
+                },
+            )
+            // U7: Highlights and Bookmarks go here (search is the list's own field on iOS).
+            // U8: and Uploads.
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text("Sign Out") },
+                onClick = {
+                    expanded = false
+                    onSignOut()
+                },
+            )
+        }
+    }
+}
+
+/**
+ * The tree itself: a section per group, each opening with its header item, no separators.
+ *
+ * Every item is keyed by its [ItemId] — section-qualified, so unique across the whole list — and the
+ * list is never animated outside a drag: it changes on every frame that changes the roster, and a
+ * list that slides every time someone speaks is a list you can't read.
+ */
+@Composable
+private fun RosterList(
+    sections: List<Section>,
+    openKey: BufferKey?,
+    marksOpenBuffer: Boolean,
+    draggingSection: SectionId?,
+    actions: BufferListActions,
+    contentPadding: PaddingValues,
+) {
+    val listState = rememberLazyListState()
+    val reorderState = rememberReorderableLazyListState(listState) { from, to ->
+        actions.onMove(from.key as String, to.key as String)
+    }
+    // Drawn only side by side — under a conversation rather than beside one, a row left marked
+    // after you navigate away is stale emphasis.
+    fun isOpen(buffer: Buffer): Boolean = marksOpenBuffer && buffer.key.id == openKey?.id
+    LazyColumn(state = listState, contentPadding = contentPadding, modifier = Modifier.fillMaxSize()) {
+        for (section in sections) {
+            for ((id, entry) in section.entries) {
+                when (entry) {
+                    is Entry.HeaderEntry -> item(key = id.lazyKey, contentType = "header") {
+                        val log = entry.header.log
+                        RosterHeader(
+                            header = entry.header,
+                            isOpen = log != null && isOpen(log.buffer),
+                            // A network's header opens its server log, as the web's does.
+                            gestures = if (log == null) {
+                                Modifier
+                            } else {
+                                Modifier.clickable(onClickLabel = "open the server log", role = Role.Button) {
+                                    actions.onOpen(log)
+                                }
+                            },
+                        )
+                    }
+                    Entry.PinBreak -> item(key = id.lazyKey, contentType = "pins") { PinBreak() }
+                    is Entry.BufferEntry -> item(key = id.lazyKey, contentType = "row") {
+                        if (section.id.reorderable) {
+                            ReorderableRow(
+                                reorderState = reorderState,
+                                sectionId = section.id,
+                                id = id,
+                                row = entry.row,
+                                isOpen = isOpen(entry.row.buffer),
+                                draggingSection = draggingSection,
+                                actions = actions,
+                            )
+                        } else {
+                            NetworkRow(
+                                sectionId = section.id,
+                                row = entry.row,
+                                isOpen = isOpen(entry.row.buffer),
+                                actions = actions,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * A row in a network's group: tap opens, long-press opens the menu, a full swipe from the end
+ * leaves or closes. Never reorders — those groups are the same sorted list every time.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun NetworkRow(sectionId: SectionId, row: Row, isOpen: Boolean, actions: BufferListActions) {
+    RowWithMenu(row = row, actions = actions) { openMenu, _ ->
+        val gestures = Modifier.combinedClickable(
+            role = Role.Button,
+            onLongClickLabel = MENU_LABEL,
+            onLongClick = openMenu,
+            onClick = { actions.onOpen(row) },
+        )
+        val swipe = BufferListModel.swipeTitle(sectionId, row)
+        if (swipe == null) {
+            BufferRow(row = row, isOpen = isOpen, gestures = gestures)
+        } else {
+            SwipeToClose(title = swipe, onClose = { actions.onClose(row.buffer) }) {
+                BufferRow(row = row, isOpen = isOpen, gestures = gestures)
+            }
+        }
+    }
+}
+
+/**
+ * A Friends or Favorites row: tap opens; long-press opens the menu, and if the finger then moves
+ * before lifting, the menu closes and the row drags — the launcher's idiom, and iOS's (a drag
+ * session there reconciles the two: a lift that moves reorders, a lift that stays put opens the
+ * menu). See [MenuThenDrag].
+ *
+ * Reorderable only within its own group: while a drag is live, only that group's rows are targets
+ * ([draggingSection]), so a Friends row can't land among Favorites and the other group's rows stay
+ * put. Rows slide aside only during a drag; outside one the list is never animated.
+ */
+@Composable
+private fun LazyItemScope.ReorderableRow(
+    reorderState: ReorderableLazyListState,
+    sectionId: SectionId,
+    id: ItemId,
+    row: Row,
+    isOpen: Boolean,
+    draggingSection: SectionId?,
+    actions: BufferListActions,
+) {
+    ReorderableItem(
+        state = reorderState,
+        key = id.lazyKey,
+        enabled = draggingSection == null || draggingSection == sectionId,
+        animateItemModifier = if (draggingSection != null) Modifier.animateItem() else Modifier,
+    ) { isDragging ->
+        RowWithMenu(row = row, actions = actions) { openMenu, closeMenu ->
+            val haptics = LocalHapticFeedback.current
+            // ⚠ Everything the gesture calls is read through updated state: the library's
+            // pointer handler is keyed on the list state alone, so it keeps the lambdas it started
+            // with across recompositions, and a captured `row` or `actions` would go stale.
+            val longPress by rememberUpdatedState {
+                haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+                openMenu()
+            }
+            val detector = remember { MenuThenDrag(onLongPress = { longPress() }) }
+            val started by rememberUpdatedState {
+                closeMenu()
+                actions.onDragStarted(sectionId, row.buffer.key.id)
+            }
+            val stopped by rememberUpdatedState { actions.onDragStopped(detector.lastDragCancelled) }
+            BufferRow(
+                row = row,
+                isOpen = isOpen,
+                lifted = isDragging,
+                gestures = Modifier
+                    .clickable(role = Role.Button) { actions.onOpen(row) }
+                    // The menu for TalkBack, which has no long press to share with a drag.
+                    .semantics {
+                        onLongClick(label = MENU_LABEL) {
+                            openMenu()
+                            true
+                        }
+                    }
+                    // Inside the click, so this handler sees each event first and can claim the
+                    // lift that ends a long press before the click reads it as a tap.
+                    .draggableHandle(
+                        onDragStarted = { started() },
+                        onDragStopped = { stopped() },
+                        dragGestureDetector = detector,
+                    ),
+            )
+        }
+    }
+}
+
+/**
+ * Long-press opens the menu; moving past touch slop after that closes it and drags. lurker-ios got
+ * this from a drag session, which is how UIKit reconciles a context menu with drag-to-reorder:
+ * a lift that *moves* reorders, a lift that stays put opens the menu, which is what every
+ * reorderable list on the system does. The library's own long-press detector starts the drag at
+ * the long press, with nothing in between, so this is its detector with the menu in the gap.
+ *
+ * Nothing is claimed before the long press, so a tap is the row's click and a fling is the list's
+ * scroll. After it, the lift is claimed whether or not the finger moved, so a long press never also
+ * reads as a tap.
+ */
+internal class MenuThenDrag(private val onLongPress: () -> Unit) : DragGestureDetector {
+    /**
+     * Whether the last drag ended in a cancel (the system took the pointer) rather than a lift —
+     * read by the stop callback, which the library calls for both. A cancelled drag isn't a drop.
+     */
+    var lastDragCancelled: Boolean = false
+        private set
+
+    override suspend fun PointerInputScope.detect(
+        onDragStart: (Offset) -> Unit,
+        onDragEnd: () -> Unit,
+        onDragCancel: () -> Unit,
+        onDrag: (change: PointerInputChange, dragAmount: Offset) -> Unit,
+    ) {
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val press = awaitLongPressOrCancellation(down.id) ?: return@awaitEachGesture
+            onLongPress()
+            val moved = awaitTouchSlopOrCancellation(press.id) { change, _ -> change.consume() }
+            if (moved == null) {
+                // Lifted where it was pressed: the menu stays, and the lift is ours.
+                currentEvent.changes.forEach { it.consume() }
+                return@awaitEachGesture
+            }
+            lastDragCancelled = false
+            onDragStart(moved.position)
+            val lifted = drag(moved.id) { change ->
+                onDrag(change, change.positionChange())
+                change.consume()
+            }
+            if (lifted) {
+                currentEvent.changes.forEach { it.consume() }
+                onDragEnd()
+            } else {
+                lastDragCancelled = true
+                onDragCancel()
+            }
+        }
+    }
+}
+
+/**
+ * A row with its long-press menu anchored to it — lurker-ios's context menu, item for item and in
+ * its order. Read from the store as it opens ([BufferListActions.menuFor]), as iOS's is: a menu
+ * built earlier could offer Join on a network that has since dropped. None on the system buffer or
+ * a server log, which never reach a row anyway.
+ */
+@Composable
+private fun RowWithMenu(
+    row: Row,
+    actions: BufferListActions,
+    content: @Composable (openMenu: () -> Unit, closeMenu: () -> Unit) -> Unit,
+) {
+    var menu by remember { mutableStateOf<RowMenu?>(null) }
+    val buffer = row.buffer
+    Box {
+        content({ menu = actions.menuFor(buffer) }, { menu = null })
+        val shown = menu
+        DropdownMenu(
+            expanded = shown != null,
+            onDismissRequest = { menu = null },
+            offset = DpOffset(RosterMetrics.inset + RosterMetrics.name, 0.dp),
+        ) {
+            if (shown != null) {
+                val destructive = MenuDefaults.itemColors(textColor = MaterialTheme.colorScheme.error)
+                // A parted channel keeps its row and its history, and getting back in is the usual
+                // reason to long-press one, so Join leads. Disabled while the network is down: a
+                // JOIN needs a live connection, and the section header already says why.
+                val join = shown.joinEnabled
+                if (join != null) {
+                    DropdownMenuItem(
+                        text = { Text("Join Channel") },
+                        enabled = join,
+                        onClick = {
+                            menu = null
+                            actions.onJoin(buffer)
+                        },
+                    )
+                }
+                val favoriteTitle = shown.favoriteTitle
+                if (favoriteTitle != null) {
+                    if (join != null) HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text(favoriteTitle) },
+                        colors = if (shown.favoriteDestructive) destructive else MenuDefaults.itemColors(),
+                        onClick = {
+                            menu = null
+                            actions.onToggleFavorite(buffer, shown.isFavorite)
+                        },
+                    )
+                }
+                // Under its own divider, so a destructive action is set apart from the toggle above
+                // rather than a thumb-slip from it.
+                if (join != null || favoriteTitle != null) HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text(shown.closeTitle) },
+                    colors = destructive,
+                    onClick = {
+                        menu = null
+                        actions.onClose(buffer)
+                    },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * A full swipe from the end leaves or closes — iOS's trailing swipe action, destructive, firing on
+ * a full swipe. Half the row's width is the line: far enough that a scroll that drifts sideways
+ * doesn't leave a channel, near enough to be one motion.
+ *
+ * The state is `remember`ed, not saved: a row that comes back (a channel rejoined) must not come
+ * back already swiped away.
+ */
+@Composable
+private fun SwipeToClose(title: String, onClose: () -> Unit, content: @Composable () -> Unit) {
+    val state = remember {
+        SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, positionalThreshold = { distance -> distance * 0.5f })
+    }
+    val currentOnClose by rememberUpdatedState(onClose)
+    // Once: the box re-runs its dismiss callback whenever it recomposes still dismissed, and the
+    // row stays composed until the store's removal lands.
+    var fired by remember { mutableStateOf(false) }
+    val onDismiss = remember {
+        { _: SwipeToDismissBoxValue ->
+            if (!fired) {
+                fired = true
+                currentOnClose()
+            }
+        }
+    }
+    SwipeToDismissBox(
+        state = state,
+        enableDismissFromStartToEnd = false,
+        onDismiss = onDismiss,
+        backgroundContent = {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.error)
+                    .padding(end = RosterMetrics.inset),
+                contentAlignment = Alignment.CenterEnd,
+            ) {
+                Text(title, style = rosterTextStyle(), color = MaterialTheme.colorScheme.onError)
+            }
+        },
+    ) {
+        content()
+    }
+}
+
+/** What TalkBack calls a row's long press. */
+private const val MENU_LABEL = "show actions"
+
+// MARK: - Previews
+
+/** A populated account: two networks (one down), Friends with a name collision, pins, a draft. */
+private fun previewState(): ChatState {
+    fun channel(networkId: Int, target: String, unread: Int = 0, highlights: Int = 0, joined: Boolean = true) =
+        Buffer(networkId, target, BufferKind.Channel, unread = unread, highlights = highlights, joined = joined)
+    fun dm(networkId: Int, target: String, unread: Int = 0) = Buffer(networkId, target, BufferKind.Dm, unread = unread)
+    val buffers = listOf(
+        channel(1, "#lurker", unread = 3),
+        channel(1, "#swift", unread = 2, highlights = 1),
+        channel(1, "#kotlin", joined = false),
+        channel(1, "#android"),
+        Buffer(1, Buffer.serverTarget(1), BufferKind.Server, unread = 1),
+        dm(1, "alice", unread = 1),
+        dm(1, "bob"),
+        channel(2, "#debian"),
+        dm(2, "alice"),
+    )
+    return ChatState(
+        connection = SocketStatus.Connected,
+        snapshotSinceOpen = true,
+        backlogComplete = true,
+        networks = mapOf(
+            1 to Network(id = 1, name = "Libera", position = 0, state = ConnectionState.Connected),
+            2 to Network(id = 2, name = "OFTC", position = 1, state = ConnectionState.Disconnected),
+        ),
+        buffers = buffers.associateBy { it.key.id },
+        favorites = listOf(
+            FavoriteEntry(networkId = 1, target = "alice", bufferId = 10),
+            FavoriteEntry(networkId = 2, target = "alice", bufferId = 11),
+            FavoriteEntry(networkId = 1, target = "#lurker", bufferId = 12),
+        ),
+        peerPresence = mapOf(1 to mapOf("alice" to PresenceState.Online, "bob" to PresenceState.Away)),
+        pinned = mapOf(1 to listOf("#swift")),
+        drafts = mapOf(BufferKey(1, "#android").id to ComposerDraft(body = "half a thought")),
+    )
+}
+
+@Composable
+private fun PopulatedPreview(dark: Boolean) {
+    val inputs = BufferListInputs.of(previewState())
+    val sections = BufferListModel.buildSections(inputs)
+    LurkerTheme(darkTheme = dark) {
+        BufferListContent(
+            title = BufferListModel.statusTitle(inputs),
+            sections = sections,
+            placeholder = BufferListModel.placeholder(inputs, sections, draws = true),
+            banner = ConnectionBannerState.Hidden,
+            openKey = BufferKey(1, "#lurker"),
+            marksOpenBuffer = true,
+            draggingSection = null,
+            actions = BufferListActions.None,
+        )
+    }
+}
+
+@Composable
+private fun PlaceholderPreview(dark: Boolean, placeholder: BufferListPlaceholder) {
+    LurkerTheme(darkTheme = dark) {
+        BufferListContent(
+            title = StatusTitle(title = "Lurker", status = net.amiantos.lurkerkit.model.StatusLight.Warn),
+            sections = emptyList(),
+            placeholder = placeholder,
+            banner = ConnectionBannerState.Hidden,
+            openKey = null,
+            marksOpenBuffer = false,
+            draggingSection = null,
+            actions = BufferListActions.None,
+        )
+    }
+}
+
+@Preview(name = "List — light", heightDp = 640)
+@Composable
+private fun BufferListPreviewLight() = PopulatedPreview(dark = false)
+
+@Preview(name = "List — dark", heightDp = 640)
+@Composable
+private fun BufferListPreviewDark() = PopulatedPreview(dark = true)
+
+@Preview(name = "Loading — light")
+@Composable
+private fun LoadingPreviewLight() = PlaceholderPreview(dark = false, placeholder = BufferListPlaceholder.Loading)
+
+@Preview(name = "Loading — dark")
+@Composable
+private fun LoadingPreviewDark() = PlaceholderPreview(dark = true, placeholder = BufferListPlaceholder.Loading)
+
+@Preview(name = "No networks — light")
+@Composable
+private fun NoNetworksPreviewLight() = PlaceholderPreview(dark = false, placeholder = BufferListPlaceholder.NoNetworks)
+
+@Preview(name = "No networks — dark")
+@Composable
+private fun NoNetworksPreviewDark() = PlaceholderPreview(dark = true, placeholder = BufferListPlaceholder.NoNetworks)
+
+@Preview(name = "No buffers — light")
+@Composable
+private fun NoBuffersPreviewLight() = PlaceholderPreview(dark = false, placeholder = BufferListPlaceholder.NoBuffers)
+
+@Preview(name = "No buffers — dark")
+@Composable
+private fun NoBuffersPreviewDark() = PlaceholderPreview(dark = true, placeholder = BufferListPlaceholder.NoBuffers)

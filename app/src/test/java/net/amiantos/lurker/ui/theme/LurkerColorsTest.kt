@@ -78,6 +78,9 @@ class LurkerColorsTest {
         for (colors in listOf(LurkerColors.Dark, LurkerColors.Light)) {
             assertEquals(colors.fgMuted.copy(alpha = 0.7f), colors.fgFaint)
             assertEquals(colors.warn.copy(alpha = 0.16f), colors.highlightBubble)
+            assertEquals(colors.bg, colors.rosterGround)
+            assertEquals(colors.fg.copy(alpha = 0.07f), colors.rosterRaised)
+            assertEquals(colors.fgMuted.copy(alpha = 0.4f), colors.rosterGuide)
         }
         assertNotEquals(LurkerColors.Dark.highlightBubble, LurkerColors.Light.highlightBubble)
     }
