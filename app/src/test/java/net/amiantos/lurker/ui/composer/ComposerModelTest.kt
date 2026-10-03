@@ -10,6 +10,7 @@ import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.ComposerDraft
 import net.amiantos.lurkerkit.model.EventType
+import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.PendingReply
@@ -225,6 +226,18 @@ class ComposerModelTest {
         assertEquals(listOf("o"), ComposerChrome.of(inputs).ownModes)
         assertTrue(ComposerChrome.Inputs.same(inputs, ComposerChrome.Inputs("amiantos", members, null, away)))
         assertFalse(ComposerChrome.Inputs.same(inputs, ComposerChrome.Inputs("amiantos", members.toList(), null, away)))
+    }
+
+    @Test
+    fun `candidate sources compare by identity, so a moved nicklist or rule set refreshes the pills`() {
+        val members = listOf(Member(nick = "alice"))
+        val buffers = mapOf("1::#a" to Buffer(networkId = 1, target = "#a", kind = BufferKind.Channel))
+        val ignores = IgnoreSet.empty
+        val sources = CandidateSources(members, ignores, buffers, selfNick = "me")
+        assertTrue(CandidateSources.same(sources, CandidateSources(members, ignores, buffers, "me")))
+        assertFalse(CandidateSources.same(sources, CandidateSources(members + Member(nick = "bob"), ignores, buffers, "me")))
+        assertFalse(CandidateSources.same(sources, CandidateSources(members.toList(), ignores, buffers, "me")))
+        assertFalse(CandidateSources.same(sources, CandidateSources(members, ignores, buffers, "me_")))
     }
 
     // MARK: - Send

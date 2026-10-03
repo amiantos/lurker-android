@@ -22,6 +22,7 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -124,6 +125,9 @@ internal class ComposerState(
     var isFocused: Boolean by mutableStateOf(false)
         internal set
 
+    /** Whether a held refused line could come back now — observed, so freeing the field retries it. */
+    internal val canRestoreRefused: Boolean get() = ComposerModel.canRestoreRefused(this.field.text.toString(), reply)
+
     /** Whether an IME is mid-composition — marked text the keyboard hasn't committed yet. */
     val isComposing: Boolean get() = this.field.composition != null // `this.`: bare `field` is the backing field
 
@@ -131,13 +135,6 @@ internal class ComposerState(
 
     /** The field as the trackers last saw it — what tells a text change from a caret move. */
     private var lastSeenText: String = field.text.toString()
-
-    /**
-     * The draft as of the last typing hook — what the CHANNEL was told. ⚠ Not advanced by a
-     * restore: the channel was told nothing, so deleting a restored line back to empty still emits
-     * nothing, and typing one character still emits. The draft the field opened on is a restore too.
-     */
-    private var lastEmittedDraft: String = ""
 
     /** The field as the draft hook last saw it, so a caret move isn't an edit. */
     private var lastEdit: Pair<String, Boolean> = lastSeenText to false
@@ -177,10 +174,9 @@ internal class ComposerState(
     internal fun fieldChanged(now: Snapshot) {
         val textChanged = now.text != lastSeenText
         lastSeenText = now.text
-        if (textChanged && now.text != lastEmittedDraft) {
-            lastEmittedDraft = now.text
-            draftChanged(now.text)
-        }
+        // What the channel was told is `ComposerTyping`'s to dedupe against — and to forget when typing
+        // ends. A restore is never a text change here: it sets `lastSeenText` itself.
+        if (textChanged) draftChanged(now.text)
         emitCompletion(now)
         reportEdit(now)
     }
@@ -192,8 +188,22 @@ internal class ComposerState(
         if (last != null && last[0] == computed) return
         lastCompletion = arrayOf(computed)
         activeCompletion = computed
-        suggestions = ComposerModel.suggestions(
-            computed,
+        suggestions = suggestionsFor(computed)
+    }
+
+    /**
+     * The candidates' sources moved — someone joined or left, a nick changed, a rule was added, a
+     * channel opened, a line arrived. Rebuild the pills showing NOW, for the same token; nothing at all
+     * while none are, so a restored draft's pills stay suppressed until the caret gives a reason.
+     */
+    internal fun refreshSuggestions() {
+        val completion = activeCompletion ?: return
+        suggestions = suggestionsFor(completion)
+    }
+
+    private fun suggestionsFor(completion: Completion?): List<Suggestion> =
+        ComposerModel.suggestions(
+            completion,
             channels = { query -> ComposerModel.channelCandidates(model.state.buffers.values, key.networkId, query) },
             nicks = { query ->
                 val state = model.state
@@ -209,7 +219,6 @@ internal class ComposerState(
                 )
             },
         )
-    }
 
     /** Tell the draft the field changed, if it did. */
     private fun reportEdit(now: Snapshot) {
@@ -260,7 +269,7 @@ internal class ComposerState(
 
     /** The draft changed — tell the network, and re-arm the idle downgrade. */
     private fun draftChanged(draft: String) {
-        val arm = typing.draftChanged(draft, Instant.now())
+        val arm = typing.draftChanged(draft, Instant.now()) ?: return
         typingIdle?.cancel()
         typingIdle = null
         if (!arm) return
@@ -340,7 +349,10 @@ internal class ComposerState(
     internal fun storedDraftChanged(stored: ComposerDraft?) {
         val repaint = ComposerModel.repaintsDraft(stored, lastSeenDraft, protected = model.isDraftProtected(key))
         lastSeenDraft = stored
-        if (repaint) showDraft(stored)
+        if (!repaint) return
+        showDraft(stored)
+        // Another device emptying the draft frees the field for a line that's been waiting.
+        restoreRefused()
     }
 
     /**
@@ -361,20 +373,24 @@ internal class ComposerState(
     }
 
     /**
-     * The edit is over — the field lost focus, or the composer (or the app) is going. Flush the draft,
-     * and if an IME was mid-composition, END the composition first.
+     * The edit is over — the field lost focus, or the composer (or the app) is going. Record the field
+     * as it stands, END any composition, and flush.
      *
-     * ⚠⚠ Not left to the IME's commit arriving the ordinary way. On dispose the field's observer is
-     * already cancelled, so that commit never reaches the kit: its `DraftSync.composing` would stay
-     * pinned to this buffer — the draft held back from the server, and every remote write to it
-     * dropped as "protected" — until the app next backgrounds. So the kit hears the field as it
-     * stands, preedit included (it is what's on screen, and what the IME commits), with
-     * `composing = false`, and the flush follows at once. The trackers record it, so a commit that
-     * does arrive later reads as nothing new.
+     * ⚠⚠ Recorded here, not left to the observer. The field's observer runs a frame behind, so the
+     * last keystroke may not have reached it yet — and on dispose it's already cancelled, so it never
+     * will. `flushDraft` sends only what was recorded, so that edit would simply be lost; and a
+     * composition in flight would never be reported over, leaving the kit's `DraftSync.composing`
+     * pinned to this buffer — the draft held back, and every remote write to it dropped as
+     * "protected" — until the app next backgrounds. So the kit hears the field as it stands, preedit
+     * included (it is what's on screen, and what the IME commits), with `composing = false`, and the
+     * flush follows at once. The trackers record it, so the observer's late copy reads as nothing new
+     * to the draft. (The typing signal is the observer's business: leaving has already ended it, and
+     * a blur with a late keystroke still announces it when it lands.)
      */
     private fun endEditing() {
-        if (isComposing) {
-            lastEdit = field.text.toString() to false
+        val now = field.text.toString() to false
+        if (now != lastEdit) {
+            lastEdit = now
             saveDraft(composing = false)
         }
         model.flushDraft(key)
@@ -427,6 +443,10 @@ internal class ComposerState(
      * edit the field reports, and leaving it on the debounce could lose what just came back.
      *
      * Says nothing: the text appearing in the field is the whole message.
+     *
+     * Asked whenever the field might have freed up: a refusal arriving, the composer appearing, a send,
+     * a cancelled reply, another device emptying the draft — and, for everything the user does by hand
+     * (deleting the text), whenever eligibility itself turns true (`rememberComposerState`).
      */
     internal fun restoreRefused() {
         if (!ComposerModel.canRestoreRefused(field.text.toString(), reply)) return
@@ -491,6 +511,9 @@ internal class ComposerState(
                 ComposerModel.removeAddress(field.text.toString(), cancelled.nick, punctuation)?.let(::apply)
             }
         }
+        // A reply on your own line, or in a DM, leaves the field empty — and a refused line was
+        // waiting only because the reply was there. After the batch, so it's saved as its own draft.
+        restoreRefused()
     }
 
     private fun focus() {
@@ -573,6 +596,21 @@ internal fun rememberComposerState(
             .map(ComposerChrome::of)
             .distinctUntilChanged()
             .collect { state.chrome = it }
+    }
+    // The pills' sources: the nicklist, the rules, the network's channels and your nick off the store,
+    // and the lines the list renders (Compose state, so observed). A pill for someone who just left, or
+    // who was just ignored, mustn't stay tappable — nor someone who just joined stay missing.
+    LaunchedEffect(state) {
+        val sources = model.statePublisher
+            .conflate()
+            .map { CandidateSources.of(it, key) }
+            .distinctUntilChanged(CandidateSources::same)
+        combine(sources, snapshotFlow { state.messages() }) { _, _ -> }.collect { state.refreshSuggestions() }
+    }
+    // A held refused line comes back when the field frees up by hand — the text deleted — as well as on
+    // the composer's own moves (each of which asks itself).
+    LaunchedEffect(state) {
+        snapshotFlow { state.canRestoreRefused }.distinctUntilChanged().collect { free -> if (free) state.restoreRefused() }
     }
     // A line the server refused, for this buffer, while the composer is here.
     LaunchedEffect(state, events) {
