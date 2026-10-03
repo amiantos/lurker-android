@@ -18,6 +18,7 @@ import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NetworkAction
 import net.amiantos.lurkerkit.model.NetworkRow
+import net.amiantos.lurkerkit.model.SearchQuery
 import net.amiantos.lurkerkit.model.StatusLight
 import net.amiantos.lurkerkit.model.channelAccess
 import net.amiantos.lurkerkit.store.ChatState
@@ -51,6 +52,12 @@ data class BufferInfoInputs(
     val connection: NetworkRow?,
     /** A DCC chat's session (`ChatState.dccChatSession`): null while it can't be known. */
     val dccLive: Boolean?,
+    /**
+     * The `in:`/`on:` prefix that scopes a search to this buffer (`SearchQuery.scope`), or null where
+     * there's no meaningful scope — the row simply isn't offered then. The `on:` half needs the
+     * network's name, which only the roster has.
+     */
+    val searchScope: String? = null,
 ) {
     companion object {
         fun of(state: ChatState, opened: Buffer): BufferInfoInputs {
@@ -68,6 +75,7 @@ data class BufferInfoInputs(
                 access = state.channelAccess(key),
                 connection = network?.let { NetworkRow(connection = it.state, isBlocked = it.blocked) },
                 dccLive = if (opened.kind == BufferKind.Dcc) state.dccChatSession(key) else null,
+                searchScope = SearchQuery.scope(live, network?.name),
             )
         }
     }
@@ -165,6 +173,12 @@ sealed interface InfoRow {
 
     data object Whois : InfoRow
 
+    /**
+     * Search pre-scoped to this buffer; [scope] is the `in:`/`on:` prefix the search field starts with.
+     * Searching *this* buffer is a fact about it, so it lives here rather than in the bar's views.
+     */
+    data class Search(val scope: String) : InfoRow
+
     /** A placeholder that says it is one — see [BufferInfoModel.notifications]. */
     data class NotifyPlaceholder(val title: String) : InfoRow
 
@@ -197,8 +211,8 @@ data class InfoSection(val header: String? = null, val footer: String? = null, v
  * and not straight in a whois — whois is about a *person*, and a person is one of the things a DM is
  * about, not the whole of it.
  *
- * U7: iOS's "Search This Conversation" row (`SearchQuery.scope`) joins the members/whois section once
- * there is a search screen to hand it to.
+ * "Search This Conversation" (`InfoRow.Search`) rides the members/whois section of every buffer that
+ * has a scope to search by.
  */
 object BufferInfoModel {
     /**
@@ -247,11 +261,11 @@ object BufferInfoModel {
                         footer = held?.createdAt?.let { "Created ${longDate(it)}" },
                         rows = listOf(InfoRow.ChannelSettings(held?.modes?.takeIf { it.isNotEmpty() }?.let { "+$it" })) + lists,
                     ),
-                    InfoSection(rows = listOf(InfoRow.Members(inputs.memberCount))),
+                    InfoSection(rows = listOf(InfoRow.Members(inputs.memberCount)) + searchRows(inputs)),
                     notifications,
                 )
             }
-            BufferKind.Dm -> listOf(InfoSection(rows = listOf(InfoRow.Whois)), notifications)
+            BufferKind.Dm -> listOf(InfoSection(rows = listOf(InfoRow.Whois) + searchRows(inputs)), notifications)
             BufferKind.Dcc -> {
                 // The session first: whether a line typed here will arrive is the thing about this
                 // buffer most worth knowing, and its verbs live nowhere else a thumb can reach.
@@ -269,7 +283,7 @@ object BufferInfoModel {
                 listOf(
                     InfoSection(header = "DCC Chat", footer = actionError, rows = listOfNotNull(status, verb)),
                     // The Whois row is the peer's — the profile peels the `=` off.
-                    InfoSection(rows = listOf(InfoRow.Whois)),
+                    InfoSection(rows = listOf(InfoRow.Whois) + searchRows(inputs)),
                     notifications,
                 )
             }
@@ -281,6 +295,9 @@ object BufferInfoModel {
             // of its own, and nothing to notify about.
             BufferKind.System -> emptyList()
         }
+
+    /** The search row, where the buffer has a scope to search by. */
+    private fun searchRows(inputs: BufferInfoInputs): List<InfoRow> = listOfNotNull(inputs.searchScope?.let(InfoRow::Search))
 
     /**
      * The connection behind a server log, and what can be done to it now. Null when the store has no
