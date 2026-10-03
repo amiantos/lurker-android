@@ -31,10 +31,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.window.core.layout.WindowSizeClass
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import net.amiantos.lurker.prefs.UiPreferences
+import net.amiantos.lurker.ui.list.BufferListModel
 import net.amiantos.lurker.ui.list.BufferListScreen
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.session.ChatViewModel
@@ -73,6 +75,29 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, onSignOut: 
     // survives a configuration change (same process) and lapses with the process.
     var latchedIn by rememberSaveable { mutableStateOf<String?>(null) }
     val hasRenderedList = latchedIn == processToken
+
+    // Gives up waiting for `backlog-complete` and draws whatever has arrived.
+    //
+    // ⚠⚠ Not belt-and-braces — the terminator genuinely may not come. It was added as an ADDITIVE
+    // frame with no protocol-version bump and no capability signal (lurker#640), so a self-hosted
+    // server older than it simply never sends one, and this is a product whose operators upgrade on
+    // their own schedule. A current server withholds it too when a burst throws part-way, which is
+    // deliberate: it is emitted from inside `sendSnapshotInner` precisely so a failed burst isn't
+    // declared complete.
+    //
+    // Without this, waiting for it would trade a flicker for a permanent spinner over a fully
+    // populated store — a far worse trade. The wait is the optimization; drawing is the correct
+    // behaviour, so the fallback is the one that has to be unconditional.
+    //
+    // Here, for the session, rather than in the list pane: the pane leaves composition whenever a
+    // conversation covers it on a phone — from the first moment, after a launch restore — and a
+    // timer that restarted with it would never fire for a list that's never looked at, then make
+    // each return to it wait the full four seconds again.
+    LaunchedEffect(Unit) {
+        if (hasRenderedList) return@LaunchedEffect
+        delay(BufferListModel.BURST_WAIT_MS)
+        latchedIn = processToken
+    }
 
     // Launch restore (lurker-ios#49): signing in lands on the list, with the buffer you were last
     // reading opened over it when there is one — so a returning user is back in their conversation

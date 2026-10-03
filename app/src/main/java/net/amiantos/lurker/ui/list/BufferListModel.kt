@@ -214,18 +214,19 @@ data class Section private constructor(
      * The header, then the rows, with the pinned break where it belongs. [rows] is unique by
      * construction — see [of].
      */
-    val entries: List<Pair<ItemId, Entry>>
-        get() {
-            val out = ArrayList<Pair<ItemId, Entry>>(rows.size + 2)
-            out.add(headerItem to Entry.HeaderEntry(header))
-            for ((index, row) in rows.withIndex()) {
-                if (hasPinBreak && index == pinnedCount) {
-                    out.add(ItemId(id, ItemId.PIN_BREAK_KEY) to Entry.PinBreak)
-                }
-                out.add(ItemId(id, row.buffer.key.id) to Entry.BufferEntry(row))
+    val entries: List<Pair<ItemId, Entry>> = run {
+        // Built once per section, not per read: the list reads every section's entries on every
+        // recomposition, drag moves included.
+        val out = ArrayList<Pair<ItemId, Entry>>(rows.size + 2)
+        out.add(headerItem to Entry.HeaderEntry(header))
+        for ((index, row) in rows.withIndex()) {
+            if (hasPinBreak && index == pinnedCount) {
+                out.add(ItemId(id, ItemId.PIN_BREAK_KEY) to Entry.PinBreak)
             }
-            return out
+            out.add(ItemId(id, row.buffer.key.id) to Entry.BufferEntry(row))
         }
+        out
+    }
 
     /** This section under a new header — the rule above, set once every section is known. */
     internal fun withHeader(header: Header): Section = copy(header = header)
@@ -528,7 +529,7 @@ object BufferListModel {
     /**
      * Gives up waiting for `backlog-complete` and draws whatever has arrived, after this long.
      * Long enough that any burst worth waiting for lands first, short enough that a server which
-     * never terminates one isn't a broken app. See `BufferListScreen`'s fallback.
+     * never terminates one isn't a broken app. See `MainScaffold`'s fallback.
      */
     const val BURST_WAIT_MS = 4_000L
 
@@ -561,8 +562,13 @@ object BufferListModel {
      * Whether the connection is the reason nothing has landed is the banner's question, not this
      * one's — so an offline launch shows the spinner *and* the banner, each answering its own.
      */
-    fun placeholder(inputs: BufferListInputs, sections: List<Section>): BufferListPlaceholder =
-        BufferListPlaceholder.of(
+    fun placeholder(inputs: BufferListInputs, sections: List<Section>, draws: Boolean): BufferListPlaceholder =
+        // ⚠ A shut gate is "loading", whatever the store says. The sections are empty because
+        // nothing is DRAWN, not because nothing exists — and `backlogComplete` stays latched from
+        // the first burst through a reconnect's, so asking the kit here would put "No buffers yet"
+        // over a full account while a resync runs (a list first composed mid-resync, e.g. after a
+        // launch restore kept it off screen for the first burst).
+        if (!draws) BufferListPlaceholder.Loading else BufferListPlaceholder.of(
             hasBuffers = sections.isNotEmpty(),
             hasNetworks = inputs.networks.isNotEmpty(),
             backlogComplete = inputs.backlogComplete,
@@ -745,6 +751,10 @@ object BufferListModel {
         to: Int,
     ): List<Int>? {
         val stored = orderedFavorites(favorites, optimistic).map { it.key.id }
+        // Answers `stored` unchanged — so this sends nothing — while two favorites share a key
+        // (the nick-change collision `Section.of` de-duplicates): `FavoriteOrder` finds a slot
+        // count that doesn't match the visible rows and refuses. That is what makes the key→id map
+        // below safe; it never sees a duplicated key.
         val reordered = FavoriteOrder.moved(stored, visible = visible, from = from, to = to)
         if (reordered == stored) return null
         val idByKey = LinkedHashMap<String, Int>()
@@ -918,7 +928,16 @@ object BufferListModel {
             else -> if (isDm) "Add to Friends" else "Add to Favorites"
         }
         return RowMenu(
-            joinEnabled = if (parted) state.networks[networkId]?.state == ConnectionState.Connected else null,
+            // Layered outside-in like the header's light: while Lurker's own socket is down the
+            // network's state is last-known, and a JOIN sent now goes nowhere (lurker-ios#57).
+            joinEnabled = if (parted) {
+                val network = state.networks[networkId]
+                network != null &&
+                    StatusLight.of(reachable = state.reachable, connection = state.connection, network = network.state) ==
+                    StatusLight.Good
+            } else {
+                null
+            },
             favoriteTitle = favoriteTitle,
             favoriteDestructive = isFavorite && isDm,
             isFavorite = isFavorite,

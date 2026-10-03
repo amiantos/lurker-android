@@ -521,6 +521,21 @@ class BufferListModelTest {
     }
 
     @Test
+    fun aDropDuringTheRenameCollisionSendsNothing() {
+        // bob renamed to alice: two favorites under one key until favorites-changed dedupes them.
+        val favorites = listOf(favorite(1, "alice", 10), favorite(1, "alice", 11), favorite(1, "carol", 12))
+        val order = BufferListModel.droppedOrder(
+            favorites,
+            optimistic = null,
+            visible = listOf(BufferKey(1, "alice").id, BufferKey(1, "carol").id),
+            from = 1,
+            to = 0,
+        )
+        // Refused rather than mapped: a key→id map would send 10 twice and drop 11.
+        assertNull(order)
+    }
+
+    @Test
     fun aDragStaysInItsOwnGroup() {
         val favorites = listOf(favorite(1, "#a", 1), favorite(1, "#b", 2), favorite(1, "bob", 3))
         val built = sections(state(favorites = favorites))
@@ -575,6 +590,12 @@ class BufferListModelTest {
             buffers = listOf(buffer(1, "#left", joined = false)),
         )
         assertEquals(false, BufferListModel.rowMenu(down, down.buffer(BufferKey(1, "#left")))!!.joinEnabled)
+        // The network's last-known state says connected, but Lurker's own socket is down: a JOIN
+        // now goes nowhere.
+        val stale = state(buffers = listOf(buffer(1, "#left", joined = false)), connection = SocketStatus.Reconnecting)
+        assertEquals(false, BufferListModel.rowMenu(stale, stale.buffer(BufferKey(1, "#left")))!!.joinEnabled)
+        val offline = state(buffers = listOf(buffer(1, "#left", joined = false)), reachable = false)
+        assertEquals(false, BufferListModel.rowMenu(offline, offline.buffer(BufferKey(1, "#left")))!!.joinEnabled)
     }
 
     @Test
@@ -608,13 +629,21 @@ class BufferListModelTest {
     @Test
     fun thePlaceholderTellsLoadingFromEmpty() {
         val loading = BufferListInputs.of(state(networks = emptyList(), backlogComplete = false))
-        assertEquals(BufferListPlaceholder.Loading, BufferListModel.placeholder(loading, emptyList()))
+        assertEquals(BufferListPlaceholder.Loading, BufferListModel.placeholder(loading, emptyList(), draws = true))
         val noNetworks = BufferListInputs.of(state(networks = emptyList()))
-        assertEquals(BufferListPlaceholder.NoNetworks, BufferListModel.placeholder(noNetworks, emptyList()))
+        assertEquals(BufferListPlaceholder.NoNetworks, BufferListModel.placeholder(noNetworks, emptyList(), draws = true))
         val noBuffers = BufferListInputs.of(state())
-        assertEquals(BufferListPlaceholder.NoBuffers, BufferListModel.placeholder(noBuffers, emptyList()))
+        assertEquals(BufferListPlaceholder.NoBuffers, BufferListModel.placeholder(noBuffers, emptyList(), draws = true))
         val some = BufferListInputs.of(state(buffers = listOf(buffer(1, "#a"))))
-        assertEquals(BufferListPlaceholder.None, BufferListModel.placeholder(some, BufferListModel.buildSections(some)))
+        assertEquals(BufferListPlaceholder.None, BufferListModel.placeholder(some, BufferListModel.buildSections(some), draws = true))
+    }
+
+    @Test
+    fun aShutGateIsLoadingEvenWithTheBacklogLatched() {
+        // A list first composed mid-resync: `backlogComplete` is still true from the first burst,
+        // nothing is drawn, and the account is full — "No buffers yet" would be a lie.
+        val resyncing = BufferListInputs.of(state(buffers = listOf(buffer(1, "#a"))))
+        assertEquals(BufferListPlaceholder.Loading, BufferListModel.placeholder(resyncing, emptyList(), draws = false))
     }
 
     @Test

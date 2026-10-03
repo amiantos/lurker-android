@@ -62,7 +62,6 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import net.amiantos.lurker.ui.shell.ConnectionBanner
@@ -143,26 +142,9 @@ fun BufferListScreen(
     // latch anyway — sign-out swaps `MainScaffold` out entirely (`AppRoot`), and the latch with it
     // — so nothing has to notice a session change to do it.
     val draws = BufferListModel.drawsList(rosterSettled = inputs.rosterSettled, hasRenderedList = hasRenderedList)
-    if (!draws) {
-        // Gives up waiting for `backlog-complete` and draws whatever has arrived.
-        //
-        // ⚠⚠ Not belt-and-braces — the terminator genuinely may not come. It was added as an
-        // ADDITIVE frame with no protocol-version bump and no capability signal (lurker#640), so a
-        // self-hosted server older than it simply never sends one, and this is a product whose
-        // operators upgrade on their own schedule. A current server withholds it too when a burst
-        // throws part-way, which is deliberate: it is emitted from inside `sendSnapshotInner`
-        // precisely so a failed burst isn't declared complete.
-        //
-        // Without this, waiting for it would trade a flicker for a permanent spinner over a fully
-        // populated store — a far worse trade. The wait is the optimization; drawing is the correct
-        // behaviour, so the fallback is the one that has to be unconditional.
-        //
-        // Armed while the gate is shut and cancelled when it opens, by leaving composition.
-        LaunchedEffect(Unit) {
-            delay(BufferListModel.BURST_WAIT_MS)
-            onListRendered()
-        }
-    } else if (!hasRenderedList) {
+    // A settled list has been drawn: latch it. The fallback that latches it when the burst never
+    // settles is `MainScaffold`'s, which runs for the session rather than for this pane.
+    if (draws && !hasRenderedList) {
         SideEffect { onListRendered() }
     }
 
@@ -179,7 +161,7 @@ fun BufferListScreen(
     }
     val latestBuilt by rememberUpdatedState(built)
     val sections = drag?.rendered() ?: built
-    val placeholder = BufferListModel.placeholder(inputs, built)
+    val placeholder = BufferListModel.placeholder(inputs, built, draws)
 
     val actions = BufferListActions(
         onOpen = { row ->
@@ -804,7 +786,7 @@ private fun PopulatedPreview(dark: Boolean) {
         BufferListContent(
             title = BufferListModel.statusTitle(inputs),
             sections = sections,
-            placeholder = BufferListModel.placeholder(inputs, sections),
+            placeholder = BufferListModel.placeholder(inputs, sections, draws = true),
             banner = ConnectionBannerState.Hidden,
             openKey = BufferKey(1, "#lurker"),
             marksOpenBuffer = true,
