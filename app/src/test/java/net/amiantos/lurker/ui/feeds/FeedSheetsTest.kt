@@ -18,10 +18,13 @@ class FeedSheetsTest {
     fun onOnePaneBothScreensCarryEveryView() {
         // The list: search in its bar, the rest in its menu.
         assertTrue(ViewsLayout.listSearch(sideBySide = false))
-        assertEquals(listOf(AppView.Activity, AppView.Bookmarks), ViewsLayout.listMenu(sideBySide = false))
-        // The conversation: all three behind its ⋮, in iOS's order.
+        assertEquals(listOf(AppView.Activity, AppView.Bookmarks, AppView.Uploads), ViewsLayout.listMenu(sideBySide = false))
+        // The conversation: all four behind its ⋮, in iOS's order.
         assertEquals(emptyList<AppView>(), ViewsLayout.conversationButtons(sideBySide = false))
-        assertEquals(listOf(AppView.Search, AppView.Activity, AppView.Bookmarks), ViewsLayout.conversationMenu(sideBySide = false))
+        assertEquals(
+            listOf(AppView.Search, AppView.Activity, AppView.Bookmarks, AppView.Uploads),
+            ViewsLayout.conversationMenu(sideBySide = false),
+        )
     }
 
     @Test

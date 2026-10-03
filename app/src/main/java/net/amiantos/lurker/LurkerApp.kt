@@ -25,6 +25,11 @@ import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.dcc.DccOffers
 import net.amiantos.lurker.ui.media.PreviewImageLoader
 import net.amiantos.lurker.ui.media.PreviewUpdates
+import net.amiantos.lurker.ui.uploads.AndroidUploadPlatform
+import net.amiantos.lurker.ui.uploads.ComposerInserts
+import net.amiantos.lurker.ui.uploads.ShareInbox
+import net.amiantos.lurker.ui.uploads.UploadRunner
+import net.amiantos.lurker.ui.uploads.UploadServices
 import net.amiantos.lurkerkit.session.AppBadge
 import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.session.OAuthClients
@@ -71,6 +76,14 @@ class LurkerApp : Application() {
         private set
 
     /**
+     * The upload run, the composers' registry and the waiting share (lurker-android#15) — app-long, so
+     * an upload survives a rotation and a buffer switch, and a share received while signed out waits
+     * for the sign-in. See [UploadServices].
+     */
+    lateinit var uploads: UploadServices
+        private set
+
+    /**
      * Same shape as reachability and push: the kit decides the number, the app makes the platform
      * call. Android has no first-party launcher badge outside notifications — a launcher draws a
      * dot or a count from the app's *notifications* — so until push there is nothing to write to,
@@ -105,6 +118,16 @@ class LurkerApp : Application() {
         badge.follow(model.statePublisher, scope)
 
         dccOffers = DccOffers(model, scope) { refusal -> events.send(AppEvent.Notice(refusal)) }
+
+        val uploadPlatform = AndroidUploadPlatform(this, model, scope)
+        // A process killed mid-upload leaves its staged copy behind; nothing else will delete it.
+        uploadPlatform.clearLeftovers()
+        val inserts = ComposerInserts()
+        uploads = UploadServices(
+            runner = UploadRunner(scope, uploadPlatform, inserts, clipboard = uploadPlatform::copyToClipboard),
+            inserts = inserts,
+            shares = ShareInbox(),
+        )
 
         wireCallbacks()
         observeSession()
@@ -203,11 +226,16 @@ class LurkerApp : Application() {
      */
     private fun observeSession() {
         scope.launch {
+            var was = model.session
             model.sessionPublisher.collect { session ->
                 if (session == ChatViewModel.SessionState.LoggedOut) {
                     uiPreferences.forgetLastOpenBuffer()
                     events.drain()
                 }
+                // Only a session ENDING: a share received while signed out waits through a sign-in
+                // attempt that fails (LoggingIn → LoggedOut) for the one that works.
+                if (was == ChatViewModel.SessionState.LoggedIn && session != ChatViewModel.SessionState.LoggedIn) uploads.reset()
+                was = session
                 // U9: signing in is the moment push becomes askable (`enablePushIfSignedIn`).
             }
         }

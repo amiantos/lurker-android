@@ -96,6 +96,9 @@ import net.amiantos.lurker.ui.composer.rememberComposerState
 import net.amiantos.lurker.ui.media.MediaSource
 import net.amiantos.lurker.ui.media.PreviewContext
 import net.amiantos.lurker.ui.media.PreviewToggles
+import net.amiantos.lurker.ui.uploads.ComposerInsertTarget
+import net.amiantos.lurker.ui.uploads.LocalUploadServices
+import net.amiantos.lurker.ui.uploads.rememberAttachments
 import net.amiantos.lurker.ui.message.MessageListContext
 import net.amiantos.lurker.ui.message.MessageListLayout
 import net.amiantos.lurker.ui.message.MessageListRow
@@ -186,7 +189,8 @@ import java.time.ZoneOffset
  * @param onShowMembers the bar's members button (U5) — offered on channels only.
  * @param onShowInfo the bar's info button (U5) — this buffer's info and settings, on every buffer.
  * @param sideBySide whether the list is beside this screen — the bar's views come out as buttons (U7).
- * @param onOpenView the bar's views — Search, Activity, Bookmarks (U7), which `MainScaffold` hosts.
+ * @param onOpenView the bar's views — Search, Activity, Bookmarks (U7) and Uploads (U8), which
+ *   `MainScaffold` hosts.
  * @param onOpenMedia the media viewer `MainScaffold` hosts, over a message's pictures and positioned on
  *   one; null and a tap on a picture opens its address.
  * @param media where preview pictures come from — `MainScaffold`'s, shared with the viewer.
@@ -705,6 +709,13 @@ fun ConversationScreen(
         onShowProfile = onShowProfile,
     )
 
+    // Uploads (lurker-android#15): this composer is where outside text lands while it's on screen — an
+    // upload's link, Add to Message, a share's text — and its paperclip and paste start a run. No
+    // paperclip in the system buffer, which has nothing to attach.
+    val uploads = LocalUploadServices.current
+    ComposerInsertTarget(uploads, key, composer::insert)
+    val attachments = rememberAttachments(uploads, attaches = key.networkId != null)
+
     // The keyboard arriving FOR THE COMPOSER carries the reader to it — `keep_position_on_send` is
     // written as a rule about sending, but on a phone raising the keyboard to reply is what takes a
     // reader out of the history they were reading, well before they've typed anything (iOS's
@@ -745,7 +756,7 @@ fun ConversationScreen(
         flash = flash,
         onJumpToUnread = { if (scroll.jumpToFirstUnread()) startJump() },
         onJumpToLatest = ::jumpToLatest,
-        bottomBar = { ComposerBar(composer, uiPreferences.composerAutocapitalizes, clockKey = day) },
+        bottomBar = { ComposerBar(composer, uiPreferences.composerAutocapitalizes, clockKey = day, attachments = attachments) },
         // Inside the screen's link-opener provider, so Open Link uses the same `SafeUriHandler` as a tap.
         sheets = {
             MessageActionsHost(
@@ -1007,7 +1018,7 @@ internal fun ConversationContent(
                     }
                     // The views — Search, Activity, Bookmarks — trailing-most, per layout (iOS's
                     // `applyBarLayout`): behind one ⋮ on top of the list, Search a button beside it.
-                    // U8: Uploads joins them.
+                    // Uploads among them, which from here can Add to Message (`MainScaffold`).
                     if (onOpenView != null) ConversationViewsActions(sideBySide = sideBySide, onOpenView = onOpenView)
                 },
             )

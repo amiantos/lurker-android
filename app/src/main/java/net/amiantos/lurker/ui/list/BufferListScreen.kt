@@ -442,9 +442,10 @@ private fun AddMenu(actions: BufferListActions) {
  * Networks and Sign Out live in Settings, as on iOS: Networks is Settings' first row, and sign-out
  * sits behind a confirmation there rather than one slipped thumb away in a menu.
  *
- * On its own screen it also carries the views — Activity and Bookmarks, app-scoped, so reaching them
- * only from inside some conversation would be an artifact (iOS's `viewsMenuElements`). Side by side
- * they're the conversation column's, and a copy here would be the same thing twice on one screen.
+ * On its own screen it also carries the views — Activity, Bookmarks and Uploads, app-scoped, so
+ * reaching them only from inside some conversation would be an artifact (iOS's `viewsMenuElements`).
+ * Side by side they're the conversation column's, and a copy here would be the same thing twice on
+ * one screen. Uploads opened from here offers no Add to Message: there's no composer behind the list.
  */
 @Composable
 private fun OverflowMenu(actions: BufferListActions, sideBySide: Boolean) {
@@ -479,7 +480,6 @@ private fun OverflowMenu(actions: BufferListActions, sideBySide: Boolean) {
                     actions.onOpenView(view)
                 }
             }
-            // U8: and Uploads.
             HorizontalDivider()
             DropdownMenuItem(
                 text = { Text("Settings") },
