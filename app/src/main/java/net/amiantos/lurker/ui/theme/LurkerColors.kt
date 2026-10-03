@@ -108,8 +108,17 @@ class LurkerColors private constructor(
     /** See [good]. */
     val warn: Color = pick(dark = "#f9d978", light = "#cc7a0a")
 
-    /** See [good]. Also Material's `error`. */
+    /** See [good]. Material's `error` is [badText], the text-safe variant. */
     val bad: Color = pick(dark = "#ed6c89", light = "#e14775")
+
+    /**
+     * [bad] as TEXT. Port-only: iOS sets a status label in `bad` itself, and in light the
+     * palette's `#e14775` is 3.6:1 on [bg] — under the 4.5:1 normal text needs, and a failed
+     * sign-in's one explanation is normal text. The same hue, darkened until it clears 4.5:1 on
+     * [bgSoft] too (5.1:1 on [bg]); the dark value already does (5.5:1). Signals that are not
+     * text — a dot, a tint, a wash — keep [bad].
+     */
+    val badText: Color = pick(dark = "#ed6c89", light = "#bf2f5b")
 
     /** The colour for a status light. Never the only carrier: the subtitle says it in words. */
     fun color(light: StatusLight): Color =

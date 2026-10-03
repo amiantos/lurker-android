@@ -139,7 +139,7 @@ private fun SignInContent(
                     Text(
                         status,
                         style = MaterialTheme.typography.bodySmall,
-                        color = LurkerTheme.colors.bad,
+                        color = LurkerTheme.colors.badText,
                         // Read out when it appears: it's the only word on why nothing happened.
                         modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                     )

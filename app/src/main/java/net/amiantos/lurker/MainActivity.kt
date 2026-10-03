@@ -26,11 +26,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         // A redirect can also be what *starts* this activity: the system reclaimed it while the tab
-        // was up, so there was nothing for `onNewIntent` to reach. Only a fresh launch carries a new
-        // one — a recreation (saved state) or a relaunch from recents replays the old intent, which
-        // must not be read as an answer to a later attempt.
-        val replayed = savedInstanceState != null || (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
-        if (!replayed) app.browserSignIn.onRedirect(intent.dataString)
+        // was up, so there was nothing for `onNewIntent` to reach — and it arrives WITH saved
+        // state, so saved state cannot be what tells a fresh redirect from a replayed one. A
+        // relaunch from recents replays the launching intent (flagged); a recreation replays
+        // whatever `setIntent` left, which is why a redirect is consumed below once it is read.
+        val fromHistory = (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+        if (!fromHistory) consumeRedirect(intent)
         setContent {
             LurkerTheme {
                 AppRoot(
@@ -47,7 +48,18 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         // Always before the `onResume` that follows it — which is what lets that resume read "no
         // redirect" as "the tab was closed" (see `RedirectWaiter`).
-        app.browserSignIn.onRedirect(intent.dataString)
+        consumeRedirect(intent)
+    }
+
+    /**
+     * Hand the intent's data to the sign-in, then strip it from the intent the activity keeps, so
+     * a later recreation replays an intent that answers nothing.
+     */
+    private fun consumeRedirect(intent: Intent) {
+        val data = intent.dataString ?: return
+        app.browserSignIn.onRedirect(data)
+        intent.data = null
+        setIntent(intent)
     }
 
     override fun onStart() {

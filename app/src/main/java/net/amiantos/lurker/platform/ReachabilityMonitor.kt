@@ -36,10 +36,10 @@ class ReachabilityMonitor(context: Context) {
      * order, which iOS gets from `DispatchQueue.main.async`.
      */
     fun start(onChange: (Boolean) -> Unit) {
-        // Asked once up front: with no network at all the callback never fires, and the store's
-        // default (reachable) would read "Connecting…" forever instead of "No internet connection".
-        current = connectivity.activeNetwork
-        onChange(current != null)
+        // Registered BEFORE the first sample. The other way round, a default that goes away
+        // between the sample and the registration is a loss the callback never saw and never
+        // reports, and the app would read "reachable" until the next change. Registration's own
+        // `onAvailable` is queued behind this call on the handler, so it still lands in order.
         connectivity.registerDefaultNetworkCallback(
             object : ConnectivityManager.NetworkCallback() {
                 override fun onAvailable(network: Network) {
@@ -57,5 +57,9 @@ class ReachabilityMonitor(context: Context) {
             },
             Handler(Looper.getMainLooper()),
         )
+        // Asked once up front: with no network at all the callback never fires, and the store's
+        // default (reachable) would read "Connecting…" forever instead of "No internet connection".
+        current = connectivity.activeNetwork
+        onChange(current != null)
     }
 }

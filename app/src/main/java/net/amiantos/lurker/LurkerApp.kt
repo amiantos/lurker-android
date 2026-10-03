@@ -112,11 +112,12 @@ class LurkerApp : Application() {
      */
     fun signIn(server: String) {
         if (model.session == ChatViewModel.SessionState.LoggingIn) return
-        // Remembered for the next sign-in (the prefill after sign-out). Only a non-blank one, so a
-        // stray empty submit can't wipe a good value.
-        if (server.isNotBlank()) uiPreferences.lastServerURL = server
         scope.launch {
-            model.signIn(server = server, appName = APP_NAME) { page -> browserSignIn.authorize(page) }
+            val signedIn = model.signIn(server = server, appName = APP_NAME) { page -> browserSignIn.authorize(page) }
+            // Remembered for the next sign-in (the prefill after sign-out) — once it has worked,
+            // so a typo or a refused address never replaces the last good one. (iOS writes it on
+            // the tap.) As typed, not normalised: the prefill should read as the user wrote it.
+            if (signedIn) uiPreferences.lastServerURL = server
         }
     }
 

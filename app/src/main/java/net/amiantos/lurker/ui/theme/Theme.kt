@@ -108,7 +108,9 @@ internal fun lurkerColorScheme(colors: LurkerColors): ColorScheme {
         surfaceTint = colors.bgSoft,
         inverseSurface = colors.fg,
         inverseOnSurface = colors.bg,
-        error = colors.bad,
+        // `error` is what Material writes text in (a destructive label, a field's supporting
+        // text), so it is the text-safe variant; the wash below keeps the palette's signal.
+        error = colors.badText,
         onError = colors.bg,
         errorContainer = errorWash,
         onErrorContainer = colors.fg,

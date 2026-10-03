@@ -122,7 +122,7 @@ class LurkerColorsTest {
             assertEquals(colors.bgSoft, scheme.surface)
             assertEquals(colors.fg, scheme.onSurface)
             assertEquals(colors.accent, scheme.primary)
-            assertEquals(colors.bad, scheme.error)
+            assertEquals(colors.badText, scheme.error)
             assertEquals(colors.fgMuted, scheme.outline)
             assertEquals(colors.border, scheme.outlineVariant)
             assertEquals(colors.fgMuted, scheme.onSurfaceVariant)
@@ -130,6 +130,27 @@ class LurkerColorsTest {
         // A snackbar's action sits on the other scheme's ground, so it takes the other accent.
         assertEquals(LurkerColors.Light.accent, lurkerColorScheme(LurkerColors.Dark).inversePrimary)
         assertEquals(LurkerColors.Dark.accent, lurkerColorScheme(LurkerColors.Light).inversePrimary)
+    }
+
+    /**
+     * The text-safe `bad` clears WCAG's 4.5:1 for normal text on both grounds it is drawn over,
+     * in both schemes; the palette's own `bad` does not in light (3.6:1), which is why the token
+     * exists. Computed, not asserted by eye.
+     */
+    @Test
+    fun errorTextClearsNormalTextContrast() {
+        for (colors in listOf(LurkerColors.Dark, LurkerColors.Light)) {
+            assert(contrast(colors.badText, colors.bg) >= 4.5) { "${colors.isDark}: badText on bg" }
+            assert(contrast(colors.badText, colors.bgSoft) >= 4.5) { "${colors.isDark}: badText on bgSoft" }
+        }
+        assert(contrast(LurkerColors.Light.bad, LurkerColors.Light.bg) < 4.5) { "the palette's light bad is why" }
+    }
+
+    private fun contrast(a: Color, b: Color): Double {
+        fun channel(c: Float): Double = if (c <= 0.03928) c / 12.92 else Math.pow((c + 0.055) / 1.055, 2.4)
+        fun luminance(c: Color) = 0.2126 * channel(c.red) + 0.7152 * channel(c.green) + 0.0722 * channel(c.blue)
+        val (hi, lo) = listOf(luminance(a), luminance(b)).sortedDescending()
+        return (hi + 0.05) / (lo + 0.05)
     }
 
     private fun assertHex(hex: String, color: Color) {
