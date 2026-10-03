@@ -169,7 +169,9 @@ import java.time.ZoneOffset
  * @param onMoved the buffer was renamed under us — follow it to its new key.
  * @param uiPreferences the device's own settings — the composer reads its capitalization.
  * @param onOpenBuffer `/msg` or `/query` opened a DM and asks to switch to it.
- * @param onShowProfile `/whois` asks for this person's profile. U5: the profile sheet.
+ * @param onShowProfile `/whois` asks for this person's profile — `BufferSheets.showProfile`.
+ * @param onShowMembers the bar's members button (U5) — offered on channels only.
+ * @param onShowInfo the bar's info button (U5) — this buffer's info and settings, on every buffer.
  */
 @Composable
 fun ConversationScreen(
@@ -186,6 +188,8 @@ fun ConversationScreen(
     uiPreferences: UiPreferences,
     onOpenBuffer: (BufferKey) -> Unit,
     onShowProfile: (networkId: Int, nick: String) -> Unit = { _, _ -> },
+    onShowMembers: () -> Unit = {},
+    onShowInfo: () -> Unit = {},
 ) {
     val kind = remember(key) { BufferKind.of(networkId = key.networkId, target = key.target) }
 
@@ -658,6 +662,10 @@ fun ConversationScreen(
         title = title,
         showsBack = showsBack,
         onBack = onBack,
+        // A channel's nick list. iOS reaches it by a swipe in from the right edge as well as the info
+        // sheet's Members row; on Android that edge is the system's back gesture, so it's a button here.
+        onShowMembers = if (kind == BufferKind.Channel) onShowMembers else null,
+        onShowInfo = onShowInfo,
         banner = banner,
         onConnectionBannerShown = { connectionShown = it },
         rows = rows,
@@ -880,6 +888,8 @@ internal fun ConversationContent(
     bottomBar: @Composable () -> Unit = {},
     /** What floats over the list's bottom edge, given the reservation's height: the suggestions. */
     overlay: @Composable BoxScope.(bottom: Dp) -> Unit = {},
+    onShowMembers: (() -> Unit)? = null,
+    onShowInfo: (() -> Unit)? = null,
 ) {
     val colors = LurkerTheme.colors
     Scaffold(
@@ -903,8 +913,17 @@ internal fun ConversationContent(
                     }
                 },
                 actions = {
-                    // U5: the member list and buffer info. U7: search and the views menu. iOS sets
-                    // these per layout (`applyBarLayout`), beside the list or on top of it.
+                    // iOS's phone bar, trailing-most first: the views menu ("…"), then Info — the one
+                    // item about THIS buffer rather than a view over all. Members leads them here, being
+                    // the one iOS reaches by an edge swipe Android can't have (see `ConversationScreen`).
+                    if (onShowMembers != null) {
+                        IconButton(onClick = onShowMembers) { Icon(LurkerIcons.Group, contentDescription = "Members") }
+                    }
+                    if (onShowInfo != null) {
+                        IconButton(onClick = onShowInfo) { Icon(LurkerIcons.Info, contentDescription = "Info") }
+                    }
+                    // U7: the views menu — Search, Highlights, Bookmarks, Uploads behind one "…", trailing-most.
+                    // iOS sets these per layout (`applyBarLayout`), beside the list or on top of it.
                 },
             )
         },
@@ -1031,6 +1050,8 @@ private fun ConversationPreview(dark: Boolean, empty: Boolean, pills: Conversati
             empty = ConversationModel.emptyState(BufferKind.Channel, "#lurker"),
             listState = rememberLazyListState(),
             pills = pills,
+            onShowMembers = {},
+            onShowInfo = {},
         )
     }
 }
