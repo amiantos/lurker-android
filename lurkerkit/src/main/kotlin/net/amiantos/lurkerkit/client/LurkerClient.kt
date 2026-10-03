@@ -58,6 +58,7 @@ import okhttp3.Cache
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.CookieJar
+import okhttp3.Dispatcher
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -193,8 +194,12 @@ internal class LurkerClient(
         //
         // Port note: OkHttp's `Cache` is disk only, with no per-response ceiling, so the 200 MB
         // is kept and LurkerKit's 16 MB memory capacity has no counterpart. It is built from
-        // `httpClient`, sharing its connection pool and dispatcher.
+        // `httpClient`, sharing its connection pool — but with a `Dispatcher` of its own, as the
+        // two `URLSession`s have their own per-host limits: twenty slow image bodies on the
+        // shared dispatcher's five-per-host cap would otherwise queue every REST call and the
+        // socket upgrade behind them.
         mediaSession = httpClient.newBuilder()
+            .dispatcher(Dispatcher())
             .cache(mediaCacheDirectory?.let { Cache(it, 200L * 1024 * 1024) })
             .build()
     }
@@ -206,7 +211,13 @@ internal class LurkerClient(
      * `removeAllCachedResponses` does.
      */
     fun clearMediaCache() {
-        mediaSession.cache?.evictAll()
+        try {
+            mediaSession.cache?.evictAll()
+        } catch (e: IOException) {
+            // `removeAllCachedResponses` cannot fail; a cache directory that cannot be cleared
+            // must not end the sign-out that asked.
+            logger.warning("Media cache purge failed: ${e.message}")
+        }
     }
 
     // MARK: - Sign-in (OAuth)
@@ -1801,12 +1812,14 @@ internal class LurkerClient(
      * Port note: OkHttp's `send` has no completion. It answers at once whether the frame was
      * queued, false once the socket is closing, closed or failed (or 16 MiB is already queued),
      * and a frame it queued that then fails to write ends the socket through `onFailure`
-     * instead. So `onComplete` reports the queueing and `onFlush` fires after it, both before
-     * this returns; and a refused frame takes LurkerKit's write-failure path — `onComplete`
-     * false, and for a deliberate write the "Send failed" error, raised after this returns as
-     * LurkerKit raises it — while this still answers true, a socket having been there to take
-     * it. OkHttp gives no reason for a refusal; the one shown is the POSIX `ENOTCONN` text iOS
-     * reports for a write to a dead socket.
+     * instead. So `onComplete` reports the queueing, before this returns; `onFlush` fires a
+     * turn later, once the socket's queue has drained (`awaitWritten`) — the nearest thing to
+     * "written" OkHttp exposes, and what a background-allowance release has to wait for. A
+     * refused frame takes LurkerKit's write-failure path — `onComplete` false, and for a
+     * deliberate write the "Send failed" error, raised after this returns as LurkerKit raises
+     * it — while this still answers true, a socket having been there to take it. OkHttp gives
+     * no reason for a refusal; the one shown is the POSIX `ENOTCONN` text iOS reports for a
+     * write to a dead socket.
      */
     private fun send(
         verb: JsonObject,
@@ -1822,12 +1835,30 @@ internal class LurkerClient(
         val text = Json.encodeToString(JsonObject.serializer(), verb)
         val queued = socket.send(text)
         onComplete?.invoke(queued)
-        if (!queued && surfacesFailure) {
-            val reason = "Socket is not connected"
-            scope.task { onFrame(ServerFrame.ServerError("Send failed: $reason")) }
+        scope.task {
+            if (queued) {
+                awaitWritten(socket)
+            } else if (surfacesFailure) {
+                onFrame(ServerFrame.ServerError("Send failed: Socket is not connected"))
+            }
+            onFlush?.invoke()
         }
-        onFlush?.invoke()
         return true
+    }
+
+    /**
+     * The nearest OkHttp comes to "written to the wire": `queueSize` counts the bytes it has
+     * accepted and not yet handed to the connection, and it reaches zero only after the writer
+     * thread has sent the frame. Polled, because nothing signals it; bounded, because a socket
+     * that has stopped writing will fail on its own and the caller's `onFlush` (the background
+     * allowance release, the presence re-assert) must not wait on that.
+     */
+    private suspend fun awaitWritten(socket: WebSocket) {
+        var waited = 0L
+        while (socket.queueSize() > 0 && waited < WRITE_DRAIN_DEADLINE_MS) {
+            delay(WRITE_DRAIN_POLL_MS)
+            waited += WRITE_DRAIN_POLL_MS
+        }
     }
 
     /**
@@ -1934,7 +1965,7 @@ internal class LurkerClient(
     /** Answer one waiter, once. Later answers for the same id find nothing and do nothing. */
     private fun settleReply(clientId: String, reply: VerbReply) {
         replyTimeouts.remove(clientId)?.cancel()
-        pendingReplies.remove(clientId)?.resume(reply)
+        pendingReplies.remove(clientId)?.let { resumeLater(it, reply) }
     }
 
     /** The socket a question went down is gone, so its answer is too. */
@@ -1943,7 +1974,19 @@ internal class LurkerClient(
         pendingReplies.clear()
         for (timeout in replyTimeouts.values) timeout.cancel()
         replyTimeouts.clear()
-        for (continuation in waiting) continuation.resume(VerbReply.connectionLost)
+        for (continuation in waiting) resumeLater(continuation, VerbReply.connectionLost)
+    }
+
+    /**
+     * Port note: a `CheckedContinuation` resumed from the main actor runs its waiter on the NEXT
+     * main-actor hop, never inline. A `CancellableContinuation` under `Dispatchers.Main.immediate`
+     * runs it at once — in the middle of `openSocket`, `close` or `handleClose`, before `socket`
+     * is reassigned or the `SocketClosed` frame is out, where a waiter that reacts by reconnecting
+     * would nest a second `openSocket` inside the first and strand a socket. So every settlement
+     * is deferred a turn, as `task` defers a `Task`.
+     */
+    private fun resumeLater(continuation: CancellableContinuation<VerbReply>, reply: VerbReply) {
+        scope.task { continuation.resume(reply) }
     }
 
     /**
@@ -2857,3 +2900,7 @@ private suspend fun OkHttpClient.download(request: Request): Pair<Int, File> =
 
 /** An error's `localizedDescription`, near enough: its message, or its type where it has none. */
 private fun Throwable.description(): String = message ?: toString()
+
+/** How often `awaitWritten` looks at the socket's queue, and how long it is prepared to look. */
+private const val WRITE_DRAIN_POLL_MS = 10L
+private const val WRITE_DRAIN_DEADLINE_MS = 2_000L

@@ -9,13 +9,13 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import net.amiantos.lurkerkit.support.removingPercentEncoding
 import net.amiantos.lurkerkit.support.utf8OrNull
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okio.Buffer
 import okio.ByteString
 import okio.ByteString.Companion.encodeUtf8
 import okio.ByteString.Companion.toByteString
@@ -275,51 +275,23 @@ object OAuth {
 
     /**
      * `URLComponents(url:resolvingAgainstBaseURL:)?.queryItems`, by hand: the query is what lies
-     * between the first `?` and the `#` after it. Empty when there is none.
+     * between the first `?` and the fragment, and a `?` inside the fragment opens nothing. Empty
+     * when there is none.
      */
     private fun queryItems(url: String): List<Pair<String, String?>> {
+        val end = url.indexOf('#').let { if (it < 0) url.length else it }
         val start = url.indexOf('?')
-        if (start < 0) return emptyList()
-        val end = url.indexOf('#', start + 1).let { if (it < 0) url.length else it }
+        if (start < 0 || start > end) return emptyList()
         val query = url.substring(start + 1, end)
         return query.split("&").map { item ->
             val equals = item.indexOf('=')
             if (equals < 0) {
-                (percentDecoded(item) ?: item) to null
+                (removingPercentEncoding(item) ?: item) to null
             } else {
-                (percentDecoded(item.substring(0, equals)) ?: item.substring(0, equals)) to
-                    percentDecoded(item.substring(equals + 1))
+                (removingPercentEncoding(item.substring(0, equals)) ?: item.substring(0, equals)) to
+                    removingPercentEncoding(item.substring(equals + 1))
             }
         }
-    }
-
-    /** `removingPercentEncoding`: null for a malformed escape or bytes that are not UTF-8. */
-    private fun percentDecoded(text: String): String? {
-        if (!text.contains('%')) return text
-        val bytes = Buffer()
-        var index = 0
-        while (index < text.length) {
-            val percent = text.indexOf('%', index)
-            if (percent < 0) {
-                bytes.writeUtf8(text, index, text.length)
-                break
-            }
-            bytes.writeUtf8(text, index, percent)
-            if (percent + 2 >= text.length) return null
-            val high = hexValue(text[percent + 1])
-            val low = hexValue(text[percent + 2])
-            if (high < 0 || low < 0) return null
-            bytes.writeByte(high * 16 + low)
-            index = percent + 3
-        }
-        return bytes.readByteString().utf8OrNull()
-    }
-
-    private fun hexValue(unit: Char): Int = when (unit) {
-        in '0'..'9' -> unit - '0'
-        in 'a'..'f' -> unit - 'a' + 10
-        in 'A'..'F' -> unit - 'A' + 10
-        else -> -1
     }
 }
 

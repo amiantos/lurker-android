@@ -3,9 +3,8 @@
 
 package net.amiantos.lurkerkit.model
 
-import java.nio.ByteBuffer
-import java.nio.charset.CharacterCodingException
-import java.nio.charset.CodingErrorAction
+import net.amiantos.lurkerkit.support.hexValue
+import net.amiantos.lurkerkit.support.removingPercentEncoding
 
 /**
  * Which URLs in a message body are worth asking the server about.
@@ -226,7 +225,7 @@ object PreviewSelection {
         if (!isAuthority(url.substring(authorityStart, authorityEnd))) return null
         val pathEnd = url.indexOfAny(charArrayOf('?', '#'), authorityEnd).let { if (it < 0) url.length else it }
         val written = url.substring(authorityEnd, pathEnd)
-        val path = if (isEncodedPath(written)) percentDecoded(written) ?: "" else written
+        val path = if (isEncodedPath(written)) removingPercentEncoding(written) ?: "" else written
         if (path.length <= 1) return path
         return path.trimEnd('/').ifEmpty { "/" }
     }
@@ -271,37 +270,4 @@ object PreviewSelection {
     /** Whether the `%` at `index` opens a `%XX` escape. */
     private fun isEscape(text: String, index: Int): Boolean =
         index + 2 < text.length && hexValue(text[index + 1]) >= 0 && hexValue(text[index + 2]) >= 0
-
-    private fun hexValue(character: Char): Int = when (character) {
-        in '0'..'9' -> character - '0'
-        in 'a'..'f' -> character - 'a' + 10
-        in 'A'..'F' -> character - 'A' + 10
-        else -> -1
-    }
-
-    /** Port-only. `removingPercentEncoding` over a valid path: null when the bytes are not UTF-8. */
-    private fun percentDecoded(path: String): String? {
-        val bytes = ByteArray(path.length)
-        var count = 0
-        var index = 0
-        while (index < path.length) {
-            val character = path[index]
-            if (character == '%') {
-                bytes[count] = ((hexValue(path[index + 1]) shl 4) or hexValue(path[index + 2])).toByte()
-                index += 3
-            } else {
-                bytes[count] = character.code.toByte()
-                index += 1
-            }
-            count += 1
-        }
-        val decoder = Charsets.UTF_8.newDecoder()
-            .onMalformedInput(CodingErrorAction.REPORT)
-            .onUnmappableCharacter(CodingErrorAction.REPORT)
-        return try {
-            decoder.decode(ByteBuffer.wrap(bytes, 0, count)).toString()
-        } catch (_: CharacterCodingException) {
-            null
-        }
-    }
 }
