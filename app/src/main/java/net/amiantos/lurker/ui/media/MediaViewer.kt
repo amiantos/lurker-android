@@ -41,6 +41,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
@@ -94,6 +95,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.launch
+import net.amiantos.lurker.ui.shell.SafeUriHandler
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.LinkPreview
@@ -172,64 +174,74 @@ private fun MediaViewer(gallery: Gallery, media: MediaSource, onDismiss: () -> U
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
     ) {
         Immersive()
-        val previews = gallery.previews
-        val pager = rememberPagerState(initialPage = gallery.start) { previews.size }
-        val density = LocalDensity.current
-        val scope = rememberCoroutineScope()
-        // How far a swipe down has carried the pictures, in px.
-        var drag by remember { mutableFloatStateOf(0f) }
-        var zoomed by remember { mutableStateOf(false) }
-        // A new page starts at fit.
-        LaunchedEffect(pager.currentPage) { zoomed = false }
-        val page = pager.currentPage.coerceIn(0, previews.size - 1)
-        val onPlayer = MediaViewerModel.isPlayer(previews[page])
+        // The platform's opener throws when nothing on the device takes an address; this dialog is
+        // outside the conversation's provider, so it brings its own.
+        val platform = LocalUriHandler.current
+        val uriHandler = remember(platform) { SafeUriHandler(platform) }
+        CompositionLocalProvider(LocalUriHandler provides uriHandler) { ViewerPages(gallery, media, onDismiss) }
+    }
+}
 
-        Box(
-            Modifier
-                .fillMaxSize()
-                // Read while drawing, so a swipe's every frame repaints the ground without recomposing.
-                .drawBehind { drawRect(Color.Black.copy(alpha = MediaViewerModel.groundAlpha(drag / density.density))) }
-                // Swipe down to dismiss, the pictures following the finger — the gesture every other
-                // full-screen viewer uses, so it's the one a reader tries first. ⚠ It stands down while
-                // zoomed in (panning a magnified picture must move the picture), and over a player,
-                // whose scrubber is a horizontal drag inside a vertically-dismissing view.
-                .draggable(
-                    orientation = Orientation.Vertical,
-                    enabled = !zoomed && !onPlayer,
-                    state = rememberDraggableState { delta -> drag = max(0f, drag + delta) },
-                    onDragStopped = { velocity ->
-                        if (MediaViewerModel.dismisses(drag / density.density, velocity / density.density)) {
-                            onDismiss()
-                        } else {
-                            scope.launch { animate(drag, 0f) { value, _ -> drag = value } }
-                        }
-                    },
-                ),
-        ) {
-            HorizontalPager(
-                state = pager,
-                // Paging stands down while zoomed in, so a pan reaches the picture.
-                userScrollEnabled = !zoomed,
-                modifier = Modifier.fillMaxSize().graphicsLayer { translationY = drag },
-            ) { index ->
-                val preview = previews[index]
-                if (MediaViewerModel.isPlayer(preview)) {
-                    PlayerPage(preview, media, active = pager.settledPage == index, onClose = onDismiss)
-                } else {
-                    ImagePage(
-                        preview,
-                        media,
-                        onTap = onDismiss,
-                        onZoomChange = { if (index == pager.currentPage) zoomed = it },
-                    )
-                }
+/** The viewer's ground, pager and chrome — inside its dialog. */
+@Composable
+private fun ViewerPages(gallery: Gallery, media: MediaSource, onDismiss: () -> Unit) {
+    val previews = gallery.previews
+    val pager = rememberPagerState(initialPage = gallery.start) { previews.size }
+    val density = LocalDensity.current
+    val scope = rememberCoroutineScope()
+    // How far a swipe down has carried the pictures, in px.
+    var drag by remember { mutableFloatStateOf(0f) }
+    var zoomed by remember { mutableStateOf(false) }
+    // A new page starts at fit.
+    LaunchedEffect(pager.currentPage) { zoomed = false }
+    val page = pager.currentPage.coerceIn(0, previews.size - 1)
+    val onPlayer = MediaViewerModel.isPlayer(previews[page])
+
+    Box(
+        Modifier
+            .fillMaxSize()
+            // Read while drawing, so a swipe's every frame repaints the ground without recomposing.
+            .drawBehind { drawRect(Color.Black.copy(alpha = MediaViewerModel.groundAlpha(drag / density.density))) }
+            // Swipe down to dismiss, the pictures following the finger — the gesture every other
+            // full-screen viewer uses, so it's the one a reader tries first. ⚠ It stands down while
+            // zoomed in (panning a magnified picture must move the picture), and over a player,
+            // whose scrubber is a horizontal drag inside a vertically-dismissing view.
+            .draggable(
+                orientation = Orientation.Vertical,
+                enabled = !zoomed && !onPlayer,
+                state = rememberDraggableState { delta -> drag = max(0f, drag + delta) },
+                onDragStopped = { velocity ->
+                    if (MediaViewerModel.dismisses(drag / density.density, velocity / density.density)) {
+                        onDismiss()
+                    } else {
+                        scope.launch { animate(drag, 0f) { value, _ -> drag = value } }
+                    }
+                },
+            ),
+    ) {
+        HorizontalPager(
+            state = pager,
+            // Paging stands down while zoomed in, so a pan reaches the picture.
+            userScrollEnabled = !zoomed,
+            modifier = Modifier.fillMaxSize().graphicsLayer { translationY = drag },
+        ) { index ->
+            val preview = previews[index]
+            if (MediaViewerModel.isPlayer(preview)) {
+                PlayerPage(preview, media, active = pager.settledPage == index, onClose = onDismiss)
+            } else {
+                ImagePage(
+                    preview,
+                    media,
+                    onTap = onDismiss,
+                    onZoomChange = { if (index == pager.currentPage) zoomed = it },
+                )
             }
-            ViewerChrome(
-                counter = MediaViewerModel.counter(page, previews.size),
-                shareUrl = previews[page].url,
-                onClose = onDismiss,
-            )
         }
+        ViewerChrome(
+            counter = MediaViewerModel.counter(page, previews.size),
+            shareUrl = previews[page].url,
+            onClose = onDismiss,
+        )
     }
 }
 
@@ -310,21 +322,37 @@ private fun share(context: Context, url: String) {
 
 // MARK: - A picture
 
+/** Where a picture page's own decode is. */
+private sealed interface FullPicture {
+    data object Loading : FullPicture
+
+    data class Loaded(val drawable: Drawable) : FullPicture
+
+    data object Failed : FullPicture
+}
+
 /**
  * One picture, zoomable: pinch, double-tap to 2.5x at the finger (and back), pan while zoomed; a
- * single tap closes the viewer, as on iOS. The still from the list's cache is on screen the instant the
- * viewer opens; a sharper decode (or the animation) replaces it when it lands.
+ * single tap closes the viewer, as on iOS. A whole-frame still from the list's cache is on screen the
+ * instant the viewer opens, when there is one (never a cropped tile); the viewer's own decode (or the
+ * animation) replaces it when it lands. If that fails with nothing to show, the page says so, with
+ * the way out and the origin in the browser — the player pages' fallback — rather than staying black.
  */
 @Composable
 private fun ImagePage(preview: LinkPreview, media: MediaSource, onTap: () -> Unit, onZoomChange: (Boolean) -> Unit) {
     val path = preview.src
-    val still by rememberPreviewStill(path, media)
-    val full by produceState<Drawable?>(null, path, media) {
-        if (path != null) value = PreviewImageLoader.loadFull(path, media)
+    val still = remember(path) { path?.let(PreviewImageLoader::wholeFrame) }
+    val full by produceState<FullPicture>(FullPicture.Loading, path, media) {
+        value = FullPicture.Loading
+        value = path?.let { PreviewImageLoader.loadFull(it, media) }?.let(FullPicture::Loaded) ?: FullPicture.Failed
     }
     // Remembered against the drawable, so it starts and stops with the page — frames released as the
     // page leaves, rather than a gallery accumulating every animation paged past.
-    val painter = remember(full) { full?.let(::DrawablePainter) }
+    val painter = remember(full) { (full as? FullPicture.Loaded)?.drawable?.let(::DrawablePainter) }
+    if (full == FullPicture.Failed && still == null) {
+        ViewerFallback(MediaViewerModel.PlayerFailure.Unreachable.message, preview.url, onClose = onTap)
+        return
+    }
 
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
@@ -413,6 +441,8 @@ private fun ImagePage(preview: LinkPreview, media: MediaSource, onTap: () -> Uni
             Image(sharp, contentDescription = null, modifier = transformed, contentScale = ContentScale.Fit)
         } else if (first != null) {
             Image(first.image, contentDescription = null, modifier = transformed, contentScale = ContentScale.Fit)
+        } else if (full == FullPicture.Loading) {
+            CircularProgressIndicator(color = Color.White)
         }
     }
 }
@@ -459,15 +489,16 @@ private fun PlayerPage(preview: LinkPreview, media: MediaSource, active: Boolean
             CircularProgressIndicator(color = Color.White)
         }
         is PlayerPhase.Ready -> ClipPlayer(current.url) { code -> phase = PlayerPhase.Failed(MediaViewerModel.failure(code)) }
-        is PlayerPhase.Failed -> PlayerFallback(current.failure.message, preview.url, onClose)
+        is PlayerPhase.Failed -> ViewerFallback(current.failure.message, preview.url, onClose)
     }
 }
 
 /** A clip not yet played: its poster, if the server decoded one, and the glyph for its kind. */
 @Composable
 private fun PlayerPoster(preview: LinkPreview, media: MediaSource) {
-    val still by rememberPreviewStill(preview.inlinePicture, media)
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    var box by remember { mutableStateOf(IntSize.Zero) }
+    val still by rememberPreviewStill(preview.inlinePicture, media, box, DecodeSize.Mode.Fit)
+    Box(Modifier.fillMaxSize().onSizeChanged { box = it }, contentAlignment = Alignment.Center) {
         PreviewStillImage(still, ContentScale.Fit)
         OverlayGlyph(AttachmentLayout.glyph(preview.kind).vector(), 56.dp)
     }
@@ -537,11 +568,12 @@ private fun ClipPlayer(url: String, onError: (Int) -> Unit) {
 }
 
 /**
- * A page with nothing to play: a sentence, the origin in the browser (when its address parses), and
+ * A page with nothing to show: a sentence, the origin in the browser (when its address parses), and
  * the way out — one column, so nothing can draw over anything else whichever of them is showing.
+ * Opened through the viewer's `SafeUriHandler`, so a device with nothing to take the address shrugs.
  */
 @Composable
-private fun PlayerFallback(message: String, url: String, onClose: () -> Unit) {
+private fun ViewerFallback(message: String, url: String, onClose: () -> Unit) {
     val uriHandler = LocalUriHandler.current
     // The viewer's black is the same in both themes, so its buttons are too.
     val onBlack = ButtonDefaults.textButtonColors(contentColor = Color.White)
@@ -555,12 +587,7 @@ private fun PlayerFallback(message: String, url: String, onClose: () -> Unit) {
             TextButton(
                 onClick = {
                     onClose()
-                    // The platform's opener throws when nothing on the device takes the address.
-                    try {
-                        uriHandler.openUri(url)
-                    } catch (e: ActivityNotFoundException) {
-                        Log.w("Lurker", "no app opens $url", e)
-                    }
+                    uriHandler.openUri(url)
                 },
                 colors = onBlack,
             ) { Text("Open in Browser") }
@@ -575,7 +602,7 @@ private fun PlayerFallback(message: String, url: String, onClose: () -> Unit) {
 private fun FallbackPreview(dark: Boolean) {
     LurkerTheme(darkTheme = dark) {
         Box(Modifier.background(Color.Black)) {
-            PlayerFallback(MediaViewerModel.PlayerFailure.Format.message, "https://example.com/clip.webm", onClose = {})
+            ViewerFallback(MediaViewerModel.PlayerFailure.Format.message, "https://example.com/clip.webm", onClose = {})
             ViewerChrome(counter = "2 of 3", shareUrl = "https://example.com/clip.webm", onClose = {})
         }
     }

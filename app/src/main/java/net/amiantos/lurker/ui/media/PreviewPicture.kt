@@ -31,23 +31,55 @@ import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
+import kotlinx.coroutines.delay
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import kotlin.math.roundToInt
 
 /**
- * The decoded still at [path], or null until it lands (and for good, if it can't). Starts from the
- * loader's cache, so a row recomposing over a picture already decoded draws it on its first frame.
+ * The decoded still at [path] for a box measured at [box] pixels, shown in [mode]; null until it lands
+ * (and for good, if it can't). Until the box has been measured — and while its own decode is on the
+ * way — it shows the latest decode of the same picture for any box, so a row composing again over a
+ * picture it already showed draws it on its first frame.
  *
- * Keyed by path, which is the reuse guard: a row recycled onto a different message starts a fresh
- * producer, and the old one's answer is delivered to nothing — never one row's image painted into
- * another.
+ * ⚠ The value is RESET when the path changes, not just reloaded: `produceState` keeps its state
+ * across key changes, so a box re-planned onto a different preview would otherwise go on showing the
+ * previous picture — one message's image in another's place.
+ *
+ * A retryable failure is asked again on a short, bounded backoff while the box stays composed
+ * (`StillRetry`); a verdict is latched by the loader and isn't.
  */
 @Composable
-internal fun rememberPreviewStill(path: String?, media: MediaSource): State<PreviewImageLoader.Still?> =
-    produceState(initialValue = path?.let(PreviewImageLoader::cached), path, media) {
-        if (path == null || value != null) return@produceState
-        value = PreviewImageLoader.load(path, media)
+internal fun rememberPreviewStill(
+    path: String?,
+    media: MediaSource,
+    box: IntSize,
+    mode: DecodeSize.Mode,
+): State<PreviewImageLoader.Still?> {
+    val bucket = DecodeSize.bucket(box.width, box.height)
+    return produceState(initialValue = path?.let { stillNow(it, mode, bucket) }, path, media, mode, bucket) {
+        value = path?.let { stillNow(it, mode, bucket) }
+        if (path == null || bucket == null || PreviewImageLoader.cached(path, mode, bucket) != null) return@produceState
+        var attempt = 0
+        while (true) {
+            when (val result = PreviewImageLoader.load(path, media, mode, bucket)) {
+                is PreviewImageLoader.Result.Loaded -> {
+                    value = result.still
+                    return@produceState
+                }
+                PreviewImageLoader.Result.Failed -> return@produceState
+                PreviewImageLoader.Result.Retryable -> {
+                    attempt += 1
+                    delay(StillRetry.delayMs(attempt) ?: return@produceState)
+                }
+            }
+        }
     }
+}
+
+/** The exact decode for this box, or the latest for any box until there is one. */
+private fun stillNow(path: String, mode: DecodeSize.Mode, bucket: DecodeSize.Pixels?): PreviewImageLoader.Still? =
+    bucket?.let { PreviewImageLoader.cached(path, mode, it) } ?: PreviewImageLoader.anyCached(path, mode)
 
 /**
  * A still drawn into whatever box holds it, or nothing until it arrives — the box is already sized

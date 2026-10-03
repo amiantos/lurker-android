@@ -93,24 +93,41 @@ object AttachmentLayout {
      */
     const val CHIP_MAX_RATIO = 1.3f
 
-    /** One piece of a message's attachment block, in the order it's drawn. */
+    /**
+     * One piece of a message's attachment block, in the order it's drawn. [key] names it by the
+     * addresses it draws, so a block re-planned onto different previews is a different element.
+     */
     sealed interface Block {
-        /** Two or more images as a grid. */
-        data class Mosaic(val rows: List<MosaicRow>) : Block
+        val key: String
+
+        /** Two or more images as a grid. There's only ever one per message. */
+        data class Mosaic(val rows: List<MosaicRow>) : Block {
+            override val key: String get() = "mosaic"
+        }
 
         /** An image, a clip or a track, alone and full width. */
-        data class Media(val preview: LinkPreview) : Block
+        data class Media(val preview: LinkPreview) : Block {
+            override val key: String get() = "media ${preview.url}"
+        }
 
         /** A page or a video page: text, with its picture beside or under it. */
-        data class Card(val preview: LinkPreview) : Block
+        data class Card(val preview: LinkPreview) : Block {
+            override val key: String get() = "card ${preview.url}"
+        }
     }
 
-    /** One row of the mosaic. */
+    /** One row of the mosaic, keyed by the addresses in it. */
     sealed interface MosaicRow {
-        /** A full-height picture beside two stacked ones — Discord's arrangement for three. */
-        data class ThreeUp(val tall: LinkPreview, val top: LinkPreview, val bottom: LinkPreview) : MosaicRow
+        val key: String
 
-        data class Pair(val left: LinkPreview, val right: LinkPreview) : MosaicRow
+        /** A full-height picture beside two stacked ones — Discord's arrangement for three. */
+        data class ThreeUp(val tall: LinkPreview, val top: LinkPreview, val bottom: LinkPreview) : MosaicRow {
+            override val key: String get() = "${tall.url} ${top.url} ${bottom.url}"
+        }
+
+        data class Pair(val left: LinkPreview, val right: LinkPreview) : MosaicRow {
+            override val key: String get() = "${left.url} ${right.url}"
+        }
     }
 
     /**

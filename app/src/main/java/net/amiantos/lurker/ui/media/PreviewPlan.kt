@@ -69,8 +69,7 @@ data class PreviewPlan(val hidden: Set<String>, val resolved: List<LinkPreview>)
             allSettled: (List<String>) -> Boolean,
             preview: (String) -> LinkPreview?,
         ): PreviewPlan {
-            if (!PreviewSelection.isPreviewable(message.type)) return None
-            val urls = PreviewSelection.urls(message.text, inlineMedia = toggles.inlineMedia, linkPreviews = toggles.linkPreviews)
+            val urls = urls(message, toggles)
             // ⚠⚠ ATOMIC REVEAL, and it gates BOTH halves. A message shows none of its attachments until
             // every URL in it has settled, because no layout may depend on when a sibling resolves —
             // three images with one already cached painted as a lone picture and then re-arranged.
@@ -96,14 +95,13 @@ data class PreviewPlan(val hidden: Set<String>, val resolved: List<LinkPreview>)
         }
 
         /**
-         * Whether [message] mentions any of [urls] — the test that decides whether a batch of
-         * resolutions has anything to do with what's on screen. Reads the addresses the same way the
-         * plan does, through `PreviewSelection`, so the two can't disagree about what a row mentions.
+         * The addresses in [message] a preview may be drawn for — what the plan reads from the store,
+         * and so exactly the URLs whose movement (`PreviewUpdates.version`) can change the row. Empty
+         * for a line that isn't speech, and with both settings off.
          */
-        fun mentionsAny(message: Message, urls: Set<String>, toggles: PreviewToggles): Boolean {
-            if (urls.isEmpty() || !PreviewSelection.isPreviewable(message.type)) return false
+        fun urls(message: Message, toggles: PreviewToggles): List<String> {
+            if (!PreviewSelection.isPreviewable(message.type)) return emptyList()
             return PreviewSelection.urls(message.text, inlineMedia = toggles.inlineMedia, linkPreviews = toggles.linkPreviews)
-                .any { it in urls }
         }
     }
 }
@@ -122,8 +120,17 @@ class MediaSource(
     val playable: suspend (path: String, mime: String?) -> String?,
 ) {
     companion object {
+        /**
+         * The view model's media. ⚠ A picture is fetched only while the instance still has previews:
+         * a reconnect can find the feature switched off, and its proxy routes then aren't mounted — a
+         * row still on screen would get a 404, which the loader would latch as a verdict for the rest of
+         * the session. Answered as retryable instead, so nothing is remembered and nothing leaves.
+         */
         fun of(model: ChatViewModel): MediaSource =
-            MediaSource(fetch = { model.proxiedMedia(it) }, playable = { path, mime -> model.playableMediaURL(path, mime) })
+            MediaSource(
+                fetch = { path -> if (model.features.linkPreviews) model.proxiedMedia(path) else MediaFetch.Retryable },
+                playable = { path, mime -> model.playableMediaURL(path, mime) },
+            )
 
         /** Nothing behind it — every fetch is refused. For previews and for screens without a model. */
         val None = MediaSource(fetch = { MediaFetch.Permanent }, playable = { _, _ -> null })
@@ -133,17 +140,18 @@ class MediaSource(
 /**
  * What a row needs to draw link previews — lurker-ios's `PreviewContext`. Bundled so
  * `MessageListContext` grows by one nullable field rather than four; null on the screens that don't
- * show previews (the feeds), and whenever both settings are off.
+ * show previews (the feeds), and whenever both settings or the instance's flag are off.
  *
- * @param revision bumped by the screen when preview state moved for something it shows, so rows
- *   re-plan — the store itself isn't observable state.
+ * The store isn't observable state: a row learns its previews moved by reading `PreviewUpdates`'
+ * version of each URL in [urls] while it composes.
  */
 class PreviewContext(
     val store: LinkPreviewStore,
     val media: MediaSource,
     val toggles: PreviewToggles,
-    val revision: Int,
 ) {
+    fun urls(message: Message): List<String> = PreviewPlan.urls(message, toggles)
+
     fun plan(message: Message): PreviewPlan =
         PreviewPlan.of(message, toggles, allSettled = store::allSettled, preview = store::preview)
 }

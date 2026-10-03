@@ -3,12 +3,10 @@
 
 package net.amiantos.lurker.ui.conversation
 
-import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.util.Log
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -35,7 +33,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
@@ -63,7 +60,6 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -99,9 +95,7 @@ import net.amiantos.lurker.ui.feeds.ConversationViewsActions
 import net.amiantos.lurker.ui.composer.rememberComposerState
 import net.amiantos.lurker.ui.media.MediaSource
 import net.amiantos.lurker.ui.media.PreviewContext
-import net.amiantos.lurker.ui.media.PreviewPlan
 import net.amiantos.lurker.ui.media.PreviewToggles
-import net.amiantos.lurker.ui.media.PreviewUpdates
 import net.amiantos.lurker.ui.message.MessageListContext
 import net.amiantos.lurker.ui.message.MessageListLayout
 import net.amiantos.lurker.ui.message.MessageListRow
@@ -112,6 +106,7 @@ import net.amiantos.lurker.ui.message.rememberMessageTextStyle
 import net.amiantos.lurker.ui.shell.ConnectionBanner
 import net.amiantos.lurker.ui.shell.JumpLedger
 import net.amiantos.lurker.ui.shell.JumpRequest
+import net.amiantos.lurker.ui.shell.SafeUriHandler
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.shell.StatusTitle
 import net.amiantos.lurker.ui.shell.StatusTitleText
@@ -168,8 +163,8 @@ import java.time.ZoneOffset
  * the chips — who reacted. Reply goes through `ComposerState.startReply`. See `MessageActionsHost`.
  *
  * Link previews and inline media draw under the rows that carry them (lurker-android#15): the kit
- * resolves them at ingest, and a batch landing for something on screen re-plans the rows that show it
- * (`PreviewUpdates`). A tap on a picture opens [onOpenMedia]'s viewer.
+ * resolves them at ingest, and each row re-plans when one of its own URLs moves (`PreviewUpdates`). A
+ * tap on a picture opens [onOpenMedia]'s viewer.
  *
  * @param jump the message to land on rather than the bottom (`BufferRoute.jump`) — a new request on
  *   the same buffer arrives here without rebuilding the screen.
@@ -194,6 +189,7 @@ import java.time.ZoneOffset
  * @param onOpenView the bar's views — Search, Activity, Bookmarks (U7), which `MainScaffold` hosts.
  * @param onOpenMedia the media viewer `MainScaffold` hosts, over a message's pictures and positioned on
  *   one; null and a tap on a picture opens its address.
+ * @param media where preview pictures come from — `MainScaffold`'s, shared with the viewer.
  */
 @Composable
 fun ConversationScreen(
@@ -215,6 +211,7 @@ fun ConversationScreen(
     sideBySide: Boolean = false,
     onOpenView: ((AppView) -> Unit)? = null,
     onOpenMedia: ((List<LinkPreview>, Int) -> Unit)? = null,
+    media: MediaSource,
 ) {
     val kind = remember(key) { BufferKind.of(networkId = key.networkId, target = key.target) }
 
@@ -257,6 +254,8 @@ fun ConversationScreen(
         Jobs(nearBottom = ConversationModel.followsTail(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, followSlop))
     }
 
+    var instanceHasPreviews by remember(model) { mutableStateOf(model.features.linkPreviews) }
+
     // The two things the screen must DO about every frame, rather than draw, in iOS's order: notice
     // the buffer disappearing (or moving), ask for its history, ask for a jump's slice, latch the
     // read boundary, and mark read. Side effects, never Compose state — straight off the publisher.
@@ -287,6 +286,11 @@ fun ConversationScreen(
                 }
                 BufferWatch.Verdict.Present, BufferWatch.Verdict.Waiting -> Unit
             }
+            // The instance's preview flag isn't state: it's re-read from `/api/config` on every
+            // reconnect, so it's sampled here, on every frame — a reconnect's own frames carry the new
+            // answer to the rows. (A flag turning off between frames fetches nothing meanwhile: the
+            // media source checks it live, see `MediaSource.of`.)
+            instanceHasPreviews = model.features.linkPreviews
             val seq = frameSeq.next()
             // A pending jump hydrates through its `around` slice instead: asking for both would
             // double-fetch, and the latest slice would fight the jump.
@@ -593,37 +597,12 @@ fun ConversationScreen(
 
     // MARK: - Link previews
 
-    // Bumped when preview state moved for something on screen, so the rows showing it re-plan: the
-    // store isn't observable state, and a resolved preview changes no message. Off by default — both
-    // settings and the instance's flag (`PreviewToggles`) — and then nothing here runs past one test.
-    var previewRevision by remember(key) { mutableIntStateOf(0) }
-    DisposableEffect(model, key) {
-        val stop = PreviewUpdates.listen { urls ->
-            // ⚠⚠ Is any of this on SCREEN? The store is shared by every buffer, and most of what
-            // resolves during a connect burst belongs to another one; recomposing this list's rows
-            // for each batch would be work for nothing. Read off the rows on screen (and a few past
-            // either edge, which the list may already have composed), the same way the rows read them.
-            val toggles = PreviewToggles.resolve(model.features.linkPreviews, model.state.settings) ?: return@listen
-            val rows = current.rows
-            val items = listState.layoutInfo.visibleItemsInfo
-            if (rows.isEmpty() || items.isEmpty()) return@listen
-            val newest = rows.size - 1 - (items.minOf { it.index } - PREVIEW_MARGIN_ROWS).coerceAtLeast(0)
-            val oldest = rows.size - 1 - (items.maxOf { it.index } + PREVIEW_MARGIN_ROWS).coerceAtMost(rows.size - 1)
-            val shows = (oldest..newest).any { index ->
-                val message = rows.getOrNull(index)?.message ?: return@any false
-                PreviewPlan.mentionsAny(message, urls, toggles)
-            }
-            if (shows) previewRevision++
-        }
-        onDispose(stop)
-    }
     val currentOnOpenMedia by rememberUpdatedState(onOpenMedia)
     val openMedia: ((List<LinkPreview>, Int) -> Unit)? = if (onOpenMedia == null) {
         null
     } else {
         remember { { previews: List<LinkPreview>, index: Int -> currentOnOpenMedia?.invoke(previews, index) } }
     }
-    val previewMedia = remember(model) { MediaSource.of(model) }
 
     val day = clock.value
     val style = rememberMessageTextStyle()
@@ -649,11 +628,10 @@ fun ConversationScreen(
     }
 
     // Keyed on everything the resolvers capture, the sheets' state and the keyboard's included.
-    val context = remember(rows, inputs, highlighter, style, day, actions, keyboard, focusManager, haptics, previewRevision, openMedia) {
-        // ⚠ The instance flag is read here, on every rebuild, rather than once: it isn't state, and
-        // it's re-read from `/api/config` on each reconnect. Turning on primes every loaded buffer,
-        // whose answers come back through `PreviewUpdates` and rebuild this.
-        val previewToggles = PreviewToggles.resolve(model.features.linkPreviews, inputs.settings)
+    // Which previews draw: both settings and the instance's flag (`PreviewToggles`). A preview landing
+    // doesn't come through here — each row reads its own URLs' versions (`PreviewUpdates`).
+    val previewToggles = PreviewToggles.resolve(instanceHasPreviews, inputs.settings)
+    val context = remember(rows, inputs, highlighter, style, day, actions, keyboard, focusManager, haptics, previewToggles, media, openMedia) {
         MessageListContext(
             style = style,
             networkName = { message -> ConversationModel.networkName(message, key, inputs.networks) },
@@ -690,7 +668,7 @@ fun ConversationScreen(
             onLongPress = ::onLongPress,
             zone = day.zone,
             today = day.today,
-            previews = previewToggles?.let { PreviewContext(model.linkPreviews, previewMedia, it, previewRevision) },
+            previews = previewToggles?.let { PreviewContext(model.linkPreviews, media, it) },
             onOpenMedia = openMedia,
         )
     }
@@ -889,12 +867,6 @@ private val PAGING_DISTANCE = 300.dp
  * correction for rows still composing under it.
  */
 private const val JUMP_PASSES = 3
-
-/**
- * Rows past either edge of the screen a preview batch is checked against — the list composes a little
- * ahead of what it shows, and a row composed before its preview landed would otherwise keep a stale plan.
- */
-private const val PREVIEW_MARGIN_ROWS = 8
 
 /** How long a converging pass waits for the list to measure a new build. */
 private const val LAYOUT_WAIT_MS = 1_000L
@@ -1121,19 +1093,6 @@ internal fun ConversationContent(
                 overlay(bottom)
                 sheets()
             }
-        }
-    }
-}
-
-/** The platform's link opener, minus the crash when nothing on the device takes the link. */
-private class SafeUriHandler(private val platform: UriHandler) : UriHandler {
-    override fun openUri(uri: String) {
-        try {
-            platform.openUri(uri)
-        } catch (e: ActivityNotFoundException) {
-            Log.w("Lurker", "no app opens $uri", e)
-        } catch (e: IllegalArgumentException) {
-            Log.w("Lurker", "can't open $uri", e)
         }
     }
 }

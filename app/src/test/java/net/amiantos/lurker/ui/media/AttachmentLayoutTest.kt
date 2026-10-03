@@ -196,4 +196,15 @@ class AttachmentLayoutTest {
         assertEquals(Tap.Open("https://example.com/x.png"), AttachmentLayout.tap("https://example.com/x.png", gallery, canPresent = true))
         assertEquals(Tap.Open(clip.url), AttachmentLayout.tap(clip.url, gallery, canPresent = false))
     }
+
+    @Test
+    fun blocksAndMosaicRowsAreKeyedByTheirAddresses() {
+        val card = preview("page", PreviewKind.Page)
+        assertEquals("card ${card.url}", AttachmentLayout.Block.Card(card).key)
+        assertEquals("media ${image(1).url}", AttachmentLayout.Block.Media(image(1)).key)
+        // A pair re-planned onto a different picture is a different row.
+        val before = MosaicRow.Pair(image(1), image(2)).key
+        val after = MosaicRow.Pair(image(1), image(3)).key
+        assertTrue(before != after)
+    }
 }

@@ -158,11 +158,15 @@ class LurkerApp : Application() {
         // (⚠ The kit's own teardown beside it — `clearMediaCache`'s `Cache.evictAll` and
         // `clearStagedMedia` — deletes files on the calling thread, which is the main thread: a kit
         // debt this can't reach from here.)
-        model.onPreviewCachesCleared = { PreviewImageLoader.reset() }
+        model.onPreviewCachesCleared = {
+            PreviewImageLoader.reset()
+            PreviewUpdates.reset()
+        }
 
-        // Preview metadata landing — which URLs moved — for every screen that shows previews, rather
-        // than whichever set the store's one callback last (iOS's chat screen sets it per screen).
-        // Touches the store, which the kit builds lazily; it's a few empty maps.
+        // Preview metadata landing — which URLs moved — as a version per URL that each row reads, so
+        // exactly the rows mentioning them recompose, whichever screen they're on (iOS's chat screen
+        // takes the store's one callback per screen). Touches the store, which the kit builds lazily;
+        // it's a few empty maps.
         PreviewUpdates.install(model.linkPreviews)
 
         // A join this device asked for landed — navigate to it (lurker-ios#57).

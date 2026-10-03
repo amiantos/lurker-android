@@ -3,37 +3,39 @@
 
 package net.amiantos.lurker.ui.media
 
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** The store's one callback, fanned out to every listening screen. */
+/** A version per URL, bumped when that URL's preview state moves — what a row reads to re-plan. */
 class PreviewUpdatesTest {
 
+    @After
+    fun forget() = PreviewUpdates.reset()
+
     @Test
-    fun everyListenerHearsUntilItStops() {
-        val first = mutableListOf<Set<String>>()
-        val second = mutableListOf<Set<String>>()
-        val stopFirst = PreviewUpdates.listen { first += it }
-        val stopSecond = PreviewUpdates.listen { second += it }
+    fun onlyTheUrlsThatMovedChangeVersion() {
+        assertEquals(0, PreviewUpdates.version("a"))
+        assertEquals(0, PreviewUpdates.version("b"))
         PreviewUpdates.publish(setOf("a"))
-        stopFirst()
-        PreviewUpdates.publish(setOf("b"))
-        stopSecond()
-        PreviewUpdates.publish(setOf("c"))
-        assertEquals(listOf(setOf("a")), first)
-        assertEquals(listOf(setOf("a"), setOf("b")), second)
+        assertEquals(1, PreviewUpdates.version("a"))
+        assertEquals(0, PreviewUpdates.version("b"))
+        PreviewUpdates.publish(setOf("a", "b"))
+        assertEquals(2, PreviewUpdates.version("a"))
+        assertEquals(1, PreviewUpdates.version("b"))
     }
 
     @Test
-    fun aListenerMayStopFromInsideItsOwnCall() {
-        val heard = mutableListOf<Set<String>>()
-        var stop: () -> Unit = {}
-        stop = PreviewUpdates.listen {
-            heard += it
-            stop()
-        }
+    fun aUrlNobodyReadHasNobodyToTell() {
+        PreviewUpdates.publish(setOf("unread"))
+        assertEquals(0, PreviewUpdates.version("unread"))
+    }
+
+    @Test
+    fun signingOutForgetsEveryVersion() {
+        PreviewUpdates.version("a")
         PreviewUpdates.publish(setOf("a"))
-        PreviewUpdates.publish(setOf("b"))
-        assertEquals(listOf(setOf("a")), heard)
+        PreviewUpdates.reset()
+        assertEquals(0, PreviewUpdates.version("a"))
     }
 }

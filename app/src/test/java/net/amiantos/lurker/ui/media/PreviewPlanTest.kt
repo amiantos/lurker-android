@@ -10,7 +10,6 @@ import net.amiantos.lurkerkit.model.PreviewKind
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Settings
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -109,12 +108,14 @@ class PreviewPlanTest {
     }
 
     @Test
-    fun mentionsAnyReadsTheSameAddressesThePlanDoes() {
-        val url = "https://example.com/cat.png"
-        assertTrue(PreviewPlan.mentionsAny(message("see $url"), setOf(url), both))
-        assertFalse(PreviewPlan.mentionsAny(message("see $url"), setOf("https://other.example/x.png"), both))
-        assertFalse(PreviewPlan.mentionsAny(message("see $url"), setOf(url), PreviewToggles(inlineMedia = false, linkPreviews = true)))
-        assertFalse(PreviewPlan.mentionsAny(message("no links here"), setOf(url), both))
+    fun urlsAreWhatThePlanReadsAndNothingForLinesThatArentSpeech() {
+        val image = "https://example.com/cat.png"
+        val page = "https://example.com/article"
+        assertEquals(listOf(image, page), PreviewPlan.urls(message("see $image and $page"), both))
+        // With media off, a picture's address is nothing the row could draw.
+        assertEquals(listOf(page), PreviewPlan.urls(message("see $image and $page"), PreviewToggles(inlineMedia = false, linkPreviews = true)))
+        assertTrue(PreviewPlan.urls(message("no links here"), both).isEmpty())
+        assertTrue(PreviewPlan.urls(message(image, EventType.Join), both).isEmpty())
     }
 
     @Test
