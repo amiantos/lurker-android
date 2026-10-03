@@ -1,29 +1,55 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The default-network callback that tells "no internet" from "reconnecting". -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!--
+        networkSecurityConfig permits plain http, so a self-hoster can sign in to a LAN box.
+        Android can only permit cleartext per named domain or everywhere, and a LAN host has no
+        name we could list, so the kit's ServerAddress is the policy on this platform: it refuses
+        http:// to anything but a local address, with its own sign-in copy, before any request.
+    -->
     <application
+        android:name=".LurkerApp"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
+        android:enableOnBackInvokedCallback="true"
         android:fullBackupContent="@xml/backup_rules"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
+        android:networkSecurityConfig="@xml/network_security_config"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Lurker">
+        <!--
+            singleTask: the sign-in redirect must come back to this task — bringing it forward,
+            clearing the Custom Tab off it, and arriving in onNewIntent — rather than stack a
+            second copy of the app over the tab.
+        -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/app_name"
+            android:launchMode="singleTask"
             android:theme="@style/Theme.Lurker"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!--
+                The OAuth redirect, chat.lurker:/oauth (the kit's OAuth.callbackScheme). Scheme
+                only: Android ignores a path without a host, so BrowserSignIn checks the path.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data android:scheme="chat.lurker" />
             </intent-filter>
         </activity>
     </application>

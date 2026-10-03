@@ -43,7 +43,7 @@ object OAuth {
      * it ("Opens chat.lurker:"), so it names the product rather than a bundle ID.
      */
     const val callbackScheme = "chat.lurker"
-    internal const val redirectURI = "$callbackScheme:/oauth"
+    const val redirectURI = "$callbackScheme:/oauth"
 
     /** The approval page shows this address's host as where the app says it's from. */
     internal const val clientURI = "https://lurker.chat"

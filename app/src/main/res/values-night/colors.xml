@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- LurkerColors.bg, dark. See values/colors.xml. -->
+    <color name="lurker_bg">#212022</color>
+</resources>
