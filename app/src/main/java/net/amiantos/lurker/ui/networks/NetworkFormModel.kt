@@ -16,7 +16,8 @@ import java.time.Instant
 enum class FormRow {
     /**
      * Why the last save was refused, when there was one. A row of its own, in the refusal's colour,
-     * so it can never read like the grey guidance footers further down.
+     * so it can never read like the grey guidance footers further down. Always in the list, drawing
+     * nothing until there's a refusal, so TalkBack can read one out when it lands.
      */
     Error,
     Name, Host, Port, Tls,
@@ -103,8 +104,10 @@ object NetworkFormModel {
                 id = FormSectionId.Connection,
                 header = "Connection",
                 footer = null,
-                rows = (if (error == null) emptyList() else listOf(FormRow.Error)) +
-                    listOf(FormRow.Name, FormRow.Host, FormRow.Port, FormRow.Tls),
+                // ⚠ The refusal row leads whether or not there is a refusal: it draws nothing without
+                // one, and a row that's already there is what TalkBack can announce a refusal in
+                // (`AnnouncedSlot`) — an inserted one is never read out.
+                rows = listOf(FormRow.Error, FormRow.Name, FormRow.Host, FormRow.Port, FormRow.Tls),
             ),
             FormSection(FormSectionId.You, header = "You", footer = null, rows = listOf(FormRow.Nick, FormRow.Realname)),
             FormSection(
@@ -156,7 +159,8 @@ object NetworkFormModel {
         certificate: ClientCertificate?,
         certificateError: String?,
     ): FormSection {
-        val rows = if (certificateError == null) mutableListOf() else mutableListOf(FormRow.CertificateError)
+        // Always first, refusal or not — see the Connection section's Error row.
+        val rows = mutableListOf(FormRow.CertificateError)
         var footer: String? = null
         if (certificate != null) {
             when (certificate) {

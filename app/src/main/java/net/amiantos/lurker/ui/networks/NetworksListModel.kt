@@ -4,6 +4,7 @@
 package net.amiantos.lurker.ui.networks
 
 import net.amiantos.lurker.ui.list.label
+import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurkerkit.model.ClientCertificate
 import net.amiantos.lurkerkit.model.ConnectionState
@@ -35,14 +36,6 @@ sealed interface NetworksLoad {
  */
 data class RowError(val id: Int, val message: String)
 
-/** What the networks screen shows instead of rows: iOS's `StateView.Model`s for this screen. */
-data class NetworksPlaceholder(
-    val title: String,
-    val subtitle: String? = null,
-    val actionTitle: String? = null,
-    val isLoading: Boolean = false,
-    val symbol: StateSymbol? = null,
-)
 
 /**
  * The networks screen's rules (lurker-ios#11), pure so they can be pinned in JVM tests. The screen
@@ -90,17 +83,17 @@ object NetworksListModel {
     fun configs(load: NetworksLoad): List<NetworkConfig> = (load as? NetworksLoad.Loaded)?.configs ?: emptyList()
 
     /** What to show instead of rows, or null when there are rows. iOS's copy. */
-    fun placeholder(load: NetworksLoad): NetworksPlaceholder? =
+    fun placeholder(load: NetworksLoad): StateModel? =
         when (load) {
-            NetworksLoad.Loading -> NetworksPlaceholder(title = "Loading networks…", isLoading = true)
-            NetworksLoad.Failed -> NetworksPlaceholder(
+            NetworksLoad.Loading -> StateModel(title = "Loading networks…", isLoading = true)
+            NetworksLoad.Failed -> StateModel(
                 title = "Couldn't load networks",
                 subtitle = "Check your connection and try again.",
                 actionTitle = "Try Again",
                 symbol = StateSymbol.Warning,
             )
             is NetworksLoad.Loaded -> if (load.configs.isEmpty()) {
-                NetworksPlaceholder(
+                StateModel(
                     title = "No networks yet",
                     subtitle = "Add the IRC network you want to talk on.",
                     actionTitle = "Add Network",

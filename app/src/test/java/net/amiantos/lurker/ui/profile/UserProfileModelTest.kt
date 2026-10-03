@@ -95,6 +95,29 @@ class UserProfileModelTest {
         assertTrue(details.none { it.title == "Connected from" })
     }
 
+    /**
+     * What the page's one status place announces when a lookup lands (#20): nothing while it's out,
+     * the miss in the status line's words, a hit as the Status row's value under the nick.
+     */
+    @Test
+    fun aLookupsOutcomeIsSaidOnlyOnceItLands() {
+        assertNull(UserProfileModel.lookupOutcome(inputs(looking = true), "alice"))
+        assertEquals(
+            "alice isn't on this network.",
+            UserProfileModel.lookupOutcome(inputs(whois = WhoisResult(nick = "alice", error = "not_found")), "alice"),
+        )
+        assertEquals(
+            "alice, Online",
+            UserProfileModel.lookupOutcome(inputs(whois = WhoisResult(nick = "alice", realName = "A"), presence = FriendPresence.Online), "alice"),
+        )
+        // Still waiting on the reply (nothing to draw yet), whatever MONITOR says: no outcome to announce.
+        assertNull(UserProfileModel.lookupOutcome(inputs(presence = FriendPresence.Online), "alice"))
+        assertEquals(
+            "alice, Away — lunch",
+            UserProfileModel.lookupOutcome(inputs(whois = WhoisResult(nick = "alice", realName = "A", away = "lunch")), "alice"),
+        )
+    }
+
     @Test
     fun anAwayReasonRidesTheStatusRowOnlyBesideAnAwayDot() {
         val away = WhoisResult(nick = "alice", realName = "A", away = "lunch")

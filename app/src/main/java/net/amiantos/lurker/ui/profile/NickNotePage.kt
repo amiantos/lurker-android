@@ -152,7 +152,7 @@ private fun NickNoteContent(
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
             )
             FormSectionFooter(UserProfileModel.NOTE_FOOTER)
-            refusal?.let { FormErrorRow(it) }
+            FormErrorRow(refusal)
             // Only once there is something to delete — see `NickNoteModel`.
             if (offersDelete) FormActionRow(title = "Delete Note", onClick = onDelete, destructive = true)
         }

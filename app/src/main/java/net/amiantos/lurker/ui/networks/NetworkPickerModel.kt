@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.networks
 
+import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurkerkit.model.NetworkDraft
 import net.amiantos.lurkerkit.model.NetworkPreset
@@ -16,8 +17,6 @@ sealed interface PickerRow {
     data object Custom : PickerRow
 }
 
-/** What the picker shows instead of rows: a title and, for the locked-down blank, why. */
-data class PickerPlaceholder(val title: String, val subtitle: String? = null, val symbol: StateSymbol? = null)
 
 /**
  * "Which network?" — the first step of adding one (lurker-ios#11), as rules. The screen is
@@ -74,11 +73,11 @@ object NetworkPickerModel {
      *
      * Two different blanks: nothing on offer at all, versus a search that missed.
      */
-    fun placeholder(offered: List<NetworkPreset>, allowsCustom: Boolean, query: String): PickerPlaceholder? {
+    fun placeholder(offered: List<NetworkPreset>, allowsCustom: Boolean, query: String): StateModel? {
         if (rows(offered, allowsCustom, query).isNotEmpty()) return null
         val matched = matches(offered, query).isNotEmpty()
-        if (!matched && needle(query).isNotEmpty()) return PickerPlaceholder("No matches", symbol = StateSymbol.Search)
-        return PickerPlaceholder(title = "No networks available", subtitle = ADMIN_CHOOSES, symbol = StateSymbol.NoNetworks)
+        if (!matched && needle(query).isNotEmpty()) return StateModel("No matches", StateSymbol.Search)
+        return StateModel("No networks available", StateSymbol.NoNetworks, subtitle = ADMIN_CHOOSES)
     }
 
     /**

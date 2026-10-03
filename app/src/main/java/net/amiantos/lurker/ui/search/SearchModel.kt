@@ -3,7 +3,7 @@
 
 package net.amiantos.lurker.ui.search
 
-import net.amiantos.lurker.ui.feeds.StateWords
+import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurkerkit.model.SearchQuery
 
@@ -107,8 +107,8 @@ class SearchQueryLedger(seed: String = "") {
 
 /** The search screen's placeholders, in iOS's words. */
 object SearchWords {
-    fun loading(showing: SearchShowing): StateWords =
-        StateWords(if (showing == SearchShowing.Landing) "Loading highlights…" else "Searching…")
+    fun loading(showing: SearchShowing): StateModel =
+        StateModel(if (showing == SearchShowing.Landing) "Loading highlights…" else "Searching…", isLoading = true)
 
     /**
      * Three different empties, and telling them apart is most of this placeholder's job. The landing
@@ -116,25 +116,25 @@ object SearchWords {
      * the people who most need telling what this screen does — so it says both, that you can search
      * (and the grammar), and what the list would otherwise have held.
      */
-    fun empty(showing: SearchShowing, query: String): StateWords =
+    fun empty(showing: SearchShowing, query: String): StateModel =
         when (showing) {
-            SearchShowing.Landing -> StateWords(
+            SearchShowing.Landing -> StateModel(
                 "Search your history",
+                StateSymbol.Search,
                 "Type to search every network — narrow it with from:nick, in:#channel, or on:network. " +
                     "Messages that match your highlight rules show up here too.",
-                StateSymbol.Search,
             )
             // Says the rule rather than just withholding results, so a field that has visibly stopped
             // responding is explained instead of looking broken.
-            SearchShowing.TooShort -> StateWords("Keep typing", "Searches start at two characters.", StateSymbol.Ellipsis)
-            SearchShowing.Results -> StateWords("No matches", "Nothing in your history matches $query.", StateSymbol.Search)
+            SearchShowing.TooShort -> StateModel("Keep typing", StateSymbol.Ellipsis, "Searches start at two characters.")
+            SearchShowing.Results -> StateModel("No matches", StateSymbol.Search, "Nothing in your history matches $query.")
         }
 
     /** Both halves are ordinary REST reads, so both get the ordinary advice. */
-    fun error(showing: SearchShowing): StateWords =
+    fun error(showing: SearchShowing): StateModel =
         if (showing == SearchShowing.Landing) {
-            StateWords("Couldn't load highlights", "Pull to try again.", StateSymbol.Warning)
+            StateModel("Couldn't load highlights", StateSymbol.Warning, "Pull to try again.")
         } else {
-            StateWords("Couldn't search", "Pull to try again, or edit your search.", StateSymbol.Warning)
+            StateModel("Couldn't search", StateSymbol.Warning, "Pull to try again, or edit your search.")
         }
 }

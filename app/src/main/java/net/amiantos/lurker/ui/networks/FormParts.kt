@@ -26,12 +26,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -39,6 +35,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import net.amiantos.lurker.ui.shell.AnnouncedSlot
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 
@@ -73,17 +70,26 @@ internal fun FormSectionHeader(text: String) {
 
 /** A section's footer — the guidance under it, in the secondary colour. */
 @Composable
-internal fun FormSectionFooter(text: String, announce: Boolean = false) {
+internal fun FormSectionFooter(text: String) {
     Text(
         text,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = FormInset, vertical = 4.dp)
-            // A footer that carries a refusal is read out when it changes (#20); a standing note isn't.
-            .then(if (announce) Modifier.semantics { liveRegion = LiveRegionMode.Polite } else Modifier),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 4.dp),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+/**
+ * The footer of a section a refusal can land in — a standing note, the refusal, or nothing — drawn
+ * as a [FormSectionFooter] through one node that's there whether or not it has words, so a refusal
+ * arriving while the page is open is read out (`AnnouncedSlot`). [announces]: whether the words are
+ * the refusal; a standing note is read on focus, not announced.
+ */
+@Composable
+internal fun FormRefusalFooter(text: String?, announces: Boolean) {
+    AnnouncedSlot(words = text, modifier = Modifier.fillMaxWidth(), live = announces && text != null) {
+        FormSectionFooter(text.orEmpty())
+    }
 }
 
 /**
@@ -211,24 +217,24 @@ internal fun FormActionRow(title: String, onClick: () -> Unit, destructive: Bool
 }
 
 /**
- * A refusal: the warning glyph and the reason, in the refusal colour.
+ * A refusal: the warning glyph and the reason, in the refusal colour — or, with no [message], the
+ * empty place one will land.
  *
- * A polite live region, so a save or a write refused while the reader is on the form is read out
- * where it lands (#20) — the words set on the row itself, since a live region announces changes to
- * its OWN content, and a merged child's change is reported against the child.
+ * ⚠ Composed whether or not there is a refusal: a save or a write refused while the reader is on the
+ * form is read out where it lands (#20), and only a node that was already there can announce a
+ * change (`AnnouncedSlot`). A caller passes its refusal, null included — never `refusal?.let`.
  */
 @Composable
-internal fun FormErrorRow(message: String) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 10.dp).clearAndSetSemantics {
-            contentDescription = "Error, $message"
-            liveRegion = LiveRegionMode.Polite
-        },
-        verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Icon(LurkerIcons.Warning, contentDescription = null, tint = LurkerTheme.colors.badText, modifier = Modifier.size(20.dp))
-        Text(message, style = MaterialTheme.typography.bodyLarge, color = LurkerTheme.colors.badText)
+internal fun FormErrorRow(message: String?) {
+    AnnouncedSlot(words = message?.let { "Error, $it" }, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 10.dp),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(LurkerIcons.Warning, contentDescription = null, tint = LurkerTheme.colors.badText, modifier = Modifier.size(20.dp))
+            Text(message.orEmpty(), style = MaterialTheme.typography.bodyLarge, color = LurkerTheme.colors.badText)
+        }
     }
 }
 

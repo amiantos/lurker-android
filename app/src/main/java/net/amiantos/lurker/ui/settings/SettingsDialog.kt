@@ -367,7 +367,8 @@ private fun SettingRowView(row: SettingRowState, actions: SettingsActions) {
             )
         }
         // The network forms' refusal row — one look, and one "Error" for TalkBack, for every refusal.
-        if (row.error != null) FormErrorRow(row.error)
+        // There with or without one, so a write refused while Settings is open is read out.
+        FormErrorRow(row.error)
     }
 }
 

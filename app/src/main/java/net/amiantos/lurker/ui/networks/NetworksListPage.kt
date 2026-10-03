@@ -129,14 +129,7 @@ private fun NetworksListContent(
         val placeholder = NetworksListModel.placeholder(load)
         if (placeholder != null) {
             Box(Modifier.fillMaxSize().padding(padding)) {
-                StateView(
-                    title = placeholder.title,
-                    symbol = placeholder.symbol,
-                    subtitle = placeholder.subtitle,
-                    isLoading = placeholder.isLoading,
-                    actionTitle = placeholder.actionTitle,
-                    onAction = onPlaceholderAction,
-                )
+                StateView(placeholder, onAction = onPlaceholderAction)
             }
             return@DialogPage
         }
@@ -180,12 +173,15 @@ private fun NetworkListRow(
         leadingContent = { StatusDot(row.light, Modifier.size(10.dp)) },
         headlineContent = { Text(config.name) },
         supportingContent = {
-            if (error != null) {
-                // The answer to a verb picked from the menu, landing after the menu has gone: read out (#20).
-                Text(error, color = LurkerTheme.colors.badText, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-            } else {
-                Text(NetworksListModel.subtitle(config, row), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            // The refusal takes the subtitle's place in the SAME text, rather than an `if` swapping one
+            // text for another: the answer to a verb picked from the menu lands after the menu has gone,
+            // and only a node that was already there can announce it (`AnnouncedSlot`). Live only while
+            // it's the refusal — the subtitle's state changes are the dot's and the words', not news.
+            Text(
+                error ?: NetworksListModel.subtitle(config, row),
+                color = if (error != null) LurkerTheme.colors.badText else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.semantics { if (error != null) liveRegion = LiveRegionMode.Polite },
+            )
         },
         trailingContent = { NetworkActionsButton(name = config.name, actionsFor = actionsFor, onAction = onAction) },
     )
