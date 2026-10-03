@@ -22,6 +22,7 @@ import net.amiantos.lurker.platform.ReachabilityMonitor
 import net.amiantos.lurker.prefs.PrefsDefaultsStorage
 import net.amiantos.lurker.prefs.SharedStringPrefs
 import net.amiantos.lurker.prefs.UiPreferences
+import net.amiantos.lurker.ui.dcc.DccOffers
 import net.amiantos.lurkerkit.session.AppBadge
 import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.session.OAuthClients
@@ -61,6 +62,13 @@ class LurkerApp : Application() {
     val events = AppEvents()
 
     /**
+     * The DCC chat offer standing for an answer (lurker-android#38) — a StateFlow here rather than an
+     * [AppEvent], since an offer waits for its answer through the app's absence. See [DccOffers].
+     */
+    lateinit var dccOffers: DccOffers
+        private set
+
+    /**
      * Same shape as reachability and push: the kit decides the number, the app makes the platform
      * call. Android has no first-party launcher badge outside notifications — a launcher draws a
      * dot or a count from the app's *notifications* — so until push there is nothing to write to,
@@ -93,6 +101,8 @@ class LurkerApp : Application() {
         // is a `task`, so it starts only after this returns, and on `Main.immediate` this collector
         // subscribes now, not later — so no state published by the restore can slip past it.
         badge.follow(model.statePublisher, scope)
+
+        dccOffers = DccOffers(model, scope) { refusal -> events.send(AppEvent.Notice(refusal)) }
 
         wireCallbacks()
         observeSession()
@@ -152,8 +162,13 @@ class LurkerApp : Application() {
         model.onJoinNotice = { notice -> events.send(AppEvent.Notice(notice.message)) }
 
         // A DCC chat this device opened or accepted has a buffer — navigate, as for a join
-        // (lurker#270). U6: the offer prompt (iOS `DccOfferPrompt`).
+        // (lurker#270). Only once its `=nick` row exists: the kit holds the open until then
+        // (`PendingDccOpen`), since landing on an absent buffer in a settled roster pops straight back.
         model.onDccChatOpened = { key -> events.send(AppEvent.OpenBuffer(key)) }
+
+        // An offer someone made us is asked about over whatever is on screen (iOS `DccOfferPrompt`):
+        // `MainScaffold` draws the dialog from `dccOffers.prompt`.
+        dccOffers.follow()
 
         // The server refused a line (lurker-ios#128): the composer showing that buffer refills from
         // `takeUnsent`. A nudge only — the line waits in the kit, and a composer that isn't on screen

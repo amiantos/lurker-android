@@ -38,6 +38,7 @@ class MainActivity : ComponentActivity() {
                     model = app.model,
                     uiPreferences = app.uiPreferences,
                     events = app.events,
+                    dccOffers = app.dccOffers,
                     signInNotice = app.browserSignIn.notice,
                     lastServerURL = { app.uiPreferences.lastServerURL },
                     onSignIn = app::signIn,

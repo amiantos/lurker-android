@@ -57,7 +57,9 @@ import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
@@ -85,6 +87,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import net.amiantos.lurker.prefs.UiPreferences
+import net.amiantos.lurker.ui.actions.MessageActionsHost
+import net.amiantos.lurker.ui.actions.rememberMessageActionsState
 import net.amiantos.lurker.ui.composer.ComposerBar
 import net.amiantos.lurker.ui.composer.ComposerModel
 import net.amiantos.lurker.ui.composer.SendScroll
@@ -94,6 +98,7 @@ import net.amiantos.lurker.ui.message.MessageListContext
 import net.amiantos.lurker.ui.message.MessageListLayout
 import net.amiantos.lurker.ui.message.MessageListRow
 import net.amiantos.lurker.ui.message.ReactionContext
+import net.amiantos.lurker.ui.message.RowPress
 import net.amiantos.lurker.ui.message.previewMessageRows
 import net.amiantos.lurker.ui.message.rememberMessageTextStyle
 import net.amiantos.lurker.ui.shell.ConnectionBanner
@@ -150,7 +155,9 @@ import java.time.ZoneOffset
  * bar, so the list's reservation includes it, and it pads itself by the keyboard — the reverse layout
  * keeps the newest row anchored as either grows. Its suggestions float over the list, above it.
  *
- * U6: long-press message actions and the reaction picker — Reply calls `ComposerState.startReply`.
+ * A long press on a row opens its actions sheet (lurker-android#37): the line's, a link's, or — on
+ * the chips — who reacted. Reply goes through `ComposerState.startReply`. See `MessageActionsHost`.
+ *
  * U8: link previews.
  *
  * @param jump the message to land on rather than the bottom (`BufferRoute.jump`) — a new request on
@@ -569,6 +576,23 @@ fun ConversationScreen(
     val day = clock.value
     val style = rememberMessageTextStyle()
     val haptics = LocalHapticFeedback.current
+
+    // The message sheets — actions, reactions, Ignore (lurker-ios#60, #183).
+    val actions = rememberMessageActionsState(model, key)
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    fun onLongPress(press: RowPress) {
+        if (!actions.press(press)) return
+        // The keyboard would otherwise stay up over the sheet, which is sized to a few rows — shorter
+        // than the keyboard — so it would land entirely behind it: the common case, mid-draft,
+        // long-pressing a line to reply to it.
+        keyboard?.hide()
+        focusManager.clearFocus()
+        // The press has no other visible effect at the moment it fires, so the tap is what confirms it
+        // registered, before the sheet animates in.
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+    }
+
     val context = remember(rows, inputs, highlighter, style, day) {
         MessageListContext(
             style = style,
@@ -600,9 +624,9 @@ fun ConversationScreen(
                     val sent = model.toggleReaction(messageId = message.id, value = value)
                     haptics.performHapticFeedback(if (sent) HapticFeedbackType.Confirm else HapticFeedbackType.Reject)
                 },
-                // U6: the reaction sheet (`ReactionSheetViewController`).
-                onOpen = {},
+                onOpen = { message -> actions.showReactions(message) },
             ),
+            onLongPress = ::onLongPress,
             zone = day.zone,
             today = day.today,
         )
@@ -656,6 +680,16 @@ fun ConversationScreen(
         if (!arrived || current.rows.isEmpty() || scroll.landingPending) return@LaunchedEffect
         carryToComposer()
     }
+
+    MessageActionsHost(
+        state = actions,
+        model = model,
+        key = key,
+        // The line as the list shows it — a relayed line as the person inside it — which is whom the
+        // Reply addresses.
+        onReply = composer::startReply,
+        onShowProfile = onShowProfile,
+    )
 
     val placeholder = ConversationModel.placeholder(hasRows = rows.isNotEmpty(), inputs = inputs, forceLoading = forceLoading)
     ConversationContent(
@@ -981,7 +1015,7 @@ internal fun ConversationContent(
                                     if (strength > 0f) drawRect(wash.copy(alpha = wash.alpha * strength))
                                 }
                             }
-                            // U6: long-press for the line's actions (lurker-ios#60).
+                            // A long press is the row's own (`MessageListContext.onLongPress`).
                             MessageListRow(rows[index], index, context, modifier = modifier)
                         }
                     }
