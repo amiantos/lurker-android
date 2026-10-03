@@ -266,7 +266,9 @@ object MessageText {
         val visible = nicks.take(3)
         val hidden = nicks.size - visible.size
         val names = StyledBody()
-        names.append(" ", muted(style))
+        // Non-breaking, so the row can't wrap here: a breakable space let the line end after the
+        // glyph \u2014 a first line holding nothing but a keyboard symbol.
+        names.append("\u00A0", muted(style))
         visible.forEachIndexed { index, nick ->
             if (index > 0) names.append(", ", muted(style))
             names.append(nickName(nick), SpanStyle(color = nickColor(nick, isSelf = false, style)))

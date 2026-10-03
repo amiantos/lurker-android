@@ -441,7 +441,7 @@ class MessageTextTest {
     @Test
     fun `the typing line is a glyph and up to three names`() {
         val line = MessageText.renderCompactTyping(listOf("alice", "bob", "carol", "dave", "erin"), style)!!
-        assertEquals("Typing: alice, bob, carol, +2", line.text)
+        assertEquals("Typing:\u00A0alice, bob, carol, +2", line.text)
         assertEquals(MessageText.spoken(line), line.text)
         val indent = line.paragraphStyles.single().item.textIndent!!
         assertEquals((style.indentSp + style.typingGlyphWidthSp).sp, indent.restLine)
