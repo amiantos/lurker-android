@@ -22,7 +22,7 @@ import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.LurkerStore
 import net.amiantos.lurkerkit.store.SettingsCache
-import net.amiantos.lurkerkit.store.SettingsCacheStorage
+import net.amiantos.lurkerkit.store.DefaultsStorage
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -315,12 +315,12 @@ class SettingsTests {
      * Its own store, so tests never scribble on the app's.
      *
      * Port note: LurkerKit gives each test a fresh `UserDefaults` suite; here a map behind the
-     * kit's `SettingsCacheStorage`.
+     * kit's `DefaultsStorage`.
      */
     private fun isolatedCache(): SettingsCache = SettingsCache(defaults = MapStorage())
 
-    /** `SettingsCacheStorage` over a map — the in-memory stand-in for `UserDefaults`. */
-    private class MapStorage : SettingsCacheStorage {
+    /** `DefaultsStorage` over a map — the in-memory stand-in for `UserDefaults`. */
+    private class MapStorage : DefaultsStorage {
         private val stored = mutableMapOf<String, JsonObject>()
 
         override fun dictionary(key: String): JsonObject? = stored[key]

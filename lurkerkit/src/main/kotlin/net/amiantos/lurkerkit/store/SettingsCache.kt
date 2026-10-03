@@ -11,13 +11,14 @@ import net.amiantos.lurkerkit.model.SettingValue
  * no more. The kit holds the rule; `:app` implements this over its own preferences store, and the
  * tests over a map.
  *
- * Port-only: LurkerKit takes a `UserDefaults` (PORTING.md, the module boundary).
+ * Port-only: LurkerKit takes a `UserDefaults` (PORTING.md, the module boundary). The one
+ * `UserDefaults` seam in the kit — `OAuthClients` reads its client ids through it too.
  *
  * The value is a JSON object because that is what a `SettingValue` already is on the wire
  * (`jsonValue`, `SettingValue.from`): an implementation stores it however it likes and hands
  * the same object back.
  */
-interface SettingsCacheStorage {
+interface DefaultsStorage {
     /**
      * `UserDefaults.dictionary(forKey:)`: the object last stored under `key`, or null when
      * there is none (or what is there is not an object).
@@ -58,7 +59,7 @@ interface SettingsCacheStorage {
  */
 data class SettingsCache(
     /** Injectable so tests get their own store rather than scribbling on the app's. */
-    private val defaults: SettingsCacheStorage,
+    private val defaults: DefaultsStorage,
 ) {
     /** The values from the last session, or empty when there's nothing cached. */
     fun load(): Map<String, SettingValue> {
