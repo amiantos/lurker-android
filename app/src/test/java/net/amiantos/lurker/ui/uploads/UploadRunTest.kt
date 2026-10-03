@@ -32,6 +32,9 @@ class UploadRunTest {
         val deleted = mutableListOf<File>()
         val asked = mutableListOf<Asked>()
         val staged = ArrayDeque<StageResult>()
+        /** When set, staging throws this — a content provider refusing an address its own way. */
+        var stageThrows: Exception? = null
+        var imageThrows: Exception? = null
         val answers = ArrayDeque<Result<UploadResponse, UploadError>>()
         var image: PreparedImage? = null
         var video: (suspend (File, (Double) -> Unit) -> PreparedVideo)? = null
@@ -42,9 +45,15 @@ class UploadRunTest {
         override var uploadCapBytes: Long = 100
         override var maxStaticImageDimension: Int? = 2048
 
-        override suspend fun stage(source: AttachmentSource.Content): StageResult = staged.removeFirst()
+        override suspend fun stage(source: AttachmentSource.Content): StageResult {
+            stageThrows?.let { throw it }
+            return staged.removeFirst()
+        }
 
-        override suspend fun prepareImage(file: File, maxStaticImageDimension: Int?): PreparedImage? = image
+        override suspend fun prepareImage(file: File, maxStaticImageDimension: Int?): PreparedImage? {
+            imageThrows?.let { throw it }
+            return image
+        }
 
         override suspend fun prepareVideo(file: File, maxBytes: Long, onProgress: (Double) -> Unit): PreparedVideo =
             video?.invoke(file, onProgress) ?: PreparedVideo(file, isTemporary = false)
@@ -282,5 +291,28 @@ class UploadRunTest {
         assertEquals(0, result.unreadable)
         assertTrue(platform.asked.isEmpty())
         assertNull(result.report())
+    }
+
+    @Test
+    fun aProviderThatThrowsIsOneUnreadableFileNotACrash() = runTest {
+        val platform = FakePlatform().apply {
+            stageThrows = IllegalArgumentException("Unknown URI: content://gone/1")
+            answers += ok("https://u/2")
+        }
+        val delivery = Delivery()
+        val result = run(platform, delivery).run(listOf(AttachmentSource.Content("content://gone/1")))
+        assertEquals(1, result.unreadable)
+        assertEquals("Unknown URI: content://gone/1", result.report()!!.message)
+        assertTrue(platform.asked.isEmpty())
+    }
+
+    @Test
+    fun aRedrawThatBreaksUploadsTheOriginal() = runTest {
+        val platform = FakePlatform().apply {
+            imageThrows = IllegalStateException("decoder")
+            answers += ok("https://u/1")
+        }
+        run(platform, Delivery()).run(listOf(picked("shot.png")))
+        assertEquals(Asked(File("/cache/shot.png"), "shot.png", "image/png"), platform.asked.single())
     }
 }

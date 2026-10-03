@@ -10,11 +10,11 @@ import android.net.Uri
 import androidx.core.net.toUri
 import android.provider.OpenableColumns
 import android.webkit.MimeTypeMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.withContext
 import net.amiantos.lurkerkit.client.UploadError
 import net.amiantos.lurkerkit.client.UploadResponse
 import net.amiantos.lurkerkit.client.UploadServerProgress
@@ -22,7 +22,6 @@ import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.support.Result
 import java.io.File
 import java.io.FileOutputStream
-import java.io.IOException
 import java.util.UUID
 
 /**
@@ -59,9 +58,17 @@ class AndroidUploadPlatform(
      *
      * A copy at all, not a read straight from the provider: the grant on a picked or shared address
      * belongs to the activity that received it, and the upload outlives it.
+     *
+     * ⚠ Any failure but a cancel is "couldn't be read", not just the I/O ones: a provider answers a
+     * stale or foreign address with whatever it likes — `IllegalArgumentException` ("Unknown URI"),
+     * `IllegalStateException`, `UnsupportedOperationException`, a `NullPointerException` — and one
+     * escaping here would end the app rather than one file.
+     *
+     * The copy is claimed ([withOwnedFiles]) the moment it's named, so a cancel landing as the copy
+     * finishes deletes it rather than dropping it.
      */
     override suspend fun stage(source: AttachmentSource.Content): StageResult =
-        withContext(Dispatchers.IO) {
+        withOwnedFiles(Dispatchers.IO) { claim ->
             val uri = source.uri.toUri()
             val resolver = context.contentResolver
             val named = AttachmentNaming.name(
@@ -71,9 +78,9 @@ class AndroidUploadPlatform(
                 extensionForMime = { MimeTypeMap.getSingleton().getExtensionFromMimeType(it) },
             )
             val stem = "lurker-attach-${UUID.randomUUID()}"
-            val dest = File(directory, if (named.extension.isEmpty()) stem else "$stem.${named.extension}")
+            val dest = claim(File(directory, if (named.extension.isEmpty()) stem else "$stem.${named.extension}"))
             try {
-                val input = resolver.openInputStream(uri) ?: return@withContext StageResult.Failed("Couldn't read the file.")
+                val input = resolver.openInputStream(uri) ?: return@withOwnedFiles StageResult.Failed("Couldn't read the file.")
                 input.use { stream ->
                     FileOutputStream(dest).use { out ->
                         val chunk = ByteArray(1 shl 16)
@@ -85,16 +92,14 @@ class AndroidUploadPlatform(
                         }
                     }
                 }
-            } catch (error: IOException) {
-                dest.delete()
-                return@withContext StageResult.Failed(error.message ?: "Couldn't read the file.")
-            } catch (error: SecurityException) {
-                // The grant lapsed — a share whose sending app has since gone away.
-                dest.delete()
-                return@withContext StageResult.Failed(error.message ?: "Couldn't read the file.")
-            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            } catch (cancelled: CancellationException) {
                 dest.delete()
                 throw cancelled
+            } catch (error: Exception) {
+                // A lapsed grant (a share whose sending app has gone) is a `SecurityException`; a full
+                // disk an `IOException`; a provider's own refusal anything at all.
+                dest.delete()
+                return@withOwnedFiles StageResult.Failed(error.message ?: "Couldn't read the file.")
             }
             StageResult.Staged(Picked(dest, named.filename, named.mime, named.isVideo))
         }

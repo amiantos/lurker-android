@@ -3,7 +3,11 @@
 
 package net.amiantos.lurkerkit
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import net.amiantos.lurkerkit.client.LurkerClient
 import net.amiantos.lurkerkit.client.ServerFrame
@@ -21,6 +25,7 @@ import kotlin.coroutines.CoroutineContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -30,13 +35,14 @@ import kotlin.test.assertTrue
  */
 class UploadDispatchTests {
 
-    /** A real thread of its own, recording every hop onto it. */
-    private class RecordingDispatcher : CoroutineDispatcher() {
+    /** A real thread of its own, recording every hop onto it. [beforeFirst] runs ahead of the first. */
+    private class RecordingDispatcher(private val beforeFirst: () -> Unit = {}) : CoroutineDispatcher() {
         private val executor = Executors.newSingleThreadExecutor { Thread(it, THREAD) }
         val hops: MutableList<String> = Collections.synchronizedList(mutableListOf())
 
         override fun dispatch(context: CoroutineContext, block: Runnable) {
             executor.execute {
+                if (hops.isEmpty()) beforeFirst()
                 hops.add(Thread.currentThread().name)
                 block.run()
             }
@@ -123,6 +129,46 @@ class UploadDispatchTests {
             }
             assertEquals(listOf(caller), frameThreads)
             assertTrue(io.hops.isNotEmpty())
+        } finally {
+            io.close()
+            file.delete()
+        }
+    }
+
+    /**
+     * Cancelled while the body is being copied: the copy finishes (it can't be interrupted), the
+     * cancel lands as `withContext` resumes — which discards what it returns — and the body must
+     * still be deleted, not left as a file nothing owns.
+     */
+    @Test
+    fun testACancelDuringTheCopyLeavesNoBodyBehind() = runTest {
+        val file = source()
+        val before = bodies()
+        var sent = false
+        val upload = CompletableDeferred<Job>()
+        // Cancels the upload just as its copy starts on the IO thread.
+        val io = RecordingDispatcher(beforeFirst = { runBlocking { upload.await().cancel() } })
+        try {
+            val client = LurkerClient(
+                scope = this,
+                onFrame = {},
+                httpClient = answering(200, """{"id":7,"url":"https://u/x"}""") { sent = true },
+                ioDispatcher = io,
+            )
+            client.restore(server = "https://app.lurker.chat", token = "current")
+            val job = launch {
+                client.upload(
+                    fileURL = file, filename = "a.bin", mime = "application/octet-stream",
+                    progressToken = "tok", onProgress = {}, onServerProgress = {},
+                )
+            }
+            upload.complete(job)
+            job.join()
+            assertTrue(job.isCancelled)
+            assertFalse(sent, "a cancelled upload sends nothing")
+            assertEquals(before, bodies(), "the body copied before the cancel landed is deleted")
+            // Once to assemble, once to delete.
+            assertEquals(2, io.hops.size)
         } finally {
             io.close()
             file.delete()

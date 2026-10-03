@@ -7,7 +7,6 @@ import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withContext
 import net.amiantos.lurkerkit.client.ImageShrink
 import java.io.File
 import java.io.FileOutputStream
@@ -45,17 +44,19 @@ class ImageConverter(private val cacheDirectory: File) {
      * interrupted, but a RAW's encode needn't follow a tap on ✕.
      */
     suspend fun prepare(file: File, maxStaticImageDimension: Int?): PreparedImage? =
-        withContext(Dispatchers.Default) {
-            val header = measure(file) ?: return@withContext null
+        // The redraw is claimed the moment it's named ([withOwnedFiles]): a cancel landing as the
+        // encode finishes deletes it, rather than throwing away the result that names it.
+        withOwnedFiles(Dispatchers.Default) { claim ->
+            val header = measure(file) ?: return@withOwnedFiles null
             val source = ImagePlanning.source(header)
             val plan = ImageShrink.plan(source, maxStaticImageDimension)
-            val maxPixelSize = ImagePlanning.maxPixelSize(plan) ?: return@withContext null
+            val maxPixelSize = ImagePlanning.maxPixelSize(plan) ?: return@withOwnedFiles null
 
-            val bitmap = decode(file, maxPixelSize) ?: return@withContext null
+            val bitmap = decode(file, maxPixelSize) ?: return@withOwnedFiles null
             try {
                 ensureActive()
-                val format = ImagePlanning.format(source, bitmap.hasAlpha(), maxStaticImageDimension) ?: return@withContext null
-                val out = File(cacheDirectory, "lurker-img-${UUID.randomUUID()}.${format.fileExtension}")
+                val format = ImagePlanning.format(source, bitmap.hasAlpha(), maxStaticImageDimension) ?: return@withOwnedFiles null
+                val out = claim(File(cacheDirectory, "lurker-img-${UUID.randomUUID()}.${format.fileExtension}"))
                 val wrote = try {
                     FileOutputStream(out).use { stream ->
                         val compression = if (format == ImageShrink.Format.Png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
@@ -66,7 +67,7 @@ class ImageConverter(private val cacheDirectory: File) {
                 }
                 if (!wrote || !ImagePlanning.keeps(ImagePlanning.onlyIfSmaller(plan), before = file.length(), after = out.length())) {
                     out.delete()
-                    return@withContext null
+                    return@withOwnedFiles null
                 }
                 PreparedImage(out, format)
             } finally {

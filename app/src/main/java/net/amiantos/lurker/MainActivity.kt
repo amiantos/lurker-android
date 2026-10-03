@@ -35,9 +35,11 @@ class MainActivity : ComponentActivity() {
         val fromHistory = (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
         if (!fromHistory) {
             consumeRedirect(intent)
-            // A share is consumed the same way and for the same reason: a recreation replays the intent,
-            // and a relaunch from recents replays the share that once launched the app.
-            consumeShare(intent)
+            // A share only on a FRESH start. A relaunch from recents replays the share that once
+            // launched the app, and so does the system recreating this activity after a process death
+            // — from the ORIGINAL intent, whatever `setIntent` left, with saved state — which would
+            // upload the files a second time. A share to the running task arrives in `onNewIntent`.
+            if (savedInstanceState == null) consumeShare(intent)
         }
         setContent {
             LurkerTheme {

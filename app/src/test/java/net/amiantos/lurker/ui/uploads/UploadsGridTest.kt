@@ -101,13 +101,20 @@ class UploadsGridTest {
     }
 
     @Test
-    fun aFailedContinuationLeavesTheGridAlone() {
+    fun aFailedContinuationLeavesTheGridAloneAndOffersATryAgain() {
         val ids = (100 downTo 51).toList().toIntArray()
         val (more, request) = loaded(*ids).loadMore()!!
         val after = more.nextPage(request, null)
         assertEquals(50, after.items.size)
         assertFalse(after.isLoading)
         assertTrue(after.hasMore)
+        assertTrue(after.pageInFailed)
+        // Try Again asks from the same cursor, and the foot clears while it's out.
+        val (retrying, again) = after.loadMore()!!
+        assertEquals(51, again.before)
+        assertFalse(retrying.pageInFailed)
+        // A new question clears it too.
+        assertFalse(after.reload().first.pageInFailed)
     }
 
     @Test

@@ -42,4 +42,12 @@ class ComposerInsertTest {
         val result = ComposerInsert.insert("nice shot", 4, 4, "https://u/2", atCaret = false)
         assertEquals(ComposerInsert.Result("nice shot https://u/2 ", 4, 4, focuses = false), result)
     }
+
+    @Test
+    fun anAppendOnlyEverAddsATail() {
+        for ((text, caret) in listOf("" to 0, "caption" to 3, "caption " to 8, "a\nb" to 1)) {
+            val result = ComposerInsert.insert(text, caret, caret, "https://u/9", atCaret = false)
+            assertEquals(text, result.text.substring(0, text.length))
+        }
+    }
 }

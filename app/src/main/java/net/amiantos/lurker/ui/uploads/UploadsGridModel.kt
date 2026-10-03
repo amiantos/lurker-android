@@ -42,6 +42,11 @@ data class UploadsGrid(
     val refreshing: Boolean = false,
     /** The first fetch failed with nothing to show — distinct from empty, so the placeholder offers a retry. */
     val loadFailed: Boolean = false,
+    /**
+     * A later page failed under rows already shown. Paging asks as tiles come on screen, and at the
+     * bottom none ever will again — so the grid's foot says so, with a Try Again (`loadMore`).
+     */
+    val pageInFailed: Boolean = false,
     val generation: Int = 0,
 ) {
     /** One request to make: its generation, its question, its cursor. */
@@ -64,6 +69,7 @@ data class UploadsGrid(
             isLoading = true,
             refreshing = byPull,
             loadFailed = false,
+            pageInFailed = false,
             isTruncated = false,
         )
         return next to Request(next.generation, filter, before = null, limit = UploadsRequest.limit(filter))
@@ -73,7 +79,7 @@ data class UploadsGrid(
     fun loadMore(): Pair<UploadsGrid, Request>? {
         val before = cursor
         if (isLoading || !hasMore || before == null) return null
-        return copy(isLoading = true) to Request(generation, filter, before = before, limit = UploadsRequest.limit(filter))
+        return copy(isLoading = true, pageInFailed = false) to Request(generation, filter, before = before, limit = UploadsRequest.limit(filter))
     }
 
     /**
@@ -110,13 +116,13 @@ data class UploadsGrid(
     }
 
     /**
-     * A later page landed. A failed continuation leaves what's on screen alone — there's a grid to read,
-     * and scrolling asks again.
+     * A later page landed. A failed continuation leaves what's on screen alone — there's a grid to read
+     * — and marks the foot for a Try Again ([pageInFailed]).
      */
     fun nextPage(request: Request, page: UploadsPage?): UploadsGrid {
         if (request.generation != generation) return this
         val settled = copy(isLoading = false)
-        if (page == null) return settled
+        if (page == null) return settled.copy(pageInFailed = true)
         val all = items + page.items
         return settled.copy(
             items = all,

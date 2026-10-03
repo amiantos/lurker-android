@@ -525,11 +525,21 @@ internal class ComposerState(
      * typing signal — the field genuinely holds a line being composed now.
      */
     fun insert(text: String, atCaret: Boolean) {
+        val before = field.text.toString()
         val current = field.selection
-        val result = ComposerInsert.insert(field.text.toString(), current.min, current.max, text, atCaret)
+        val result = ComposerInsert.insert(before, current.min, current.max, text, atCaret)
+        val composing = field.composition != null
         field.edit {
-            replace(0, length, result.text)
-            selection = TextRange(result.selectionStart, result.selectionEnd)
+            if (atCaret) {
+                replace(0, length, result.text)
+                selection = TextRange(result.selectionStart, result.selectionEnd)
+            } else {
+                // ⚠ Appended, never the whole field rewritten: a later link of a run lands while the
+                // user may be mid-word in the caption, and a replace would drop the IME's composition
+                // under them. Nor is the caret moved while they're composing — the word stays theirs.
+                append(result.text.substring(before.length))
+                if (!composing) selection = TextRange(result.selectionStart, result.selectionEnd)
+            }
         }
         fieldChanged(snapshot())
         if (result.focuses) focus()

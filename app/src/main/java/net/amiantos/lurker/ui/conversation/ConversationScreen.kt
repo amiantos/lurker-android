@@ -98,6 +98,7 @@ import net.amiantos.lurker.ui.media.PreviewContext
 import net.amiantos.lurker.ui.media.PreviewToggles
 import net.amiantos.lurker.ui.uploads.ComposerInsertTarget
 import net.amiantos.lurker.ui.uploads.LocalUploadServices
+import net.amiantos.lurker.ui.uploads.UploadTargets
 import net.amiantos.lurker.ui.uploads.rememberAttachments
 import net.amiantos.lurker.ui.message.MessageListContext
 import net.amiantos.lurker.ui.message.MessageListLayout
@@ -710,11 +711,13 @@ fun ConversationScreen(
     )
 
     // Uploads (lurker-android#15): this composer is where outside text lands while it's on screen — an
-    // upload's link, Add to Message, a share's text — and its paperclip and paste start a run. No
-    // paperclip in the system buffer, which has nothing to attach.
+    // upload's link, Add to Message, a share's text — and its paperclip and paste start a run.
     val uploads = LocalUploadServices.current
-    ComposerInsertTarget(uploads, key, composer::insert)
-    val attachments = rememberAttachments(uploads, attaches = key.networkId != null)
+    // Only a conversation takes uploads (`UploadTargets`): a server log or the Lurker console gets no
+    // paperclip, and isn't where a finished link lands — with none on screen it goes to the clipboard.
+    val takesUploads = UploadTargets.takes(kind)
+    ComposerInsertTarget(if (takesUploads) uploads else null, key, composer::insert)
+    val attachments = rememberAttachments(uploads, attaches = takesUploads)
 
     // The keyboard arriving FOR THE COMPOSER carries the reader to it — `keep_position_on_send` is
     // written as a rule about sending, but on a phone raising the keyboard to reply is what takes a

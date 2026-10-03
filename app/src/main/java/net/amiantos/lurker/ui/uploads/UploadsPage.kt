@@ -65,6 +65,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -120,6 +121,8 @@ internal fun UploadsPage(state: UploadsBrowserState, onClose: () -> Unit, onAddT
     val context = LocalContext.current
     val grid = state.grid
     val keyboard = LocalSoftwareKeyboardController.current
+    // One formatter for the page, rebuilt only when the locale changes — not one per tile per frame.
+    val relative = rememberRelativeAge()
     val gridState = rememberLazyGridState()
     LaunchedEffect(state.scrollToTop) { if (state.scrollToTop > 0) gridState.scrollToItem(0) }
     // Scrolling puts the keyboard away: this screen is read while being typed at, and the gesture for
@@ -163,10 +166,16 @@ internal fun UploadsPage(state: UploadsBrowserState, onClose: () -> Unit, onAddT
                         UploadTile(
                             item = item,
                             thumbnails = state.thumbnails,
+                            relative = relative,
                             actions = UploadTiles.actions(item, canInsert = onAddToMessage != null),
                             onTap = { perform(item, UploadAction.CopyLink) },
                             onAction = { action -> perform(item, action) },
                         )
+                    }
+                    // A failed page-in under tiles already shown: tiles ask for the next page as they come
+                    // on screen, and at the bottom none ever will again — so the way to ask again is here.
+                    if (grid.pageInFailed && grid.items.isNotEmpty()) {
+                        item(key = "retry", span = { GridItemSpan(maxLineSpan) }) { RetryRow(onRetry = state::retryMore) }
                     }
                     grid.footer?.let { footer ->
                         item(key = "footer", span = { GridItemSpan(maxLineSpan) }) {
@@ -324,6 +333,7 @@ private fun KindItem(title: String, selected: Boolean, onClick: () -> Unit) {
 private fun UploadTile(
     item: UploadItem,
     thumbnails: UploadThumbnails,
+    relative: (Instant) -> String,
     actions: List<UploadAction>,
     onTap: () -> Unit,
     onAction: (UploadAction) -> Unit,
@@ -334,7 +344,7 @@ private fun UploadTile(
     val thumbnail by produceState(initialValue = path?.let(thumbnails::cached), path) {
         value = if (path == null) null else thumbnails.cached(path) ?: thumbnails.load(path, targetPx)
     }
-    UploadTileContent(item, thumbnail, actions, onTap, onAction)
+    UploadTileContent(item, thumbnail, relative, actions, onTap, onAction)
 }
 
 /**
@@ -351,6 +361,8 @@ private fun UploadTile(
 internal fun UploadTileContent(
     item: UploadItem,
     thumbnail: ImageBitmap?,
+    /** "5 min. ago" for an instant — the page's one formatter ([rememberRelativeAge]). */
+    relative: (Instant) -> String,
     actions: List<UploadAction>,
     onTap: () -> Unit,
     onAction: (UploadAction) -> Unit,
@@ -358,7 +370,7 @@ internal fun UploadTileContent(
     val context = LocalContext.current
     val colors = LurkerTheme.colors
     var menu by remember { mutableStateOf(false) }
-    val meta = UploadTiles.metaLine(item, relative = { relativeAge(it) }, bytes = { Formatter.formatFileSize(context, it) })
+    val meta = UploadTiles.metaLine(item, relative = relative, bytes = { Formatter.formatFileSize(context, it) })
     Box {
         Column(
             Modifier
@@ -471,16 +483,26 @@ private fun actionIcon(action: UploadAction): ImageVector =
 
 /**
  * "now", "5 min. ago", "3 days ago" — iOS's abbreviated, named relative formatter, in the device's
- * locale. The unit is [RelativeAge]'s.
+ * locale. The unit is [RelativeAge]'s. One formatter, remembered for the page and rebuilt when the
+ * locale changes: building one is real work, and a grid redraws many tiles a frame.
  */
-private fun relativeAge(then: Instant): String {
-    val formatter = RelativeDateTimeFormatter.getInstance(
-        ULocale.getDefault(),
-        null,
-        RelativeDateTimeFormatter.Style.SHORT,
-        DisplayContext.CAPITALIZATION_NONE,
-    )
-    return when (val age = RelativeAge.of(then, Instant.now())) {
+@Composable
+private fun rememberRelativeAge(): (Instant) -> String {
+    val locale = LocalConfiguration.current.locales[0]
+    return remember(locale) {
+        val formatter = RelativeDateTimeFormatter.getInstance(
+            ULocale.forLocale(locale),
+            null,
+            RelativeDateTimeFormatter.Style.SHORT,
+            DisplayContext.CAPITALIZATION_NONE,
+        )
+        val format: (Instant) -> String = { then -> relativeAge(formatter, then) }
+        format
+    }
+}
+
+private fun relativeAge(formatter: RelativeDateTimeFormatter, then: Instant): String =
+    when (val age = RelativeAge.of(then, Instant.now())) {
         RelativeAge.Now -> formatter.format(RelativeDateTimeFormatter.Direction.PLAIN, RelativeDateTimeFormatter.AbsoluteUnit.NOW)
         is RelativeAge.Ago -> formatter.format(
             age.amount.toDouble(),
@@ -495,6 +517,23 @@ private fun relativeAge(then: Instant): String {
                 RelativeAge.Span.Years -> RelativeDateTimeFormatter.RelativeUnit.YEARS
             },
         )
+    }
+
+/** "Couldn't load more." and the button that asks again, at the grid's foot — U7's feed retry row. */
+@Composable
+private fun RetryRow(onRetry: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            "Couldn't load more.",
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = LurkerTheme.colors.fgMuted,
+        )
+        TextButton(onClick = onRetry) { Text("Try Again", style = MaterialTheme.typography.bodyMedium) }
     }
 }
 
@@ -548,7 +587,7 @@ private fun TilesPreview(dark: Boolean) {
         ) {
             for (item in previewItems) {
                 Box(Modifier.weight(1f)) {
-                    UploadTileContent(item, thumbnail = null, actions = UploadTiles.actions(item, canInsert = true), onTap = {}, onAction = {})
+                    UploadTileContent(item, thumbnail = null, relative = { "5 min. ago" }, actions = UploadTiles.actions(item, canInsert = true), onTap = {}, onAction = {})
                 }
             }
         }

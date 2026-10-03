@@ -149,7 +149,13 @@ class UploadsBrowserState(private val model: ChatViewModel, private val scope: C
 
     /** A tile near the end came on screen. */
     fun shown(index: Int) {
-        if (!grid.wantsMore(index)) return
+        if (grid.wantsMore(index) && !grid.pageInFailed) loadMore()
+    }
+
+    /** The foot's Try Again, after a page failed to come in. */
+    fun retryMore() = loadMore()
+
+    private fun loadMore() {
         val (next, request) = grid.loadMore() ?: return
         grid = next
         load = scope.launch {
