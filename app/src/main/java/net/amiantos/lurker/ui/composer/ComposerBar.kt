@@ -71,7 +71,6 @@ import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurker.ui.uploads.AttachButton
 import net.amiantos.lurker.ui.uploads.Attachments
 import net.amiantos.lurker.ui.uploads.UploadBatchPosition
-import net.amiantos.lurker.ui.uploads.UploadIcons
 import net.amiantos.lurker.ui.uploads.UploadPhase
 import net.amiantos.lurker.ui.uploads.UploadReadout
 import net.amiantos.lurker.ui.uploads.UploadStatusView
@@ -455,7 +454,7 @@ private fun ComposerPreview(
 @Composable
 private fun PreviewPaperclip(size: Dp) {
     Box(Modifier.size(size).background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape), contentAlignment = Alignment.Center) {
-        Icon(UploadIcons.AttachFile, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+        Icon(LurkerIcons.AttachFile, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
     }
 }
 

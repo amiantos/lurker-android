@@ -283,7 +283,7 @@ private fun FilterMenu(filter: UploadsFilter, onChange: ((UploadsFilter) -> Uplo
             modifier = Modifier.semantics { stateDescription = if (narrowed) "Filtered" else "All uploads" },
         ) {
             Icon(
-                UploadIcons.FilterList,
+                LurkerIcons.FilterList,
                 contentDescription = "Filter",
                 tint = if (narrowed) LurkerTheme.colors.accent else MaterialTheme.colorScheme.onSurface,
             )
@@ -300,7 +300,7 @@ private fun FilterMenu(filter: UploadsFilter, onChange: ((UploadsFilter) -> Uplo
             HorizontalDivider()
             DropdownMenuItem(
                 text = { Text("Starred Only") },
-                leadingIcon = { Icon(if (filter.favoritesOnly) UploadIcons.Star else UploadIcons.StarBorder, contentDescription = null) },
+                leadingIcon = { Icon(if (filter.favoritesOnly) LurkerIcons.Star else LurkerIcons.StarBorder, contentDescription = null) },
                 trailingIcon = { if (filter.favoritesOnly) Icon(LurkerIcons.Check, contentDescription = null) },
                 onClick = { choose { it.copy(favoritesOnly = !it.favoritesOnly) } },
                 modifier = Modifier.semantics { stateDescription = if (filter.favoritesOnly) "On" else "Off" },
@@ -404,7 +404,7 @@ internal fun UploadTileContent(
                             .background(Color.Black.copy(alpha = 0.35f), CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(UploadIcons.Star, contentDescription = null, tint = STAR_YELLOW, modifier = Modifier.size(14.dp))
+                        Icon(LurkerIcons.Star, contentDescription = null, tint = STAR_YELLOW, modifier = Modifier.size(14.dp))
                     }
                 }
             }
@@ -450,11 +450,11 @@ private val STAR_YELLOW = Color(0xFFFFCC00)
 private fun glyphIcon(glyph: UploadTiles.Glyph): ImageVector =
     when (glyph) {
         UploadTiles.Glyph.Removed -> LurkerIcons.Block
-        UploadTiles.Glyph.Image -> UploadIcons.Image
-        UploadTiles.Glyph.Video -> UploadIcons.Movie
-        UploadTiles.Glyph.Audio -> UploadIcons.Audiotrack
-        UploadTiles.Glyph.Text -> UploadIcons.Description
-        UploadTiles.Glyph.File -> UploadIcons.InsertDriveFile
+        UploadTiles.Glyph.Image -> LurkerIcons.Image
+        UploadTiles.Glyph.Video -> LurkerIcons.Movie
+        UploadTiles.Glyph.Audio -> LurkerIcons.Audiotrack
+        UploadTiles.Glyph.Text -> LurkerIcons.Description
+        UploadTiles.Glyph.File -> LurkerIcons.InsertDriveFile
     }
 
 private fun actionIcon(action: UploadAction): ImageVector =
@@ -462,11 +462,11 @@ private fun actionIcon(action: UploadAction): ImageVector =
         UploadAction.View -> LurkerIcons.Visibility
         UploadAction.OpenInBrowser -> LurkerIcons.OpenInNew
         UploadAction.AddToMessage -> LurkerIcons.Reply
-        UploadAction.Star -> UploadIcons.StarBorder
-        UploadAction.Unstar -> UploadIcons.Star
-        UploadAction.CopyLink -> UploadIcons.Link
+        UploadAction.Star -> LurkerIcons.StarBorder
+        UploadAction.Unstar -> LurkerIcons.Star
+        UploadAction.CopyLink -> LurkerIcons.Link
         UploadAction.Share -> LurkerIcons.Share
-        UploadAction.Delete -> UploadIcons.Delete
+        UploadAction.Delete -> LurkerIcons.Delete
     }
 
 /**

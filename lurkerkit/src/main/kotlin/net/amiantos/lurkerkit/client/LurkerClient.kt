@@ -4,7 +4,13 @@
 package net.amiantos.lurkerkit.client
 
 import kotlinx.coroutines.CancellableContinuation
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -116,6 +122,11 @@ internal class LurkerClient(
      * Android, under the app's cache directory), so the app says where.
      */
     mediaCacheDirectory: File? = null,
+    /**
+     * Where the disk work that must not run on the caller's thread goes — the upload's multipart
+     * copy. Port-only: a parameter so a test can see the hop; the app takes the default.
+     */
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
 ) {
     private val session: OkHttpClient = httpClient
 
@@ -2284,8 +2295,14 @@ internal class LurkerClient(
      *
      * Port note: throws `UploadError`, and whatever `MultipartBody.assemble` throws (an
      * `IOException`) as LurkerKit rethrows its error. `onProgress` is called on OkHttp's thread,
-     * as LurkerKit's is on the session's delegate queue. The multipart body is still assembled
-     * on the calling thread, as LurkerKit assembles it on the main actor.
+     * as LurkerKit's is on the session's delegate queue.
+     *
+     * Port note: LurkerKit assembles the multipart body on the main actor, under its own thread
+     * model; Android moves that disk work — the read and copy of the whole file, and deleting the
+     * body afterwards — onto [ioDispatcher], so a 200 MB video doesn't freeze the main thread for
+     * the length of the copy. Everything else stays on the caller's thread, which is main: the
+     * progress-sink map, the response handling and `reportUnauthorized`. The copy itself isn't
+     * interruptible, so a cancel during it lands once it's done, and the body is deleted then.
      */
     suspend fun upload(
         fileURL: File,
@@ -2298,10 +2315,15 @@ internal class LurkerClient(
         val token = token ?: throw UploadError.NotSignedIn
         val url = (baseURL + "/api/uploads").toHttpUrlOrNull() ?: throw UploadError.NotSignedIn
 
-        val body = MultipartBody.assemble(
-            token = progressToken, fileURL = fileURL, filename = filename, mime = mime,
-        )
+        // `NonCancellable`, so a cancel mid-copy can't drop a finished body on the floor before the
+        // `finally` below owns it; `ensureActive` then takes the cancel, and the `finally` deletes.
+        val body = withContext(NonCancellable + ioDispatcher) {
+            MultipartBody.assemble(
+                token = progressToken, fileURL = fileURL, filename = filename, mime = mime,
+            )
+        }
         try {
+            currentCoroutineContext().ensureActive()
             // Registered before a byte goes out, and torn down on every exit — including the
             // throws below, which is why it's a `finally` rather than a line after the response.
             // A sink left behind would be a leak keyed on a token nothing will ever send again.
@@ -2360,7 +2382,7 @@ internal class LurkerClient(
                 uploadProgressSinks.remove(progressToken)
             }
         } finally {
-            body.fileURL.delete()
+            withContext(NonCancellable + ioDispatcher) { body.fileURL.delete() }
         }
     }
 

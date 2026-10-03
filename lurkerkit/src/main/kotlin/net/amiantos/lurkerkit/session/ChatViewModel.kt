@@ -5,6 +5,7 @@ package net.amiantos.lurkerkit.session
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -12,6 +13,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import net.amiantos.lurkerkit.client.HistoryMode
 import net.amiantos.lurkerkit.client.Incompatibility
@@ -397,8 +399,14 @@ class ChatViewModel(
         // ⚠ And the BYTES, which are the part that actually identifies a reading history. The
         // decoded-image cache goes via the closure above (it's the platform's, this module isn't);
         // this drops the on-disk HTTP cache the images were served from.
-        client.clearMediaCache()
-        client.clearStagedMedia()
+        //
+        // Port note: LurkerKit purges these on the main actor, under its own thread model; Android
+        // moves the disk work off main — fire-and-forget on `Dispatchers.IO` in this model's scope,
+        // started at the same point in the teardown.
+        scope.launch(Dispatchers.IO) {
+            client.clearMediaCache()
+            client.clearStagedMedia()
+        }
         features = InstanceFeatures()
         lastPreviewToggles = null
         store.reset()
@@ -2394,8 +2402,13 @@ class ChatViewModel(
         // preview caches but left `features` asserting the departing instance's answer, so a
         // 401-bounce followed by signing in elsewhere primed against a flag nobody had checked.
         // The two teardowns lead to the same screen and must leave the same state behind.
-        client.clearMediaCache()
-        client.clearStagedMedia()
+        //
+        // Port note: as in `logout()` — LurkerKit purges on the main actor; Android moves the disk
+        // work off main, fire-and-forget on `Dispatchers.IO` in this model's scope.
+        scope.launch(Dispatchers.IO) {
+            client.clearMediaCache()
+            client.clearStagedMedia()
+        }
         features = InstanceFeatures()
         lastPreviewToggles = null
         store.reset()

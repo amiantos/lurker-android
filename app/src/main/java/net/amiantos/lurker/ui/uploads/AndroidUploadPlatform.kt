@@ -115,13 +115,9 @@ class AndroidUploadPlatform(
         videos.prepare(file, maxBytes, onProgress)
 
     /**
-     * The kit's upload, off the main thread.
-     *
-     * ⚠ Kit debt: `LurkerClient.upload` assembles the whole multipart body — a copy of the file — on the
-     * thread that calls it, so on the main thread a 200 MB video would freeze the app for the length of
-     * the copy. It is called from `Dispatchers.IO` instead, which the kit's main-confinement doesn't
-     * expect: its progress-sink registration and a 401's sign-out run on this thread too. The fix
-     * belongs in the kit (assemble on IO inside `upload`, everything else on main).
+     * The kit's upload, called from the main thread: the kit moves its own disk work (the multipart
+     * copy) onto IO and keeps the rest — the progress sinks, the auth handling — on main, where its
+     * client lives.
      *
      * The progress callbacks arrive on OkHttp's thread and are queued to the main thread, as iOS hops
      * each to the main actor — never run inline, which the run's staleness gate relies on.
@@ -134,18 +130,16 @@ class AndroidUploadPlatform(
         onProgress: (Double) -> Unit,
         onServerProgress: (UploadServerProgress) -> Unit,
     ): Result<UploadResponse, UploadError> =
-        withContext(Dispatchers.IO) {
-            model.upload(
-                fileURL = file,
-                filename = filename,
-                mime = mime,
-                progressToken = progressToken,
-                onProgress = { fraction -> scope.launch(Dispatchers.Main) { onProgress(fraction) } },
-                // Already on the main thread (the socket's frames are handled there), but queued all the
-                // same so the two legs reach the run in one order of arrival.
-                onServerProgress = { frame -> scope.launch(Dispatchers.Main) { onServerProgress(frame) } },
-            )
-        }
+        model.upload(
+            fileURL = file,
+            filename = filename,
+            mime = mime,
+            progressToken = progressToken,
+            onProgress = { fraction -> scope.launch(Dispatchers.Main) { onProgress(fraction) } },
+            // Already on the main thread (the socket's frames are handled there), but queued all the
+            // same so the two legs reach the run in one order of arrival.
+            onServerProgress = { frame -> scope.launch(Dispatchers.Main) { onServerProgress(frame) } },
+        )
 
     override fun delete(file: File) {
         file.delete()
