@@ -47,6 +47,8 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -293,17 +295,26 @@ internal fun FeedRowView(row: FeedRow, onClick: () -> Unit, removeAction: (() ->
     val metrics = rememberCompactMetrics(textStyle)
     val header = row.header
     val reply = row.reply
+    // Named apart from the semantics' own `onClick`, which the block below also calls.
+    val activate = onClick
     val label = remember(row) {
         val spoken = MessageListLayout.spokenRow(header, AnnotatedString(row.spokenBody)).text
-        if (reply == null) spoken else "${MessageText.spokenReplyQuote(reply.quote)}, $spoken"
+        if (reply == null) spoken else "${reply.spoken}, $spoken"
     }
     Column(
         Modifier
             .fillMaxWidth()
             .background(colors.bg)
             .clickable(onClickLabel = "show in conversation", role = Role.Button, onClick = onClick)
+            // ⚠ Replaces the clickable's semantics too, so the button and its tap are said again here —
+            // without them TalkBack reads the row and can't activate it.
             .clearAndSetSemantics {
                 contentDescription = label
+                role = Role.Button
+                onClick(label = "show in conversation") {
+                    activate()
+                    true
+                }
                 if (removeAction != null) {
                     customActions = listOf(
                         CustomAccessibilityAction("Remove") {
@@ -323,9 +334,8 @@ internal fun FeedRowView(row: FeedRow, onClick: () -> Unit, removeAction: (() ->
         ) {
             if (header != null) FeedHeaderLine(row, style, textStyle)
             if (reply != null) {
-                val quote = remember(reply, row.indentsBody, style) { MessageText.renderReplyQuote(reply.quote, row.indentsBody, style) }
                 Text(
-                    quote,
+                    reply.shown,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = if (header != null) CompactMetrics.headerGap else 0.dp)
