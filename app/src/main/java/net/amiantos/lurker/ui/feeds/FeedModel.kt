@@ -68,6 +68,26 @@ data class FeedRow(
     }
 }
 
+/**
+ * Rows already rendered, by key — so a page landing, a bookmark removed or midnight passing regroups
+ * the list without re-rendering every loaded row (relay reattribution, `Replies.presenting` and the
+ * body each time, on the main thread: quadratic over a long scroll). Dropped whole when a new first
+ * page lands (`FeedSnapshot.epoch`) or the face changes, the moments a row's rendering can change.
+ */
+class FeedRowCache(private val render: (HighlightItem) -> FeedRow) {
+    private val rows = HashMap<String, FeedRow>()
+
+    /** How many rows have actually been rendered — for the test that pins the cache. */
+    var renders: Int = 0
+        private set
+
+    fun row(item: HighlightItem): FeedRow =
+        rows.getOrPut(FeedRow.baseKey(item)) {
+            renders += 1
+            render(item)
+        }
+}
+
 /** A reply's quote line — the answered line, or null for "unavailable". */
 data class FeedReply(val quote: ReplyQuote?)
 
@@ -93,6 +113,7 @@ object FeedModel {
         now: Instant,
         zone: ZoneId,
         date: (Instant, withYear: Boolean) -> String,
+        render: (HighlightItem) -> FeedRow = { row(it, state, style, zone) },
     ): List<FeedSection> {
         // ⚠ A key the feed somehow repeats (two pages overlapping across a cursor) is suffixed rather
         // than handed to the list twice, which would crash it — a doubled row is recoverable, a crash isn't.
@@ -108,7 +129,8 @@ object FeedModel {
                     val base = FeedRow.baseKey(item)
                     val count = seen.getOrDefault(base, 0)
                     seen[base] = count + 1
-                    row(item, state, style, zone).copy(key = if (count == 0) base else "$base#$count")
+                    val rendered = render(item)
+                    if (count == 0) rendered else rendered.copy(key = "$base#$count")
                 },
             )
         }

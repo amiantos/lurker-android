@@ -54,6 +54,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import net.amiantos.lurker.ui.conversation.rememberDayClock
 import net.amiantos.lurker.ui.message.CompactMetrics
 import net.amiantos.lurker.ui.message.MessageListLayout
 import net.amiantos.lurker.ui.message.MessageText
@@ -68,7 +69,6 @@ import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.HighlightItem
 import net.amiantos.lurkerkit.session.ChatViewModel
 import java.time.Instant
-import java.time.ZoneId
 
 /**
  * Activity or Bookmarks, full screen — lurker-ios's `HighlightsViewController` /
@@ -126,15 +126,24 @@ internal fun FeedList(
     val snapshot = state.feed.snapshot
     val style = rememberMessageTextStyle()
     val context = LocalContext.current
+    // "Today" and "Yesterday" move at midnight (and with the zone), so the headers are rebuilt on the
+    // conversation's day clock — the rows themselves come from the cache, so that's a regroup only.
+    val day by rememberDayClock()
+    // Rendered once per row for the life of an answer: dropped when a new first page lands or the face
+    // changes, the moments a row's rendering can change (`FeedRowCache`).
+    val cache = remember(snapshot.epoch, style, day.zone) {
+        FeedRowCache { item -> FeedModel.row(item, model.state, style, day.zone) }
+    }
     // Built when the rows change, against the state as it stands then — see `FeedModel.sections`.
-    val sections = remember(snapshot.items, style) {
+    val sections = remember(snapshot.items, cache, day) {
         FeedModel.sections(
             snapshot.items,
             state = model.state,
             style = style,
             now = Instant.now(),
-            zone = ZoneId.systemDefault(),
+            zone = day.zone,
             date = { instant, withYear -> shortDate(context, instant, withYear) },
+            render = cache::row,
         )
     }
     FeedListContent(
@@ -144,6 +153,7 @@ internal fun FeedList(
         onSelect = onSelect,
         onRefresh = { state.feed.reload(byPull = true) },
         onShown = state.feed::scrolledTo,
+        onRetry = state.feed::retry,
         onRemove = onRemove,
         listState = listState,
         modifier = modifier,
@@ -174,6 +184,7 @@ internal fun FeedListContent(
     onRemove: ((HighlightItem) -> Boolean)?,
     listState: LazyListState,
     modifier: Modifier = Modifier,
+    onRetry: () -> Unit = {},
 ) {
     val colors = LurkerTheme.colors
     PullToRefreshBox(
@@ -200,6 +211,11 @@ internal fun FeedListContent(
                     }
                 }
             }
+            // A failed page-in under rows already shown. Paging fires as rows come on screen, and at the
+            // bottom none ever will again — so the way to ask again is said, and tapped, here.
+            if (snapshot.pageInFailed && snapshot.items.isNotEmpty()) {
+                item(key = "retry", contentType = "retry") { RetryRow(onRetry) }
+            }
         }
         // Loading, the fetch's failure, or an empty answer — said in place of rows. A pull shows its own
         // spinner, so the page's stays away while one is out.
@@ -208,6 +224,26 @@ internal fun FeedListContent(
             val said = words(placeholder)
             StateView(title = said.title, subtitle = said.subtitle, isLoading = placeholder == FeedPlaceholder.Loading)
         }
+    }
+}
+
+/** "Couldn't load more" and the button that asks again, at the foot of the list. */
+@Composable
+private fun RetryRow(onRetry: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = CompactMetrics.side, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            "Couldn't load more.",
+            modifier = Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyMedium,
+            color = LurkerTheme.colors.fgMuted,
+        )
+        TextButton(onClick = onRetry) { Text("Try Again", style = MaterialTheme.typography.bodyMedium) }
     }
 }
 

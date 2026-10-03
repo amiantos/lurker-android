@@ -175,4 +175,13 @@ class FeedModelTest {
         assertFalse(FeedModel.pointsIntoClosedBuffer(row, settled.copy(buffers = mapOf(open.key.id to open))))
         assertEquals("#gone isn't open, so this message can't be shown in context.", FeedModel.closedBufferMessage(row, settled))
     }
+
+    @Test
+    fun aRowIsRenderedOnceHoweverOftenTheListRegroups() {
+        val cache = FeedRowCache { FeedModel.row(it, state, style, zone) }
+        val first = listOf(item(3), item(2))
+        FeedModel.sections(first, state, style, now, zone, date, render = cache::row)
+        FeedModel.sections(first + item(1), state, style, now, zone, date, render = cache::row)
+        assertEquals(3, cache.renders)
+    }
 }

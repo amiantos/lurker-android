@@ -162,7 +162,8 @@ class SearchState(private val model: ChatViewModel, seed: String, private val sc
         shownQuery = ledger.query
         if (!reload) return
         showing = ledger.showing
-        feed.reload()
+        // A different question: the old answer comes down at once, Loading in its place.
+        feed.reload(newQuestion = true)
     }
 
     fun words(placeholder: FeedPlaceholder): StateWords =

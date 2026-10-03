@@ -45,9 +45,12 @@ class FeedController(
      */
     private var job: Job? = null
 
-    /** (Re)fetch from the newest page — see [FeedPager.reload]. */
-    fun reload(byPull: Boolean = false) {
-        val first = pager.reload(byPull)
+    /**
+     * (Re)fetch from the newest page — see [FeedPager.reload]. Whatever was in flight and is superseded
+     * (a page-in, a hop chain, the previous question) is cancelled.
+     */
+    fun reload(byPull: Boolean = false, newQuestion: Boolean = false) {
+        val first = pager.reload(byPull, newQuestion)
         if (first == null) {
             publish()
             return
@@ -60,7 +63,16 @@ class FeedController(
     /** The next older page, if one is due — a scroll drew row [index]. */
     fun scrolledTo(index: Int) {
         if (!pager.wantsMore(index)) return
-        pager.loadMore()?.let(::run)
+        val more = pager.loadMore() ?: return
+        publish()
+        run(more)
+    }
+
+    /** The retry row under a failed page-in: ask for that page again. */
+    fun retry() {
+        val more = pager.loadMore() ?: return
+        publish()
+        run(more)
     }
 
     /** Drop a row the reader removed (a bookmark) — see [FeedPager.remove]. */

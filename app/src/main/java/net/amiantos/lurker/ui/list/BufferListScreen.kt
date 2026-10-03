@@ -64,6 +64,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import net.amiantos.lurker.ui.feeds.AppView
+import net.amiantos.lurker.ui.feeds.AppViewMenuItem
 import net.amiantos.lurker.ui.feeds.ViewsLayout
 import net.amiantos.lurker.ui.shell.ConnectionBanner
 import net.amiantos.lurker.ui.shell.StateView
@@ -473,14 +474,10 @@ private fun OverflowMenu(actions: BufferListActions, sideBySide: Boolean) {
             val views = ViewsLayout.listMenu(sideBySide)
             if (views.isNotEmpty()) HorizontalDivider()
             for (view in views) {
-                DropdownMenuItem(
-                    text = { Text(view.title) },
-                    leadingIcon = { Icon(view.icon, contentDescription = null) },
-                    onClick = {
-                        expanded = false
-                        actions.onOpenView(view)
-                    },
-                )
+                AppViewMenuItem(view) {
+                    expanded = false
+                    actions.onOpenView(view)
+                }
             }
             // U8: and Uploads.
             HorizontalDivider()
