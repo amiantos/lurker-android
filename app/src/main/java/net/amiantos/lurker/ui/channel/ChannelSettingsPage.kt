@@ -84,6 +84,7 @@ class ChannelSettingsState(
 
     private var slice = ChannelSlice.of(model.state, key)
     private var drafts = ChannelModeDrafts()
+    private val inFlight = EditsInFlight()
     private val keyLookup = KeyLookup()
 
     /**
@@ -139,6 +140,9 @@ class ChannelSettingsState(
 
     /** The key lives only in the network config — asked once per stretch of the channel being keyed. */
     private fun askForKeyIfKeyed() {
+        // Lost the network or the channel: the live `±k` rows are from before, and the config's answer
+        // too. Both are forgotten, and asked for again once we're back in.
+        if (keyLookup.linkMoved(slice.keyReady)) modeRowsSeen.clear()
         val generation = keyLookup.onModes(slice.modes?.modes ?: "") ?: return
         scope.launch {
             val stored = model.storedChannelKey(key)
@@ -149,7 +153,8 @@ class ChannelSettingsState(
     private fun render() {
         askForKeyIfKeyed()
         val live = live()
-        drafts = drafts.reconcile(live = live, liveTopic = liveTopic())
+        // The kit's reconcile, then what it shouldn't have dropped put back — see `EditsInFlight`.
+        drafts = inFlight.restore(drafts.reconcile(live = live, liveTopic = liveTopic()), live, liveTopic())
         val pending = ChannelSettingsModel.pending(slice.access, live, drafts, liveTopic())
         val errors = listOfNotNull(saveError) + refusals.current
         screen = ChannelSettingsScreen(
@@ -161,16 +166,19 @@ class ChannelSettingsState(
 
     fun setTopic(text: String) {
         drafts = drafts.setTopic(text)
+        inFlight.editedTopic(text)
         render()
     }
 
     fun setOn(letter: String, on: Boolean) {
         drafts = drafts.setOn(letter, on, live = live())
+        inFlight.edited(letter, drafts)
         render()
     }
 
     fun setValue(letter: String, value: String) {
         drafts = drafts.setValue(letter, value, live = live())
+        inFlight.edited(letter, drafts)
         render()
     }
 
@@ -194,6 +202,7 @@ class ChannelSettingsState(
             return
         }
         val sending = drafts.sending(changes, live = live)
+        val letters = changes.map { it.letter }.toSet()
         refusals = refusals.arm()
         saving = true
         render()
@@ -202,13 +211,19 @@ class ChannelSettingsState(
                 var failure: ChatViewModel.ChannelSaveFailure? = null
                 if (topic != null) {
                     drafts = drafts.noteTopicSending(topic, liveTopic = topicWas)
+                    inFlight.sent(emptyList(), live, topicWas = topicWas)
                     failure = model.setTopic(key, topic = topic)
-                    drafts = drafts.settleTopic(topic, wentOut = failure?.certainlyUnsent != true)
+                    val wentOut = failure?.certainlyUnsent != true
+                    drafts = drafts.settleTopic(topic, wentOut = wentOut)
+                    inFlight.settled(emptyList(), topic = true, wentOut = wentOut)
                 }
                 if (failure == null && changes.isNotEmpty()) {
                     drafts = drafts.noteSending(sending)
+                    inFlight.sent(letters, live, topicWas = null)
                     failure = model.setChannelModes(key, changes = changes)
-                    drafts = drafts.settle(sending, wentOut = failure?.certainlyUnsent != true)
+                    val wentOut = failure?.certainlyUnsent != true
+                    drafts = drafts.settle(sending, wentOut = wentOut)
+                    inFlight.settled(letters, topic = false, wentOut = wentOut)
                 }
                 saving = false
                 saveError = failure?.message

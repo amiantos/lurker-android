@@ -8,6 +8,7 @@ import net.amiantos.lurkerkit.model.NickNote
 import net.amiantos.lurkerkit.model.ProfileStatus
 import net.amiantos.lurkerkit.model.WhoisResult
 import net.amiantos.lurkerkit.store.ChatState
+import net.amiantos.lurkerkit.store.SocketStatus
 import java.time.Instant
 
 /**
@@ -251,4 +252,16 @@ object NickNoteModel {
     fun deleteMessage(nick: String): String = "Your note about $nick will be removed from all your devices."
 
     fun offersDelete(original: String): Boolean = original.isNotEmpty()
+
+    /** iOS's words for a send that has no socket to go down. */
+    const val NOT_CONNECTED = "Not connected — try again when you're back online"
+
+    /**
+     * Why Save or Delete can't go out now, or null when it can. The note travels over our own socket,
+     * and the kit's `setNickNote` doesn't say whether it was sent — so the editor asks first, and stays
+     * open with what was typed rather than closing on a write that went nowhere. Only the socket
+     * matters: a note is the account's, not the IRC network's, so a network that's down is no reason.
+     */
+    fun sendRefusal(connection: SocketStatus, reachable: Boolean): String? =
+        if (reachable && connection == SocketStatus.Connected) null else NOT_CONNECTED
 }
