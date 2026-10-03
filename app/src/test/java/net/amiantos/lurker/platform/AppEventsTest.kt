@@ -78,4 +78,15 @@ class AppEventsTest {
         events.drain()
         assertTrue(events.notices.value.isEmpty())
     }
+
+    @Test
+    fun aRotationsSecondAttachDoesNotOutliveTheScreen() {
+        val events = AppEvents()
+        events.attach()
+        // Rotation: the old scaffold skips detach, the new one attaches again.
+        events.attach()
+        events.detach()
+        events.send(AppEvent.Notice("late"))
+        assertTrue(events.notices.value.isEmpty())
+    }
 }

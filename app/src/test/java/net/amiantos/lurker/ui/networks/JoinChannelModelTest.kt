@@ -6,6 +6,7 @@ package net.amiantos.lurker.ui.networks
 import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.store.ChatState
+import net.amiantos.lurkerkit.store.SocketStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -20,6 +21,8 @@ class JoinChannelModelTest {
     @Test
     fun optionsFollowTheBufferListsOrderAndNameUnnamedNetworks() {
         val state = ChatState(
+            connection = SocketStatus.Connected,
+            reachable = true,
             networks = mapOf(
                 1 to Network(id = 1, name = "Zeta", position = 1, state = ConnectionState.Connected),
                 2 to Network(id = 2, name = null, position = 0, state = ConnectionState.Disconnected),
@@ -29,6 +32,18 @@ class JoinChannelModelTest {
             listOf(JoinNetworkOption(2, "Unnamed network", ConnectionState.Disconnected), JoinNetworkOption(1, "Zeta", ConnectionState.Connected)),
             JoinChannelModel.options(state),
         )
+    }
+
+    @Test
+    fun aNetworkIsNotJoinableWhileLurkersOwnSocketIsDown() {
+        val networks = mapOf(1 to Network(id = 1, name = "Zeta", position = 0, state = ConnectionState.Connected))
+        val reconnecting = JoinChannelModel.options(ChatState(connection = SocketStatus.Reconnecting, reachable = true, networks = networks))
+        assertFalse(reconnecting.single().connected)
+        assertFalse(JoinChannelModel.canJoin(1, reconnecting, "#swift"))
+        val offline = JoinChannelModel.options(ChatState(connection = SocketStatus.Connected, reachable = false, networks = networks))
+        assertFalse(offline.single().connected)
+        val up = JoinChannelModel.options(ChatState(connection = SocketStatus.Connected, reachable = true, networks = networks))
+        assertTrue(JoinChannelModel.canJoin(1, up, "#swift"))
     }
 
     @Test

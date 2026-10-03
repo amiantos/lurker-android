@@ -67,12 +67,12 @@ class AppEvents {
     /** The hosts that can show a notice, in the order they claimed; the last one shows. */
     val noticeHosts: StateFlow<List<Any>> = hosts.asStateFlow()
 
-    private var attached = 0
+    private var attached = false
 
     fun send(event: AppEvent) {
         when (event) {
-            is AppEvent.Notice -> if (attached > 0) pending.update { it + event }
-            is AppEvent.OpenBuffer -> if (attached > 0) channel.trySend(event)
+            is AppEvent.Notice -> if (attached) pending.update { it + event }
+            is AppEvent.OpenBuffer -> if (attached) channel.trySend(event)
             is AppEvent.BufferRenamed -> channel.trySend(event)
         }
     }
@@ -91,16 +91,17 @@ class AppEvents {
     }
 
     /**
-     * A screen that can act on events is up. Paired with [detach] — which `MainScaffold` skips across
-     * a configuration change, the gap the queue exists to bridge.
+     * A screen that can act on events is up. A flag, not a count: `MainScaffold` skips [detach]
+     * across a configuration change — the gap the queue exists to bridge — and the recreated one
+     * attaches again, which a count would read as two screens and never get back to none.
      */
     fun attach() {
-        attached += 1
+        attached = true
     }
 
     fun detach() {
-        attached = (attached - 1).coerceAtLeast(0)
-        if (attached == 0) pending.value = emptyList()
+        attached = false
+        pending.value = emptyList()
     }
 
     /**

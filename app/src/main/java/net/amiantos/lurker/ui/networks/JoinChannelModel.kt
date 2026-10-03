@@ -7,14 +7,20 @@ import net.amiantos.lurkerkit.model.BufferOrder
 import net.amiantos.lurkerkit.model.ChannelName
 import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.store.ChatState
+import net.amiantos.lurkerkit.store.SocketStatus
 import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 
 /**
  * One network in the Join Channel picker: exactly what a row draws and the join reads, so the
  * dialog's projection of the store compares only this.
  */
-data class JoinNetworkOption(val id: Int, val name: String, val state: ConnectionState) {
-    val connected: Boolean get() = state == ConnectionState.Connected
+data class JoinNetworkOption(val id: Int, val name: String, val state: ConnectionState, val appConnected: Boolean = true) {
+    /**
+     * Whether a JOIN can travel now: the network is up AND Lurker's own socket is — the test
+     * `ChatViewModel.requestJoin` makes. While the app is reconnecting a network's state is
+     * last-known, and offering Join then would dismiss the dialog only to say "not connected".
+     */
+    val connected: Boolean get() = appConnected && state == ConnectionState.Connected
 }
 
 /**
@@ -29,8 +35,12 @@ data class JoinNetworkOption(val id: Int, val name: String, val state: Connectio
 object JoinChannelModel {
 
     /** The picker's networks, in the buffer list's order. */
-    fun options(state: ChatState): List<JoinNetworkOption> =
-        BufferOrder.networks(state.networks).map { JoinNetworkOption(id = it.id, name = it.displayName, state = it.state) }
+    fun options(state: ChatState): List<JoinNetworkOption> {
+        val appConnected = state.reachable && state.connection == SocketStatus.Connected
+        return BufferOrder.networks(state.networks).map {
+            JoinNetworkOption(id = it.id, name = it.displayName, state = it.state, appConnected = appConnected)
+        }
+    }
 
     /** The network this would join on, when there is one that could actually carry it. */
     fun target(selected: Int?, options: List<JoinNetworkOption>): JoinNetworkOption? =

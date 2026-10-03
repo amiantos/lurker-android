@@ -143,10 +143,15 @@ internal class NetworksFlow(private val model: ChatViewModel, start: NetworksSta
      * ⚠ Only while the saving form is still the page on top. The reply can land after the user has
      * gone back and opened something else — another network's form with a draft in it, or the
      * picker for a new one — and unwinding the stack then would throw that page away under them.
-     * The save itself still happened; the list re-reads whenever it next appears.
+     * The save itself still happened, so the list re-reads in place.
      */
     private fun formSaved(page: NetworksPage.Form) {
-        if (pages.lastOrNull() !== page) return
+        if (pages.lastOrNull() !== page) {
+            // Still re-read the list: its appearance reload may have finished before this write
+            // landed, and would otherwise keep showing the row as it was until the dialog reopens.
+            list?.reload()
+            return
+        }
         if (list != null) {
             while (pages.size > 1) pages.removeAt(pages.lastIndex)
         } else {
