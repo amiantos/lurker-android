@@ -45,6 +45,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import net.amiantos.lurker.ui.media.MessageAttachments
+import net.amiantos.lurker.ui.media.PreviewPlan
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.ConsolidationSummary
@@ -143,6 +145,10 @@ internal data class CompactMetrics(
         /** Air under a reaction row, inside the block (`padding + 2` on iOS, less the line gap). */
         val reactionBottom: Dp = 2.dp
 
+        /** Air above and below a message's attachments (`CompactCell.showAttachments`). */
+        val attachmentsTop: Dp = 6.dp
+        val attachmentsBottom: Dp = 8.dp
+
         /** A marker's breathing room — iOS's default cell margins around one line. */
         val markerVertical: Dp = 10.dp
     }
@@ -217,15 +223,22 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
     val content = plan.content
     val message = (content as? RowPlan.Content.Of)?.message
     val revealed = message?.let(context.revealedSpoilers) ?: emptySet()
+    // What this row's previews mean for it — which addresses the body drops and what draws under it —
+    // once, for both halves: the text losing a URL and the picture appearing are the same event.
+    // Re-planned when the screen says preview state moved for something it shows (`revision`).
+    val previews = context.previews
+    val previewPlan = remember(message, previews?.store, previews?.toggles, previews?.revision) {
+        if (message == null || previews == null) PreviewPlan.None else previews.plan(message)
+    }
     val body: AnnotatedString = when (content) {
-        is RowPlan.Content.Of -> remember(content.message, revealed, context.highlighter, context.settings, style) {
+        is RowPlan.Content.Of -> remember(content.message, revealed, context.highlighter, context.settings, style, previewPlan.hidden) {
             MessageText.renderCompactBody(
                 content.message,
                 style = style,
                 settings = context.settings,
                 highlighter = context.highlighter,
                 revealed = revealed,
-                // U8: the addresses a preview stands in for (`PreviewPlan.hidden`).
+                hiddenUrls = previewPlan.hidden,
                 onToggleSpoiler = { ordinal -> context.onToggleSpoiler(content.message, ordinal) },
             )
         }
@@ -239,30 +252,35 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
     val spokenBody = remember(body) { MessageText.spokenAnnotated(body) }
     val label = MessageListLayout.spokenRow(plan.header, spokenBody)
     val ordinals = remember(body) { MessageText.hiddenSpoilerOrdinals(body) }
-    // The label goes on the body, or on the header when a body has no text left (U8: every URL
-    // hidden behind its picture).
-    val semantics = Modifier.clearAndSetSemantics {
-        text = label
-        val actions = mutableListOf<CustomAccessibilityAction>()
+    val actions = buildList {
         // The long press, for TalkBack — which has no long press on an element it reads whole.
         val press = context.onLongPress
         if (message != null && press != null) {
-            actions += CustomAccessibilityAction("Message actions") {
-                press(RowPress.Line(message))
-                true
-            }
+            add(
+                CustomAccessibilityAction("Message actions") {
+                    press(RowPress.Line(message))
+                    true
+                },
+            )
         }
         if (message != null && ordinals.isNotEmpty()) {
             // One action per hidden box, named by position, since the whole point is that their
             // contents can't be read out to tell them apart.
-            actions += ordinals.mapIndexed { position, ordinal ->
+            ordinals.forEachIndexed { position, ordinal ->
                 val name = if (ordinals.size == 1) "Reveal spoiler" else "Reveal spoiler ${position + 1} of ${ordinals.size}"
-                CustomAccessibilityAction(name) {
-                    context.onToggleSpoiler(message, ordinal)
-                    true
-                }
+                add(
+                    CustomAccessibilityAction(name) {
+                        context.onToggleSpoiler(message, ordinal)
+                        true
+                    },
+                )
             }
         }
+    }
+    // The label goes on the body, or on the header when a body has no text left (every URL hidden
+    // behind its picture) — and when there's no header either, the actions ride the attachments.
+    val semantics = Modifier.clearAndSetSemantics {
+        text = label
         if (actions.isNotEmpty()) customActions = actions
     }
     val hasBody = body.isNotEmpty()
@@ -325,7 +343,23 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                     inlineContent = if (content is RowPlan.Content.Typists) typingGlyph(colors.fgMuted) else emptyMap(),
                 )
             }
-            // U8: link previews and inline media (`MessageAttachmentsView`), indented under the body.
+            // Link previews and inline media (`MessageAttachmentsView`), one character in, as the body
+            // sits under its author — on a `/me` too, as iOS indents them. Air above and below, so a
+            // picture doesn't read as belonging to the next author's line; inside the wash, since it
+            // belongs to this message.
+            if (previews != null && previewPlan.resolved.isNotEmpty()) {
+                MessageAttachments(
+                    previews = previewPlan.resolved,
+                    media = previews.media,
+                    onOpenGallery = context.onOpenMedia,
+                    rowActions = if (!hasBody && plan.header == null) actions else emptyList(),
+                    modifier = Modifier.padding(
+                        start = with(LocalDensity.current) { style.indentSp.sp.toDp() },
+                        top = CompactMetrics.attachmentsTop,
+                        bottom = CompactMetrics.attachmentsBottom,
+                    ),
+                )
+            }
             val chips = plan.reactions
             if (chips != null && message != null) {
                 ReactionChipRow(

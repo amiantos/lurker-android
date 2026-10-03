@@ -20,7 +20,8 @@ import androidx.compose.ui.unit.dp
  * `arrow_upward`, `cancel`, `info_outline`, `group`, `account_circle`, `content_copy`, `refresh`,
  * `chat_bubble_outline`, `tune`, `list`, `help_outline`, `more_horiz`, `check_circle_outline`,
  * `security`, `memory`, `wifi_tethering`, `reply`, `sentiment_satisfied`, `bookmark_border`, `bookmark`,
- * `open_in_new`, `share`, `block`, `alternate_email`, `bookmark_remove` — Apache-2.0), so a
+ * `open_in_new`, `share`, `block`, `alternate_email`, `bookmark_remove`, `play_circle_filled`,
+ * `graphic_eq`, `image` — Apache-2.0), so a
  * glyph here is the one every Android user already reads. Tinted by the `Icon` that draws it.
  */
 object LurkerIcons {
@@ -392,6 +393,27 @@ object LurkerIcons {
         icon(
             "BookmarkRemove",
             "M17,11v6.97l-5,-2.14l-5,2.14V5h6V3H7C5.9,3 5,3.9 5,5v16l7,-3l7,3V11H17zM21,7h-6V5h6V7z",
+        )
+    }
+
+    // U8a — inline media and the media viewer.
+
+    /** A clip, or an image that moves — iOS's `play.circle.fill` (Material's `play_circle_filled`). */
+    val PlayCircle: ImageVector by lazy {
+        icon("PlayCircle", "M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2zM10,16.5v-9l6,4.5 -6,4.5z")
+    }
+
+    /** A track — iOS's `waveform` (Material's `graphic_eq`). */
+    val GraphicEq: ImageVector by lazy {
+        icon("GraphicEq", "M7,18h2V6H7v12zM11,22h2V2h-2v20zM3,14h2v-4H3v4zM15,18h2V6h-2v12zM19,10v4h2v-4h-2z")
+    }
+
+    /** A picture that couldn't be drawn — iOS's `photo` (Material's `image`). */
+    val Image: ImageVector by lazy {
+        icon(
+            "Image",
+            "M21,19V5c0,-1.1 -0.9,-2 -2,-2H5c-1.1,0 -2,0.9 -2,2v14c0,1.1 0.9,2 2,2h14c1.1,0 2,-0.9 2,-2z" +
+                "M8.5,13.5l2.5,3.01L14.5,12l4.5,6H5l3.5,-4.5z",
         )
     }
 
