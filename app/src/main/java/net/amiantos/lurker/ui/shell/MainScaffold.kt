@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.shell
 
+import android.os.SystemClock
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -93,9 +94,18 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, onSignOut: 
     // conversation covers it on a phone — from the first moment, after a launch restore — and a
     // timer that restarted with it would never fire for a list that's never looked at, then make
     // each return to it wait the full four seconds again.
+    //
+    // The deadline is saved beside the latch, under the same process token: a rotation recreates
+    // this effect, and a fresh four seconds each time would let repeated rotations hold an old
+    // server's list off indefinitely. Recreated, it waits only what's left; after process death the
+    // token doesn't match and a fresh connect gets a fresh wait.
+    var fallbackAt by rememberSaveable { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         if (hasRenderedList) return@LaunchedEffect
-        delay(BufferListModel.BURST_WAIT_MS)
+        val now = SystemClock.elapsedRealtime()
+        val saved = fallbackAt?.takeIf { it.startsWith("$processToken@") }?.substringAfter('@')?.toLongOrNull()
+        val deadline = saved ?: (now + BufferListModel.BURST_WAIT_MS).also { fallbackAt = "$processToken@$it" }
+        delay((deadline - now).coerceAtLeast(0))
         latchedIn = processToken
     }
 
