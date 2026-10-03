@@ -53,6 +53,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -403,8 +404,6 @@ fun ConversationScreen(
         land()
     }
 
-    // The pill's tap — and a send from a detached slice, which re-attaches through this same path
-    // (iOS's `send`), since the line just sent isn't in the slice and no scroll will reach it.
     // The pill's path, and a send's from a detached slice (iOS's `send`): the line just sent isn't in
     // the slice and no scroll will reach it.
     fun jumpToLatest() {
@@ -610,44 +609,48 @@ fun ConversationScreen(
 
     // MARK: - Composer
 
-    // Whether the reader is parked at the newest row — what decides whether a send or the keyboard
-    // carries them down (`chat.keep_position_on_send`).
-    fun nearBottom() = ConversationModel.followsTail(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, followSlop)
+    // Carry the reader to where the composer's line will be: a send, or the keyboard coming up to write
+    // one. Detached, re-attach (the line won't be in the slice); else down to the tail, unless they
+    // asked to keep their place up in history (`chat.keep_position_on_send`). "At the tail" is the
+    // layout's own answer (`jobs.nearBottom`, which counts the bar's reservation), not one re-derived
+    // here from the first visible item.
+    fun carryToComposer() {
+        val detached = model.state.buffers[key.id]?.hasMoreNewer == true
+        val keeps = ComposerModel.keepsPositionWhileReading(model.state.settings, nearBottom = jobs.nearBottom)
+        when (ComposerModel.sendScroll(detached = detached, keepsPosition = keeps)) {
+            SendScroll.Reattach -> jumpToLatest()
+            // The echo lands a moment later, over the socket; being at the tail when it does is what
+            // makes the build follow it rather than count it on the pill.
+            SendScroll.ToBottom -> if (current.rows.isNotEmpty() && !scroll.landingPending) listState.requestScrollToItem(0)
+            SendScroll.Stay -> Unit
+        }
+    }
 
     val composer = rememberComposerState(
         model = model,
         key = key,
         kind = kind,
         messages = { current.visible },
-        onWillSend = {
-            val detached = model.state.buffers[key.id]?.hasMoreNewer == true
-            val keeps = ComposerModel.keepsPositionWhileReading(model.state.settings, nearBottom())
-            when (ComposerModel.sendScroll(detached = detached, keepsPosition = keeps)) {
-                SendScroll.Reattach -> jumpToLatest()
-                // The echo lands a moment later, over the socket; being at the tail when it does is
-                // what makes the build follow it rather than count it on the pill.
-                SendScroll.ToBottom -> if (current.rows.isNotEmpty() && !scroll.landingPending) listState.requestScrollToItem(0)
-                SendScroll.Stay -> Unit
-            }
-        },
+        onWillSend = ::carryToComposer,
         onOpenBuffer = onOpenBuffer,
         onShowProfile = onShowProfile,
     )
 
-    // The keyboard arriving carries the reader down to the newest message — `keep_position_on_send`
-    // is written as a rule about sending, but on a phone raising the keyboard to reply is what takes
-    // a reader out of the history they were reading, well before they've typed anything (iOS's
-    // `keyboardWillChange`). A reader already at the tail needs nothing: the reverse layout keeps item
-    // 0 at the bottom edge as the keyboard pushes it up. On its ARRIVAL only — the keyboard leaving
-    // moves nobody.
-    val imeVisible = imeVisible()
-    val imeWas = remember { booleanArrayOf(imeVisible) }
-    LaunchedEffect(imeVisible) {
-        val arrived = imeVisible && !imeWas[0]
-        imeWas[0] = imeVisible
+    // The keyboard arriving FOR THE COMPOSER carries the reader to it — `keep_position_on_send` is
+    // written as a rule about sending, but on a phone raising the keyboard to reply is what takes a
+    // reader out of the history they were reading, well before they've typed anything (iOS's
+    // `keyboardWillChange`). A reader already at the tail needs nothing more: the reverse layout keeps
+    // item 0 at the bottom edge as the keyboard pushes it up. On the arrival only — the keyboard
+    // leaving moves nobody — and only the composer's: `isImeVisible` is true for any field, and a
+    // dialog's (Settings, Join, a network form, side by side over this pane) is no reason to move the
+    // conversation. A hardware keyboard raises no IME, and moves nothing, as on iOS.
+    val composing = composer.isFocused && imeVisible()
+    val composingWas = remember { booleanArrayOf(composing) }
+    LaunchedEffect(composing) {
+        val arrived = composing && !composingWas[0]
+        composingWas[0] = composing
         if (!arrived || current.rows.isEmpty() || scroll.landingPending) return@LaunchedEffect
-        if (ComposerModel.keepsPositionWhileReading(model.state.settings, nearBottom())) return@LaunchedEffect
-        listState.requestScrollToItem(0)
+        carryToComposer()
     }
 
     val placeholder = ConversationModel.placeholder(hasRows = rows.isNotEmpty(), inputs = inputs, forceLoading = forceLoading)
@@ -880,6 +883,15 @@ internal fun ConversationContent(
 ) {
     val colors = LurkerTheme.colors
     Scaffold(
+        // ⚠⚠ A focus target of the screen's own, so opening a buffer never focuses the composer. The
+        // list–detail scaffold requests focus into the detail pane on every navigation
+        // (`ThreePaneScaffold`'s `LaunchedEffect(currentDestination)`, on the pane's focus GROUP), and a
+        // group hands that to its first child that can take focus. In touch mode the buttons can't
+        // (theirs is "system defined"), but a text field always can — so the composer took it, and a
+        // text field gaining focus raises the keyboard: every buffer opened with the IME up. This
+        // target is that first child, takes the pane's focus itself, and shows nothing for it; the
+        // field is focused only by a tap on it (or a Reply), which goes to the field directly.
+        modifier = Modifier.focusTarget(),
         // What the log sits on — the web's `look.color.bg`, not the system's ground.
         containerColor = colors.bg,
         topBar = {

@@ -117,6 +117,13 @@ internal class ComposerState(
     var chrome: ComposerChrome by mutableStateOf(ComposerChrome.of(ComposerChrome.Inputs.of(model.state, key, kind)))
         internal set
 
+    /**
+     * Whether the field has focus — what the screen's keyboard-arrival scroll asks, since the keyboard
+     * coming up for some other field (a dialog's, side by side) is no reason to move the conversation.
+     */
+    var isFocused: Boolean by mutableStateOf(false)
+        internal set
+
     /** Whether an IME is mid-composition — marked text the keyboard hasn't committed yet. */
     val isComposing: Boolean get() = this.field.composition != null // `this.`: bare `field` is the backing field
 
@@ -227,13 +234,17 @@ internal class ComposerState(
      *
      * ⚠⚠ Silently: no typing signal (the channel would hear you resumed typing because the server
      * handed your own message back), no draft write (the caller decides), and no pills (they'd pop
-     * over a restored `/msg bob hi` nobody is in the middle of writing).
+     * over a restored `/msg bob hi` nobody is in the middle of writing). It does END a typing claim,
+     * though: what the channel was told about is gone, and a `paused` arriving after it would describe
+     * text nobody is writing any more — so `done` goes out, as for any other line that stops being
+     * composed.
      *
      * ⚠⚠ And it does NOT raise the keyboard. Nothing the user did asked for this — shoving the
      * keyboard up over a conversation they may have gone back to reading is the app talking over
      * them. The text appearing in the field is the whole message.
      */
     private fun restore(text: String) {
+        endTyping()
         field.edit {
             replace(0, length, text)
             selection = TextRange(text.length)
@@ -270,10 +281,37 @@ internal class ComposerState(
 
     // MARK: - Draft (lurker-ios#188)
 
+    /** Set while one action changes the field and the reply together — see [batch]. */
+    private var batching = false
+    private var batchDirty = false
+
     /** The composer changed — save it as this buffer's draft. */
-    private fun saveDraft() {
+    private fun saveDraft(composing: Boolean = isComposing) {
         if (isShowingDraft) return
-        model.editDraft(key, ComposerDraft(body = field.text.toString(), reply = reply), composing = isComposing)
+        if (batching) {
+            batchDirty = true
+            return
+        }
+        model.editDraft(key, ComposerDraft(body = field.text.toString(), reply = reply), composing = composing)
+    }
+
+    /**
+     * Run an action that changes the reply and the text together — a send, a restore, a Reply, a
+     * cancel — and save the draft ONCE, at the end, as it then stands. Saved piecemeal, the reply's
+     * change went out with the old text (a sent line was briefly the draft, with its reply gone), and
+     * a draft that syncs is a draft another device can repaint from in that window.
+     */
+    private inline fun batch(block: () -> Unit) {
+        batching = true
+        try {
+            block()
+        } finally {
+            batching = false
+            if (batchDirty) {
+                batchDirty = false
+                saveDraft()
+            }
+        }
     }
 
     private fun changeReply(next: PendingReply?) {
@@ -310,17 +348,35 @@ internal class ComposerState(
      * hearing you're mid-sentence now rather than in 30 seconds, and what was typed goes to the server
      * now rather than half a second after you've gone.
      *
-     * ⚠ Not mid-composition: flushing would close the marker on a word the IME still holds. The IME
-     * commits it as the field goes, and that edit arrives the ordinary way — or, when the app is
-     * backgrounding, the kit's `enterBackground` takes the composing draft too.
+     * Ends the edit too — see [endEditing].
      */
     internal fun leave() {
         endTyping()
-        if (!isComposing) model.flushDraft(key)
+        endEditing()
     }
 
     /** Leaving the field is the end of an edit, as leaving the buffer is: the web's blur. */
     internal fun focusLost() {
+        endEditing()
+    }
+
+    /**
+     * The edit is over — the field lost focus, or the composer (or the app) is going. Flush the draft,
+     * and if an IME was mid-composition, END the composition first.
+     *
+     * ⚠⚠ Not left to the IME's commit arriving the ordinary way. On dispose the field's observer is
+     * already cancelled, so that commit never reaches the kit: its `DraftSync.composing` would stay
+     * pinned to this buffer — the draft held back from the server, and every remote write to it
+     * dropped as "protected" — until the app next backgrounds. So the kit hears the field as it
+     * stands, preedit included (it is what's on screen, and what the IME commits), with
+     * `composing = false`, and the flush follows at once. The trackers record it, so a commit that
+     * does arrive later reads as nothing new.
+     */
+    private fun endEditing() {
+        if (isComposing) {
+            lastEdit = field.text.toString() to false
+            saveDraft(composing = false)
+        }
         model.flushDraft(key)
     }
 
@@ -339,10 +395,12 @@ internal class ComposerState(
         endTyping()
         onWillSend()
         val outcome = model.send(key, text, reply)
-        // Spent if the line went out as it — a plain line or a `/me`. Any other command leaves it
-        // pending, as the web does. A refusal brings it back with the line (`restoreRefused`).
-        if (Replies.consumes(text)) changeReply(null)
-        apply(FieldEdit("", 0))
+        batch {
+            // Spent if the line went out as it — a plain line or a `/me`. Any other command leaves it
+            // pending, as the web does. A refusal brings it back with the line (`restoreRefused`).
+            if (Replies.consumes(text)) changeReply(null)
+            apply(FieldEdit("", 0))
+        }
         // Emptied on the server now, not on the debounce: a quick close or a switch to another
         // device would otherwise find the line just sent still waiting there.
         model.flushDraft(key)
@@ -373,9 +431,11 @@ internal class ComposerState(
     internal fun restoreRefused() {
         if (!ComposerModel.canRestoreRefused(field.text.toString(), reply)) return
         val line = model.takeUnsent(key) ?: return
-        restore(line.text)
-        changeReply(line.reply)
-        saveDraft()
+        batch {
+            restore(line.text)
+            changeReply(line.reply)
+            saveDraft()
+        }
         model.flushDraft(key)
     }
 
@@ -399,18 +459,24 @@ internal class ComposerState(
      */
     fun startReply(message: Message) {
         val plan = ComposerModel.replyPlan(message, key.target, model.state.canReact(networkId = key.networkId), reply) ?: return
-        if (plan.cancelFirst) cancelReply()
-        plan.start?.let(::changeReply)
-        val nick = plan.address
-        if (nick != null) {
-            val (edit, inserted) = ComposerModel.address(field.text.toString(), nick, punctuation) ?: return
-            apply(edit)
-            // The tap that got here was a request to write something.
-            focus()
-            if (inserted && plan.marksAddressed) reply?.let { changeReply(it.copy(addressed = true)) }
-        } else if (plan.start != null) {
-            focus()
+        var focuses = false
+        batch {
+            if (plan.cancelFirst) cancelReply()
+            plan.start?.let(::changeReply)
+            val nick = plan.address
+            if (nick != null) {
+                val addressed = ComposerModel.address(field.text.toString(), nick, punctuation)
+                if (addressed != null) {
+                    apply(addressed.first)
+                    if (addressed.second && plan.marksAddressed) reply?.let { changeReply(it.copy(addressed = true)) }
+                }
+                // The tap that got here was a request to write something.
+                focuses = true
+            } else if (plan.start != null) {
+                focuses = true
+            }
         }
+        if (focuses) focus()
     }
 
     /**
@@ -419,9 +485,11 @@ internal class ComposerState(
      */
     fun cancelReply() {
         val cancelled = reply ?: return
-        changeReply(null)
-        if (cancelled.addressed) {
-            ComposerModel.removeAddress(field.text.toString(), cancelled.nick, punctuation)?.let(::apply)
+        batch {
+            changeReply(null)
+            if (cancelled.addressed) {
+                ComposerModel.removeAddress(field.text.toString(), cancelled.nick, punctuation)?.let(::apply)
+            }
         }
     }
 
