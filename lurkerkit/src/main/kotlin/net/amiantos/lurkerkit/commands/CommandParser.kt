@@ -166,11 +166,20 @@ object CommandParser {
         when (verb) {
             "commands" ->
                 return listOf(CommandEffect.Info(CommandRegistry.helpText()))
-            "away" ->
-                // Empty message clears away. User-scoped — no network attached.
-                return listOf(CommandEffect.Away(message = argLine))
-            "back" ->
-                return listOf(CommandEffect.Back)
+            "away", "back" -> {
+                // Empty message clears away. The network it's typed on goes with it, and from the
+                // system buffer there's none, which the server reads as every network — so `-one`
+                // there is refused rather than quietly reaching them all.
+                val (all, message) = awayFlag(argLine)
+                if (all == false && networkId == null) {
+                    return listOf(CommandEffect.Info("/$verb -one: there's no network here. Run it in a network's buffer."))
+                }
+                return if (verb == "away") {
+                    listOf(CommandEffect.Away(message = message, all = all))
+                } else {
+                    listOf(CommandEffect.Back(all = all))
+                }
+            }
             // Ignore rules are global by default, so both verbs run without a network — the system
             // buffer can list them and write them. Only `-network` needs a connection, and that's
             // checked where it's read.
@@ -480,6 +489,34 @@ object CommandParser {
         "list", "ls", "accept", "ok", "yes", "get", "reject", "deny", "no", "cancel", "abort", "stop",
         "send", "resume",
     )
+
+    /** What [awayFlag] reads off a line: the flag, and the line after it. */
+    internal data class AwayFlag(val all: Boolean?, val rest: String)
+
+    /**
+     * The scope flag at the front of an `/away` or `/back` line (lurker#994): `-all` for every
+     * network, `-one` for just this one, null without one. Only a leading, whole-word flag
+     * counts — `/away back at -all hands` is a message, as is `-allnighter`. The web's
+     * `parseAwayFlag` reads it the same way, except that its `\s` also counts U+FEFF: this
+     * splits on `Character.isWhitespace` (`isSwiftWhitespace` here) like every other command
+     * (see `IgnoreArgs.tokenize`).
+     *
+     * Port note: read by UTF-16 unit where LurkerKit reads by `Character`, so a space wearing
+     * a combining mark is one separator there, dropped mark and all, and here the mark is left
+     * behind: on the message when the space follows the flag, and in front of the flag (which
+     * then isn't one) when it precedes it — the second case in `parse`'s Port note. Checked
+     * against the Swift; every difference found was this one.
+     */
+    internal fun awayFlag(argLine: String): AwayFlag {
+        val line = argLine.dropWhile { it.isSwiftWhitespace() }
+        val word = line.takeWhile { !it.isSwiftWhitespace() }
+        val all: Boolean = when (word.lowercase()) {
+            "-all" -> true
+            "-one" -> false
+            else -> return AwayFlag(null, argLine)
+        }
+        return AwayFlag(all, line.drop(word.length).dropWhile { it.isSwiftWhitespace() })
+    }
 
     /**
      * `/dcc` — the chat verbs, in irssi's syntax exactly, as the web has them:

@@ -9,6 +9,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.TypingActivity
@@ -144,7 +145,7 @@ class AppBadgeWriteTests {
         send(LurkerStore.reduce(states.value, frame))
     }
 
-    private val snapshot = ServerFrame.Snapshot(emptyList(), globalIgnores = emptyList(), maxUploadBytes = null)
+    private val snapshot = ServerFrame.Snapshot(emptyList(), globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated)
 
     /** The connect-burst frame that carries a buffer's server-side counts. */
     private fun backlog(target: String, highlights: Int, unread: Int = 0): ServerFrame =

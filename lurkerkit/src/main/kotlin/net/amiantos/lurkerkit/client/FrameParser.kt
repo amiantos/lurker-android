@@ -101,11 +101,11 @@ internal object FrameParser {
                 // `changes` carries only what moved. An empty object is legal (the server sends
                 // `changes || {}`) and simply patches nothing.
                 //
-                // `maxUploadBytes` is present only when the cap itself was touched — absent means
-                // unchanged, which is why it stays nullable all the way to the store.
+                // The upload limits are present only when one of them was touched — absent means
+                // unchanged, which is why they stay nullable all the way to the store.
                 return ServerFrame.SettingsChanged(
                     changes = parseSettingValues(obj["changes"]),
-                    maxUploadBytes = advertisedUploadCap(obj),
+                    uploadLimits = advertisedUploadLimits(obj),
                 )
             "buffer-cleared" -> {
                 // The `/clear` marker's fan-out — this device's own ack AND every other device's
@@ -661,7 +661,7 @@ internal object FrameParser {
         return ServerFrame.Snapshot(
             networks = networks,
             globalIgnores = obj.objects("globalIgnores").map(::parseIgnoreRule),
-            maxUploadBytes = advertisedUploadCap(obj),
+            uploadLimits = advertisedUploadLimits(obj),
         )
     }
 
@@ -676,18 +676,24 @@ internal object FrameParser {
         }
 
     /**
-     * The advertised upload cap off a frame that may carry one, or null for "didn't say".
+     * The advertised upload limits off a frame that may carry them, each null for "didn't say".
      *
      * ⚠ A non-positive number is read as "didn't say" too. The server never sends one, and a
-     * cap no file can satisfy is not a statement about anything — taken at face value it
-     * would send every video down the preset ladder to `.cannotCompressEnough`, which reads
-     * to the user as the app refusing to upload rather than as a server that answered
-     * nonsense. Same discipline as an absent field: only a real answer is an answer.
+     * limit nothing can satisfy is not a statement about anything — a zero cap taken at face
+     * value would send every video down the preset ladder to `.cannotCompressEnough`, which
+     * reads to the user as the app refusing to upload rather than as a server that answered
+     * nonsense; a zero dimension would ask for an image with no pixels. Same discipline as an
+     * absent field: only a real answer is an answer.
      */
-    private fun advertisedUploadCap(obj: JsonObject): Long? {
-        val bytes = obj.longOrNull("maxUploadBytes") ?: return null
-        if (bytes <= 0) return null
-        return bytes
+    private fun advertisedUploadLimits(obj: JsonObject): UploadLimits {
+        // Two reads where Swift has one `positive`: the byte count is `Long` on this side and
+        // the dimension `Int` (PORTING.md, Types).
+        fun positiveLong(key: String): Long? = obj.longOrNull(key)?.takeIf { it > 0 }
+        fun positiveInt(key: String): Int? = obj.intOrNull(key)?.takeIf { it > 0 }
+        return UploadLimits(
+            maxUploadBytes = positiveLong("maxUploadBytes"),
+            maxStaticImageDimension = positiveInt("maxStaticImageDimension"),
+        )
     }
 
     /**

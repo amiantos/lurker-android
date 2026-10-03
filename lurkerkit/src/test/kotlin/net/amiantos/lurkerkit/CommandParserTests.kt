@@ -392,14 +392,61 @@ class CommandParserTests {
     @Test
     fun testAwayCarriesItsMessageAndRunsFromSystemBuffer() {
         assertEquals(
-            listOf<CommandEffect>(CommandEffect.Away(message = "lunch")),
+            listOf<CommandEffect>(CommandEffect.Away(message = "lunch", all = null)),
             effects("/away lunch", networkId = null, target = ":system:"),
         )
     }
 
     @Test
     fun testBackRunsFromSystemBuffer() {
-        assertEquals(listOf<CommandEffect>(CommandEffect.Back), effects("/back", networkId = null, target = ":system:"))
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Back(all = null)),
+            effects("/back", networkId = null, target = ":system:"),
+        )
+    }
+
+    /**
+     * lurker#994: `-all` reaches every network, `-one` just this one; without either the
+     * server's setting decides.
+     */
+    @Test
+    fun testAwayAndBackTakeAScopeFlag() {
+        assertEquals(listOf<CommandEffect>(CommandEffect.Away(message = "lunch", all = true)), effects("/away -all lunch"))
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Away(message = "lunch break", all = false)),
+            effects("/away -ONE lunch break"),
+        )
+        assertEquals(listOf<CommandEffect>(CommandEffect.Away(message = "", all = true)), effects("/away -all"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.Back(all = true)), effects("/back -all"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.Back(all = false)), effects("/back -one"))
+        // Any Unicode whitespace separates: a pasted non-breaking space too.
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Away(message = "lunch", all = true)),
+            effects("/away -all\u00A0lunch"),
+        )
+    }
+
+    @Test
+    fun testOneIsRefusedWhereThereIsNoNetwork() {
+        val text = (effects("/back -one", networkId = null, target = ":system:").firstOrNull() as? CommandEffect.Info)?.text
+            ?: fail("expected an info line, not a back to every network")
+        assertTrue(text.contains("no network here"))
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Away(message = "", all = true)),
+            effects("/away -all", networkId = null, target = ":system:"),
+        )
+    }
+
+    @Test
+    fun testAwayReadsAFlagOnlyAtTheFrontAndAsAWholeWord() {
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Away(message = "back at -all hands", all = null)),
+            effects("/away back at -all hands"),
+        )
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Away(message = "-allnighter", all = null)),
+            effects("/away -allnighter"),
+        )
     }
 
     @Test
@@ -923,6 +970,41 @@ class CommandParserTests {
         assertEquals(
             listOf<CommandEffect>(CommandEffect.Raw(line = "TOPIC #other :r new")),
             effects("/topic\r\n#other new"),
+        )
+    }
+
+    @Test
+    fun testTheAwayFlagEndsAtSwiftsWhitespace() {
+        // Answers taken from LurkerKit at 63255a5. Swift's whitespace, not the web's `\s`: a
+        // U+FEFF or a zero-width space after the flag is part of the word, so the line is a
+        // message; an ideographic space, a NEL and a line separator end it.
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Away(message = "-all\uFEFFlunch", all = null)),
+            effects("/away -all\uFEFFlunch"),
+        )
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Away(message = "-all\u200Blunch", all = null)),
+            effects("/away -all\u200Blunch"),
+        )
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Away(message = "lunch", all = false)),
+            effects("/away -one\u3000lunch"),
+        )
+        assertEquals(listOf<CommandEffect>(CommandEffect.Back(all = true)), effects("/back -ALL\u0085"))
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Away(message = "back soon", all = true)),
+            effects("/away -all\u2028back soon"),
+        )
+        // A mark the trim leaves at the front fuses with nothing, so it is the start of the word.
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Away(message = "\u0301-all x", all = null)),
+            effects("/away \u0301-all x"),
+        )
+        // ⚠ Differs: a space wearing a mark is one separator to LurkerKit, which drops the mark
+        // with it and sends "x". Here the mark starts the message (see `parse`'s Port note).
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Away(message = "\u0301x", all = true)),
+            effects("/away -all \u0301x"),
         )
     }
 }

@@ -30,8 +30,9 @@ import net.amiantos.lurkerkit.model.IgnoreRule
  * parser only decides; `ChatViewModel` performs the I/O. Effects that touch a network
  * (`send`/`action`/`notice`/`raw`/`join`/`part`/`close`/`ctcp`) run against the issuing
  * buffer's network — they carry a target/channel but not the id, which the executor
- * supplies from context. `away`/`back` carry no network at all: they're user-scoped and
- * hit every connection (see `away_is_user_scoped`).
+ * supplies from context. So do `away`/`back` (lurker#994), which the server then scopes:
+ * that network, or every network for `-all`, the `away.all_networks` setting, or no
+ * network at all (the system buffer).
  */
 sealed interface CommandEffect {
     /**
@@ -71,13 +72,15 @@ sealed interface CommandEffect {
     data class Clear(val target: String, val undo: Boolean) : CommandEffect
 
     /**
-     * User-scoped away; an empty message clears it (the server treats `/away` with no text
-     * as `/back`).
+     * Away on the network it's typed on; an empty message clears it (the server treats
+     * `/away` with no text as `/back`). `all` is the `-all` (true) or `-one` (false) flag, null
+     * without one, which leaves the scope to the server's `away.all_networks` setting
+     * (lurker#994).
      */
-    data class Away(val message: String) : CommandEffect
+    data class Away(val message: String, val all: Boolean?) : CommandEffect
 
-    /** User-scoped back. */
-    data object Back : CommandEffect
+    /** Back on the network it's typed on, scoped like `away`. */
+    data class Back(val all: Boolean?) : CommandEffect
 
     /** A CTCP request aimed at a target — `/ctcp`, `/ping`. */
     data class Ctcp(val target: String, val type: String, val args: String) : CommandEffect
@@ -609,11 +612,19 @@ object CommandRegistry {
         CommandSpec(listOf("reconnect"), CommandCategory.Server, "Reconnect this network"),
 
         // Status / app
+        // irssi's and WeeChat's flags: `-all` reaches every network, `-one` just this one.
         CommandSpec(
-            listOf("away"), CommandCategory.Status, "Set yourself away on every network",
-            args = listOf(ArgSpec("message", ArgKind.Text, optional = true, rest = true)), networkAgnostic = true,
+            listOf("away"), CommandCategory.Status, "Set yourself away (-all: every network, -one: this one)",
+            args = listOf(
+                ArgSpec("-all|-one", ArgKind.Flag, optional = true),
+                ArgSpec("message", ArgKind.Text, optional = true, rest = true),
+            ),
+            networkAgnostic = true,
         ),
-        CommandSpec(listOf("back"), CommandCategory.Status, "Clear your away status", networkAgnostic = true),
+        CommandSpec(
+            listOf("back"), CommandCategory.Status, "Clear your away status (-all: every network, -one: this one)",
+            args = listOf(ArgSpec("-all|-one", ArgKind.Flag, optional = true)), networkAgnostic = true,
+        ),
         // Files under App rather than Moderation, where `/ignore` sits: a relay mark hides
         // nothing and silences nobody, it tells this client how to *read* a bot's lines. The
         // thing it changes is the log, not the room.

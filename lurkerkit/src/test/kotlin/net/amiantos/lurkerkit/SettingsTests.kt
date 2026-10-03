@@ -15,6 +15,7 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.model.SettingDependency
 import net.amiantos.lurkerkit.model.SettingType
 import net.amiantos.lurkerkit.model.SettingValue
@@ -125,7 +126,7 @@ class SettingsTests {
     fun testSettingsChangeFrameParses() {
         val frame = FrameParser.parseWs("""{"kind":"settings","changes":{"chat.smart_filter":true}}""")
         assertEquals(
-            ServerFrame.SettingsChanged(mapOf("chat.smart_filter" to SettingValue.Bool(true)), maxUploadBytes = null),
+            ServerFrame.SettingsChanged(mapOf("chat.smart_filter" to SettingValue.Bool(true)), uploadLimits = UploadLimits.unstated),
             frame,
         )
     }
@@ -204,7 +205,7 @@ class SettingsTests {
         var state = bootstrapped()
         state = LurkerStore.reduce(
             state,
-            ServerFrame.SettingsChanged(mapOf("chat.consolidate_joins" to SettingValue.Bool(true)), maxUploadBytes = null),
+            ServerFrame.SettingsChanged(mapOf("chat.consolidate_joins" to SettingValue.Bool(true)), uploadLimits = UploadLimits.unstated),
         )
         assertTrue(state.settings.bool("chat.consolidate_joins", default = false))
         // The other stored value survives — a patch, not a replace.
@@ -216,7 +217,7 @@ class SettingsTests {
         var state = bootstrapped()
         state = LurkerStore.reduce(
             state,
-            ServerFrame.SettingsChanged(mapOf("look.message.layout" to SettingValue.String("compact")), maxUploadBytes = null),
+            ServerFrame.SettingsChanged(mapOf("look.message.layout" to SettingValue.String("compact")), uploadLimits = UploadLimits.unstated),
         )
         assertEquals("compact", state.settings.string("look.message.layout", default = "auto"))
     }
@@ -226,7 +227,7 @@ class SettingsTests {
         var state = bootstrapped()
         state = LurkerStore.reduce(
             state,
-            ServerFrame.SettingsChanged(mapOf("look.message.layout" to SettingValue.String("compact")), maxUploadBytes = null),
+            ServerFrame.SettingsChanged(mapOf("look.message.layout" to SettingValue.String("compact")), uploadLimits = UploadLimits.unstated),
         )
         // A reconnect re-bootstraps: the server's stored set is authoritative, so a value that
         // is no longer stored must revert to its default rather than linger from the old map.
@@ -268,7 +269,7 @@ class SettingsTests {
         state = LurkerStore.reduce(state, ServerFrame.SettingsValues(mapOf("chat.consolidate_max_names" to SettingValue.Int(9))))
         state = LurkerStore.reduce(
             state,
-            ServerFrame.SettingsChanged(mapOf("chat.consolidate_joins" to SettingValue.Bool(true)), maxUploadBytes = null),
+            ServerFrame.SettingsChanged(mapOf("chat.consolidate_joins" to SettingValue.Bool(true)), uploadLimits = UploadLimits.unstated),
         )
         assertTrue(state.settings.bool("chat.consolidate_joins", default = false))
     }
@@ -367,7 +368,7 @@ class SettingsTests {
         state = LurkerStore.reduce(
             state,
             ServerFrame.SettingsChanged(
-                mapOf("chat.send_typing_notifications" to SettingValue.Bool(false)), maxUploadBytes = null,
+                mapOf("chat.send_typing_notifications" to SettingValue.Bool(false)), uploadLimits = UploadLimits.unstated,
             ),
         )
         assertFalse(state.settings.loaded, "values alone must not claim a real bootstrap")
@@ -385,7 +386,7 @@ class SettingsTests {
     fun testSeedingFromCacheLeavesLoadedFalse() {
         val state = LurkerStore.reduce(
             ChatState(),
-            ServerFrame.SettingsChanged(mapOf("a" to SettingValue.Bool(true)), maxUploadBytes = null),
+            ServerFrame.SettingsChanged(mapOf("a" to SettingValue.Bool(true)), uploadLimits = UploadLimits.unstated),
         )
         assertFalse(state.settings.loaded)
         assertTrue(state.settings.registry.isEmpty())
@@ -444,7 +445,7 @@ class SettingsTests {
 
     private fun withDependencies(values: Map<String, SettingValue> = emptyMap()): Settings {
         var state = LurkerStore.reduce(ChatState(), FrameParser.parseSettingsBootstrap(dependencyJSON))
-        state = LurkerStore.reduce(state, ServerFrame.SettingsChanged(values, maxUploadBytes = null))
+        state = LurkerStore.reduce(state, ServerFrame.SettingsChanged(values, uploadLimits = UploadLimits.unstated))
         return state.settings
     }
 
@@ -479,7 +480,7 @@ class SettingsTests {
         // `choiceLabels` at all — shows the raw value rather than nothing.
         assertEquals("none", option?.label("none"))
         @Suppress("UNUSED_VALUE") // As in LurkerKit: the last fold is never read.
-        state = LurkerStore.reduce(state, ServerFrame.SettingsChanged(emptyMap(), maxUploadBytes = null))
+        state = LurkerStore.reduce(state, ServerFrame.SettingsChanged(emptyMap(), uploadLimits = UploadLimits.unstated))
     }
 
     @Test

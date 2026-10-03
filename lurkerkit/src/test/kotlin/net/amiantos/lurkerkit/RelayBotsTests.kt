@@ -6,6 +6,7 @@ package net.amiantos.lurkerkit
 import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.commands.CommandEffect
 import net.amiantos.lurkerkit.commands.CommandParser
 import net.amiantos.lurkerkit.commands.ParsedInput
@@ -307,7 +308,7 @@ class RelayBotsTests {
                         relayBots = listOf(RelayBot(nick = "bridge", pattern = "{nick}: {message}")),
                     ),
                 ),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
         assertEquals(listOf("bridge"), store.state.relayBots.listing(1).map { it.nick })
@@ -317,7 +318,7 @@ class RelayBotsTests {
         store.apply(
             ServerFrame.Snapshot(
                 listOf(NetworkSnapshot(id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList())),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
         assertTrue(store.state.relayBots.listing(1).isEmpty())

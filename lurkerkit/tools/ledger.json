@@ -1,5 +1,5 @@
 {
-  "pin": "6c903a5698ad8f57b13262f61f17544e98e634f9",
+  "pin": "63255a5bcfc2b2b764bd086d87b5e9d7d584982e",
   "tranches": [
     {
       "id": "T1",
@@ -141,6 +141,14 @@
         "Session/SessionStore.swift",
         "Session/OAuthClients.swift"
       ]
+    },
+    {
+      "id": "S1",
+      "title": "Sync to lurker-ios 63255a5",
+      "about": "Drift after the port: per-network away (lurker#994, lurker-ios#193) and upload limits + the pre-shrink rule (lurker-ios#155, #194).",
+      "files": [
+        "Client/ImageShrink.swift"
+      ]
     }
   ],
   "notes": {
@@ -150,7 +158,7 @@
     "Session/SessionStore.swift": "Keychain → `SecureStorage` (`read`/`write`/`delete` by account; implementations never throw), implemented by `:app` over the Keystore — readable after first unlock, excluded from backup and transfer, as the Swift’s accessibility attribute asked. `account`/`legacyAccount` keep their values; `service` has no counterpart. `save` is one replacing `write`. `SessionCodec` is kotlinx with `ignoreUnknownKeys`.",
     "Session/OAuthClients.swift": "`UserDefaults` → the kit’s `DefaultsStorage` (shared with `SettingsCache`); the client ids travel as a `JsonObject` of strings, read all-or-nothing. `key` keeps its value and must survive sign-out.",
     "Store/SettingsCache.swift": "`UserDefaults` → `DefaultsStorage` (`dictionary`, `set`, `removeObject`, mirroring the three calls), implemented by `:app`; no default storage. Values travel as `JsonObject`.",
-    "Client/Uploads.swift": "`UploadProgressDelegate` keeps its name and whole-percent coalescing; `UploadProgressBody` is the counting OkHttp `RequestBody` (a `ForwardingSink`) that feeds it. `upload` streams the already-assembled multipart file, as the Swift does. `assemble` deletes its partial file on failure, which LurkerKit leaves to iOS.",
+    "Client/Uploads.swift": "`UploadProgressDelegate` keeps its name and whole-percent coalescing; `UploadProgressBody` is the counting OkHttp `RequestBody` (a `ForwardingSink`) that feeds it. `upload` streams the already-assembled multipart file, as the Swift does. `assemble` deletes its partial file on failure, which LurkerKit leaves to iOS. `UploadLimits.maxUploadBytes` is `Long` (a byte count).",
     "Model/Typing.swift": "`OutgoingTyping` is a mutable class (PORTING.md, structs that mutate, case 3). No Kotlin test until `TypingTests` can run against the store.",
     "Session/NewestAnswer.swift": "A mutable class (case 3).",
     "Model/UploadContentTypes.swift": "`[UTType]` → MIME patterns. Adds `application/json`, which `text/*` cannot reach and `.text` does by conformance.",
@@ -189,7 +197,7 @@
     "Model/PreviewText.swift": "`stripHiddenUrls` takes an `AttributedBody` interface for `:app` to implement, where LurkerKit takes an `NSMutableAttributedString`.",
     "Model/Consolidation.swift": "Returns structure, not sentences: the wording is the app's renderer's.",
     "Model/MessageRows.swift": "`AwayDivider`'s reason is `awayMessage`. Day boundaries depend on time-zone data; verify on a device.",
-    "Commands/CommandParser.swift": "`parse` takes the app's date formatter, for the `/ignore` listing. Lines are cut by UTF-16 unit; differs from Swift only where a combining mark follows a slash, a space or a sigil. ⚠ Reproduces a LurkerKit bug: a line break straight after the verb (`/topic⏎text`) cuts into the first word, because the argument line is trimmed of spaces but not newlines. Pinned by a port-only test; to fix in LurkerKit, then re-port.",
+    "Commands/CommandParser.swift": "`parse` takes the app's date formatter, for the `/ignore` listing. Lines are cut by UTF-16 unit; differs from Swift only where a combining mark follows a slash, a space or a sigil. ⚠ Reproduces a LurkerKit bug: a line break straight after the verb (`/topic⏎text`) cuts into the first word, because the argument line is trimmed of spaces but not newlines. Pinned by a port-only test; to fix in LurkerKit, then re-port. `awayFlag` (lurker#994): a space wearing a combining mark leaves the mark behind here, where Swift drops it with the separator — Port note + port-only test.",
     "Commands/Command.swift": "`CommandEffect` is a sealed interface of 23 cases in Swift order.",
     "Model/NickCompletion.swift": "`spokenPunctuation` and `isMarkScalar` read the JDK's Unicode tables; verify on a device.",
     "Model/Drafts.swift": "`DraftSync` is a mutable class (case 3).",
@@ -205,7 +213,8 @@
     "Client/LurkerClient.swift": "`LurkerClient(scope, onFrame, httpClient = bearerOnlyConfiguration(), mediaCacheDirectory = null)`, main-confined. `async` → `suspend`; every `Task {}` from main-confined code → `support.task` (a `launch` that yields first, so a stored `Job` is assigned before its body runs under `Main.immediate`); listener callbacks hop to main with `scope.launch`. One suspending `OkHttpClient.await` over `enqueue`; per-request timeouts travel as a tag; JSON bodies written as bytes so Content-Type is exactly `application/json`. `URLSessionWebSocketTask` → `okhttp3.WebSocket`: first of `onClosing`/`onClosed`/`onFailure` wins; `onClosing` answers `close(1000)`; `.goingAway` → `close(1001)`; stale sockets ignored by identity. `send`: `onComplete` means queued; `onFlush` fires a turn later once `queueSize` drains (`awaitWritten`, 2 s bound) — the nearest OkHttp comes to \"written\". Reply continuations are resumed a turn later (`resumeLater`), as `CheckedContinuation` does, so a waiter never runs inline in `openSocket`/`close` under `Main.immediate`. The media client has its own `Dispatcher` (the shared five-per-host cap would queue REST and the upgrade behind image bodies); `clearMediaCache` swallows `IOException`. ⚠ Receive has no backpressure; a replaced socket finishes its upgrade before closing. `registerDevice` sends `transport: \"fcm\"` (server rule). Cleartext refusal has its own user-visible text. `[weak self]` dropped: a cancelled scope stops the work. `playableMediaURL`/`socketURL` return `String?`. Logging via `java.util.logging`. ⚠ `MultipartBody.assemble` and `evictAll` run on the calling thread — T7/U8 must move them off main.",
     "Client/LinkPreviews.swift": "`LinkPreviewStore(scope, now = Instant::now, jitter, resolve: suspend (List<String>) -> List<LinkPreview>)`; its tasks go through `support.task`. `retry` is insertion-ordered where Swift’s dictionary is not; the re-ask delay rounds up to the millisecond.",
     "Client/InstanceConfig.swift": "An internal data class.",
-    "Session/ChatViewModel.swift": "`ChatViewModel(scope, sessions, settingsCache, oauthClients, formatExpiry, httpClient = LurkerClient.bearerOnlyConfiguration(), mediaCacheDirectory = null)`, main-confined; the stores have no defaults because each needs platform storage the kit does not have. `sessionSubject`/`statusSubject` are `support.CurrentValueSubject`; `channelEvents` is a `SharedFlow` with an unbounded buffer (its two consumers patch open lists from every live MODE row and a burst lands before a collector runs). Every `Task` → `support.task`; stored ones (`reconnectTask`, `draftFlushes`) → `Job`; `[weak self]` dropped (the scope’s cancellation ends the work). `authorize` is `suspend (HttpUrl) -> String?`. `formatExpiry` is port-only: the kit never formats a date, so the app hands in the ignore-expiry formatter once and `send` passes it to `CommandParser`. `serverSupportsAPNs` checks for `fcm` (the server rule), name kept to grep across repos. `init` sits at the bottom so every property has initialised first. ⚠ Not exercised in Kotlin: `signIn` (needs HTTP), `logout`/`onAuthLost`, the 500 ms draft flush over a live socket, `enterBackground`’s drafts-plus-presence path. ⚠ `upload`/`clearStagedMedia`/`evictAll` still run on the calling thread — U8 moves them off main."
+    "Session/ChatViewModel.swift": "`ChatViewModel(scope, sessions, settingsCache, oauthClients, formatExpiry, httpClient = LurkerClient.bearerOnlyConfiguration(), mediaCacheDirectory = null)`, main-confined; the stores have no defaults because each needs platform storage the kit does not have. `sessionSubject`/`statusSubject` are `support.CurrentValueSubject`; `channelEvents` is a `SharedFlow` with an unbounded buffer (its two consumers patch open lists from every live MODE row and a burst lands before a collector runs). Every `Task` → `support.task`; stored ones (`reconnectTask`, `draftFlushes`) → `Job`; `[weak self]` dropped (the scope’s cancellation ends the work). `authorize` is `suspend (HttpUrl) -> String?`. `formatExpiry` is port-only: the kit never formats a date, so the app hands in the ignore-expiry formatter once and `send` passes it to `CommandParser`. `serverSupportsAPNs` checks for `fcm` (the server rule), name kept to grep across repos. `init` sits at the bottom so every property has initialised first. ⚠ Not exercised in Kotlin: `signIn` (needs HTTP), `logout`/`onAuthLost`, the 500 ms draft flush over a live socket, `enterBackground`’s drafts-plus-presence path. ⚠ `upload`/`clearStagedMedia`/`evictAll` still run on the calling thread — U8 moves them off main.",
+    "Client/ImageShrink.swift": "UTIs → MIME types (PORTING.md): `Source.typeIdentifier` and `Format.typeIdentifier` keep their names and hold MIME strings (`Format.typeIdentifier == Format.mime`); the mapping table, `com.adobe.raw-image` → `image/x-adobe-dng`, is the Port note on `Source.typeIdentifier`. Exact, case-sensitive comparison, as the Swift. The measuring and redraw are app-side (iOS `ImageConverter`; Android U8 fills `Source` from `ImageDecoder`/`BitmapFactory`)."
   },
   "testNotes": {
     "NotificationTapTests.swift": {

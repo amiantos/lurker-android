@@ -7,6 +7,7 @@ import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.HistoryMode
 import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.commands.CommandEffect
 import net.amiantos.lurkerkit.commands.CommandParser
 import net.amiantos.lurkerkit.commands.ParsedInput
@@ -308,7 +309,7 @@ class ReactionsTests {
         store.apply(
             ServerFrame.Snapshot(
                 listOf(NetworkSnapshot(id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList())),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
         assertFalse(store.state.canReact(networkId = 1), "false until the burst says otherwise")
@@ -340,7 +341,7 @@ class ReactionsTests {
                         id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList(), canReact = true,
                     ),
                 ),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
         assertTrue(store.state.canReact(networkId = 1))

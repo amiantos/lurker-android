@@ -13,6 +13,7 @@ import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.client.TopicMeta
+import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.client.VerbReply
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.ChannelModeDrafts
@@ -239,7 +240,7 @@ class ChannelModesTests {
         model.handle(
             ServerFrame.Snapshot(
                 listOf(NetworkSnapshot(id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList())),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
         runCurrent()
@@ -266,7 +267,7 @@ class ChannelModesTests {
                         modeSpec = spec,
                     ),
                 ),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
         return store
