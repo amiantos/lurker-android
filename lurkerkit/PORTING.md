@@ -260,5 +260,5 @@ same tests run as instrumented tests:
 
 (`connectedDebugAndroidTest` works too, but installs on every attached device.) First run, 2026-10-03,
 API 35 emulator: 1808 of 1808 after two harness fixes — the bundled catalogue resource, and a test
-server bound to `getLoopbackAddress()`, which is `::1` on Android. No kit behaviour differed; 1809/1809 again after U8b's kit changes. Not in CI
-(it needs a device); rerun it when the kit gains regex- or date-heavy code.
+server bound to `getLoopbackAddress()`, which is `::1` on Android. No kit behaviour differed; 1809/1809 again after U8b's kit changes. CI builds the test APK
+(`:lurkerkit-device:assembleDebugAndroidTest`) but can't run it (it needs a device); rerun it when the kit gains regex- or date-heavy code.
