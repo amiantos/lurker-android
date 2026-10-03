@@ -54,24 +54,60 @@ class MediaViewerModelTest {
     }
 
     @Test
-    fun aZoomedPictureCanTravelHalfWhatTheZoomAdded() {
-        // A 400x800 page at 2x: 200 sideways, 400 up and down, each way.
-        assertEquals(200f to -400f, MediaViewerModel.clampOffset(999f, -999f, 2f, 400f, 800f))
-        assertEquals(50f to 60f, MediaViewerModel.clampOffset(50f, 60f, 2f, 400f, 800f))
+    fun aPictureIsFittedWholeOnItsPage() {
+        // A 4000x1000 panorama on a 400x800 page: full width, a quarter as tall.
+        assertEquals(400f to 100f, MediaViewerModel.fitted(4000f, 1000f, 400f, 800f))
+        // A 1000x4000 strip: full height, a quarter as wide.
+        assertEquals(200f to 800f, MediaViewerModel.fitted(1000f, 4000f, 400f, 800f))
+        // Not known yet: the page.
+        assertEquals(400f to 800f, MediaViewerModel.fitted(0f, 0f, 400f, 800f))
+    }
+
+    @Test
+    fun aZoomedPictureFillingItsPageCanTravelHalfWhatTheZoomAdded() {
+        // A picture filling a 400x800 page, at 2x: 200 sideways, 400 up and down, each way.
+        assertEquals(200f to -400f, MediaViewerModel.clampOffset(999f, -999f, 2f, 400f, 800f, 400f, 800f))
+        assertEquals(50f to 60f, MediaViewerModel.clampOffset(50f, 60f, 2f, 400f, 800f, 400f, 800f))
         // At fit it's centred, whatever the fingers did.
-        assertEquals(0f to 0f, MediaViewerModel.clampOffset(50f, 60f, 1f, 400f, 800f))
+        assertEquals(0f to 0f, MediaViewerModel.clampOffset(50f, 60f, 1f, 400f, 800f, 400f, 800f))
+    }
+
+    @Test
+    fun aPanoramaPansSidewaysButNeverIntoItsLetterbox() {
+        // Fitted 400x100 on a 400x800 page. At 4x it's 1600x400: 600 of travel each way sideways, and
+        // still shorter than the page, so it stays centred vertically.
+        val (w, h) = MediaViewerModel.fitted(4000f, 1000f, 400f, 800f)
+        assertEquals(600f to 0f, MediaViewerModel.clampOffset(999f, 999f, 4f, 400f, 800f, w, h))
+        assertEquals(-600f to 0f, MediaViewerModel.clampOffset(-999f, -999f, 4f, 400f, 800f, w, h))
+    }
+
+    @Test
+    fun aTallPortraitPansUpAndDownButOnlySidewaysOnceItOverhangs() {
+        // Fitted 200x800. At 1.5x it's 300 wide — still inside the 400 page, so no sideways travel; 200
+        // up and down. At 3x it's 600 wide: 100 each way.
+        val (w, h) = MediaViewerModel.fitted(1000f, 4000f, 400f, 800f)
+        assertEquals(0f to 200f, MediaViewerModel.clampOffset(999f, 999f, 1.5f, 400f, 800f, w, h))
+        assertEquals(100f to -800f, MediaViewerModel.clampOffset(999f, -999f, 3f, 400f, 800f, w, h))
     }
 
     @Test
     fun aDoubleTapKeepsThePointUnderTheFinger() {
         // Tapping the centre zooms about the centre.
-        assertEquals(0f to 0f, MediaViewerModel.zoomOffset(200f, 400f, 2.5f, 400f, 800f))
+        assertEquals(0f to 0f, MediaViewerModel.zoomOffset(200f, 400f, 2.5f, 400f, 800f, 400f, 800f))
         // Left of centre moves the picture right, as far as the edge allows.
-        val (x, y) = MediaViewerModel.zoomOffset(100f, 400f, 2.5f, 400f, 800f)
+        val (x, y) = MediaViewerModel.zoomOffset(100f, 400f, 2.5f, 400f, 800f, 400f, 800f)
         assertEquals(150f, x, 0.001f)
         assertEquals(0f, y, 0.001f)
-        val (edgeX, _) = MediaViewerModel.zoomOffset(0f, 400f, 2.5f, 400f, 800f)
+        val (edgeX, _) = MediaViewerModel.zoomOffset(0f, 400f, 2.5f, 400f, 800f, 400f, 800f)
         assertEquals(300f, edgeX, 0.001f)
+    }
+
+    @Test
+    fun aDoubleTapInAPanoramasLetterboxDoesntMoveItOffTheCentreLine() {
+        val (w, h) = MediaViewerModel.fitted(4000f, 1000f, 400f, 800f)
+        // A tap near the top, in the black: vertically it stays centred.
+        val (_, y) = MediaViewerModel.zoomOffset(200f, 50f, 2.5f, 400f, 800f, w, h)
+        assertEquals(0f, y, 0.001f)
     }
 
     @Test

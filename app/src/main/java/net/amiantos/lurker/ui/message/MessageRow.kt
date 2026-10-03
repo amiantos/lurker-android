@@ -359,6 +359,7 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                     media = previews.media,
                     onOpenGallery = context.onOpenMedia,
                     rowActions = if (!hasBody && plan.header == null) actions else emptyList(),
+                    onLinkActions = onLongPress?.let { press -> { url -> press(RowPress.Link(url)) } },
                     onPlaced = { url, coordinates -> targets.attachments[url] = coordinates },
                     modifier = Modifier.padding(
                         start = with(LocalDensity.current) { style.indentSp.sp.toDp() },

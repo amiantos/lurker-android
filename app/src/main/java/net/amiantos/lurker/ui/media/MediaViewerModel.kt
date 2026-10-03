@@ -64,25 +64,59 @@ object MediaViewerModel {
     fun isZoomed(scale: Float): Boolean = scale > 1.01f
 
     /**
-     * The offset that keeps a zoomed picture covering its page: at [scale], a [width] by [height]
-     * page can travel half of what the zoom added, each way. Back to centre at fit.
+     * The picture's size on a [pageWidth] by [pageHeight] page as the viewer draws it at fit
+     * (`ContentScale.Fit`): the whole of it, as large as fits, letterboxed on one axis. Before its
+     * size is known, the page.
      */
-    fun clampOffset(x: Float, y: Float, scale: Float, width: Float, height: Float): Pair<Float, Float> {
-        if (!isZoomed(scale)) return 0f to 0f
-        val maxX = max(0f, (width * scale - width) / 2f)
-        val maxY = max(0f, (height * scale - height) / 2f)
-        return x.coerceIn(-maxX, maxX) to y.coerceIn(-maxY, maxY)
+    fun fitted(imageWidth: Float, imageHeight: Float, pageWidth: Float, pageHeight: Float): Pair<Float, Float> {
+        if (!(imageWidth > 0f && imageHeight > 0f && pageWidth > 0f && pageHeight > 0f)) return pageWidth to pageHeight
+        val fit = min(pageWidth / imageWidth, pageHeight / imageHeight)
+        return imageWidth * fit to imageHeight * fit
     }
 
     /**
-     * Where a double-tap at ([tapX], [tapY]) on a [width] by [height] page puts the picture when it
-     * zooms to [scale] about the page's centre: the point under the finger stays under it, as far as
-     * the edges allow.
+     * The offset that keeps a zoomed picture on its page: on each axis, the FITTED picture
+     * ([contentWidth] by [contentHeight], see [fitted]) at [scale] may travel half of whatever it
+     * overhangs the [pageWidth] by [pageHeight] page — and not at all on an axis where it still fits,
+     * where it stays centred. Measured from the page alone, a panorama could be dragged off into its
+     * own letterbox. Back to centre at fit.
      */
-    fun zoomOffset(tapX: Float, tapY: Float, scale: Float, width: Float, height: Float): Pair<Float, Float> {
-        val x = (width / 2f - tapX) * (scale - 1f)
-        val y = (height / 2f - tapY) * (scale - 1f)
-        return clampOffset(x, y, scale, width, height)
+    fun clampOffset(
+        x: Float,
+        y: Float,
+        scale: Float,
+        pageWidth: Float,
+        pageHeight: Float,
+        contentWidth: Float,
+        contentHeight: Float,
+    ): Pair<Float, Float> {
+        if (!isZoomed(scale)) return 0f to 0f
+        return travel(x, (contentWidth * scale - pageWidth) / 2f) to travel(y, (contentHeight * scale - pageHeight) / 2f)
+    }
+
+    /** [offset] within ±[overhang]; exactly centred (never -0) on an axis that doesn't overhang. */
+    private fun travel(offset: Float, overhang: Float): Float {
+        if (overhang <= 0f) return 0f
+        return offset.coerceIn(-overhang, overhang)
+    }
+
+    /**
+     * Where a double-tap at ([tapX], [tapY]) on the page puts the picture when it zooms to [scale]
+     * about the page's centre: the point under the finger stays under it, as far as the fitted
+     * picture's edges allow (see [clampOffset]).
+     */
+    fun zoomOffset(
+        tapX: Float,
+        tapY: Float,
+        scale: Float,
+        pageWidth: Float,
+        pageHeight: Float,
+        contentWidth: Float,
+        contentHeight: Float,
+    ): Pair<Float, Float> {
+        val x = (pageWidth / 2f - tapX) * (scale - 1f)
+        val y = (pageHeight / 2f - tapY) * (scale - 1f)
+        return clampOffset(x, y, scale, pageWidth, pageHeight, contentWidth, contentHeight)
     }
 
     /**
