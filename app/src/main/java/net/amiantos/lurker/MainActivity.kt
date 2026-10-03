@@ -37,6 +37,7 @@ class MainActivity : ComponentActivity() {
                 AppRoot(
                     model = app.model,
                     uiPreferences = app.uiPreferences,
+                    events = app.events,
                     signInNotice = app.browserSignIn.notice,
                     lastServerURL = { app.uiPreferences.lastServerURL },
                     onSignIn = app::signIn,

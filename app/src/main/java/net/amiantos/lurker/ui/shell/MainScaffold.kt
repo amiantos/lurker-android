@@ -5,6 +5,11 @@ package net.amiantos.lurker.ui.shell
 
 import android.os.SystemClock
 import androidx.compose.foundation.layout.Box
+import net.amiantos.lurker.platform.AppEvents
+import net.amiantos.lurker.platform.AppEvent
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarHost
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -58,7 +63,7 @@ import net.amiantos.lurkerkit.store.ChatState
  */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
-fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, onSignOut: () -> Unit) {
+fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: AppEvents, onSignOut: () -> Unit) {
     // The content key is the buffer the detail pane shows, in parts a Bundle can hold — the
     // navigator saves its history, so the conversation survives rotation and process death.
     val navigator = rememberListDetailPaneScaffoldNavigator<BufferRoute>(scaffoldDirective = lurkerPaneDirective())
@@ -166,31 +171,51 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, onSignOut: 
         uiPreferences.forgetLastOpenBuffer(ifMatching = buffer.key)
     }
 
-    NavigableListDetailPaneScaffold(
-        navigator = navigator,
-        listPane = {
-            AnimatedPane {
-                BufferListScreen(
-                    model = model,
-                    hasRenderedList = hasRenderedList,
-                    onListRendered = { latchedIn = processToken },
-                    openKey = openRoute?.key,
-                    sideBySide = sideBySide,
-                    onOpen = ::open,
-                    onClose = ::close,
-                    onSignOut = onSignOut,
-                )
+    // The kit's asks of the screen (`AppEvents`), drained for as long as this scaffold is composed.
+    // Queued in between, so a rotation loses none of them.
+    val snackbar = remember { SnackbarHostState() }
+    LaunchedEffect(events) {
+        events.events.collect { event ->
+            when (event) {
+                // The same move as a pick: the buffer is synthesized when its row hasn't landed yet,
+                // and the conversation hydrates it.
+                is AppEvent.OpenBuffer -> open(model.state.buffer(event.key))
+                // Launched, so a notice waiting out its duration doesn't hold up the queue behind it.
+                is AppEvent.Notice -> launch { snackbar.showSnackbar(event.message) }
+                // U2a: the navigator's route follows a rename (the open conversation, the list's mark).
+                is AppEvent.BufferRenamed -> Unit
             }
-        },
-        detailPane = {
-            AnimatedPane {
-                // U2: the conversation replaces this. iOS never shows an empty column — with
-                // nothing picked it rests on the system buffer, the app's own log — and U2 should
-                // do the same rather than keep a placeholder whose whole job is dead space.
-                DetailPanePlaceholder(model = model, route = openRoute)
-            }
-        },
-    )
+        }
+    }
+
+    Box(Modifier.fillMaxSize()) {
+        NavigableListDetailPaneScaffold(
+            navigator = navigator,
+            listPane = {
+                AnimatedPane {
+                    BufferListScreen(
+                        model = model,
+                        hasRenderedList = hasRenderedList,
+                        onListRendered = { latchedIn = processToken },
+                        openKey = openRoute?.key,
+                        sideBySide = sideBySide,
+                        onOpen = ::open,
+                        onClose = ::close,
+                        onSignOut = onSignOut,
+                    )
+                }
+            },
+            detailPane = {
+                AnimatedPane {
+                    // U2: the conversation replaces this. iOS never shows an empty column — with
+                    // nothing picked it rests on the system buffer, the app's own log — and U2 should
+                    // do the same rather than keep a placeholder whose whole job is dead space.
+                    DetailPanePlaceholder(model = model, route = openRoute)
+                }
+            },
+        )
+        SnackbarHost(snackbar, modifier = Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
+    }
 }
 
 /** Unique to this process — what tells saved state written before a process death from our own. */
