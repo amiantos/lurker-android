@@ -58,8 +58,9 @@ class MessageListContext(
     /** A spoiler in a message was tapped. The screen owns the toggle. */
     val onToggleSpoiler: (Message, Int) -> Unit,
     /**
-     * Jump to a reply's quoted line (lurker-ios#184). Null where the quote isn't live — and in the
-     * conversation until U2b, which owns jumps; a quote with no jump is drawn but not tappable.
+     * Jump to a reply's quoted line (lurker-ios#184) — the conversation's jump, which fetches the
+     * line when it's outside the loaded slice. Null where the quote isn't live; a quote with no jump
+     * is drawn but not tappable.
      */
     val onJumpToReply: ((ReplyQuote) -> Unit)? = null,
     /** What a line's reaction chips need (lurker-ios#183), or null on screens that don't draw them. */

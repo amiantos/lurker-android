@@ -3,11 +3,17 @@
 
 package net.amiantos.lurker.ui.conversation
 
-import java.time.ZoneId
-import java.time.Instant
-import kotlinx.coroutines.flow.conflate
 import android.content.ActivityNotFoundException
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.util.Log
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
@@ -15,27 +21,36 @@ import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
-import androidx.compose.runtime.derivedStateOf
+import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -43,12 +58,26 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleStartEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import net.amiantos.lurker.ui.message.MessageListContext
 import net.amiantos.lurker.ui.message.MessageListLayout
 import net.amiantos.lurker.ui.message.MessageListRow
@@ -56,6 +85,7 @@ import net.amiantos.lurker.ui.message.ReactionContext
 import net.amiantos.lurker.ui.message.previewMessageRows
 import net.amiantos.lurker.ui.message.rememberMessageTextStyle
 import net.amiantos.lurker.ui.shell.ConnectionBanner
+import net.amiantos.lurker.ui.shell.JumpRequest
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.shell.StatusTitle
 import net.amiantos.lurker.ui.shell.StatusTitleText
@@ -72,25 +102,41 @@ import net.amiantos.lurkerkit.model.Reactions
 import net.amiantos.lurkerkit.model.StatusLight
 import net.amiantos.lurkerkit.rendering.NickHighlighter
 import net.amiantos.lurkerkit.session.ChatViewModel
+import net.amiantos.lurkerkit.store.ChatState
 import java.time.Duration
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneId
 import java.time.ZoneOffset
 
 /**
- * A buffer's messages, live. lurker-ios's `ChatViewController`, first cut (lurker-android#10): the
- * rows the kit builds for this buffer, drawn compact, with the title, the connection banner, and the
- * placeholder behind an empty list.
+ * A buffer's messages, live. lurker-ios's `ChatViewController` (lurker-android#10, #7): the rows the
+ * kit builds for this buffer, drawn compact, with the title, the connection banner, the placeholder
+ * behind an empty list — and everything about *where* the list is: paging older and newer, the
+ * unread divider and its banner, jumps to a message (in or out of the loaded slice), jump to latest,
+ * and mark-read.
  *
  * Messages arrive two ways and are treated identically: the slice the server sends in reply to the
  * hydrate below, and live frames after that — including the echo of our own sends, which is why
  * there's no optimistic-row bookkeeping here.
  *
- * U2b owns everything about *where* the list is: paging older and newer with scroll anchoring,
- * landing on the first unread with the divider and banner, jumps (search, bookmark, reply quote,
- * notification) including outside the loaded slice, jump to latest, and mark-read. The list's
- * [LazyListState] is owned here, hoisted, so U2b can drive it. U3: the composer. U6: long-press
- * message actions and the reaction picker. U8: link previews.
+ * The decisions are `ConversationScroll`'s, pure and tested; this composable feeds it frames, builds
+ * and measured layouts, and performs the scrolls it asks for. Three streams, in a fixed order:
  *
+ *  1. **Frames** (every `ChatState`), on the main thread: the buffer leaving, the hydrate, the jump's
+ *     `around` fetch, the read-boundary latch, mark-read. Each processed frame is stamped and handed
+ *     on, so every later build is of a frame these effects have already seen.
+ *  2. **Builds**, off the main thread (`flowOn(Dispatchers.Default)`): filtering, consolidation and
+ *     the row keys, from immutable inputs — see `ConversationModel.built`. The main thread takes each
+ *     build, decides whether to follow the tail or hold the reader's line, publishes it, and lands
+ *     whatever landing is pending. Composition only draws.
+ *  3. **Layouts** (`snapshotFlow` over `layoutInfo`): the floating controls, the `dividerSeen` latch,
+ *     and paging — from the measured layout, never a scroll callback that can describe a stale frame.
+ *
+ * U3: the composer. U6: long-press message actions and the reaction picker. U8: link previews.
+ *
+ * @param jump the message to land on rather than the bottom (`BufferRoute.jump`), consumed once by
+ *   its nonce — a new request on the same buffer arrives here without rebuilding the screen.
  * @param resting this is the system buffer the detail pane shows side by side when nothing is picked,
  *   rather than a buffer anyone opened — iOS's `isResting`. It isn't recorded as the buffer you were
  *   reading, which would make a buffer nobody opened the next launch's destination.
@@ -106,6 +152,7 @@ import java.time.ZoneOffset
 fun ConversationScreen(
     model: ChatViewModel,
     key: BufferKey,
+    jump: JumpRequest? = null,
     resting: Boolean,
     showsBack: Boolean,
     onBack: () -> Unit,
@@ -120,10 +167,36 @@ fun ConversationScreen(
         if (!resting) currentOnVisit()
     }
 
-    // The two things the screen must DO about the store, rather than draw: notice the buffer
-    // disappearing (or moving), and ask for its history. Run against every frame straight off the
-    // publisher — side effects, never Compose state — in iOS's order: a buffer that's gone or moved
-    // asks for nothing.
+    // Where the list is and where it's going. Saved, so a rotation keeps the latched read boundary
+    // (by then the buffer has been marked read, and re-latching would latch our own mark) and the
+    // jump it already consumed. A route's jump is consumed here, at birth, so the very first frame
+    // already knows a jump is pending and hydrates through its `around` slice instead.
+    val scroll = rememberSaveable(key.id, saver = scrollSaver(kind)) {
+        ConversationScroll(kind).also { machine -> jump?.let(machine::consume) }
+    }
+    val options = remember(scroll) { MutableStateFlow(scroll.options) }
+    fun publishOptions() {
+        options.value = scroll.options
+    }
+    // Bumped whenever the machine changes in a way the floating controls read, so the layout stream
+    // re-decides them with nothing having scrolled.
+    var revision by remember { mutableIntStateOf(0) }
+
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    val density = LocalDensity.current
+    val followSlop = with(density) { FOLLOW_SLOP.roundToPx() }
+    val pagingDistance = with(density) { PAGING_DISTANCE.roundToPx() }
+
+    // Frames, stamped with the order this screen processed them in — see `ConversationScroll.onRows`.
+    val frames = remember(key) { MutableStateFlow<Frame?>(null) }
+    val frameSeq = remember(key) { FrameCounter() }
+    val jobs = remember(key) { Jobs() }
+
+    // The two things the screen must DO about every frame, rather than draw, in iOS's order: notice
+    // the buffer disappearing (or moving), ask for its history, ask for a jump's slice, latch the
+    // read boundary, and mark read. Side effects, never Compose state — straight off the publisher.
     val currentOnGone by rememberUpdatedState(onGone)
     val currentOnMoved by rememberUpdatedState(onMoved)
     LaunchedEffect(model, key) {
@@ -151,14 +224,36 @@ fun ConversationScreen(
                 }
                 BufferWatch.Verdict.Present, BufferWatch.Verdict.Waiting -> Unit
             }
-            // U2b: `jumpPending` — a pending jump hydrates through its `around` slice instead.
-            hydrate.check(state.connection, state.buffers[key.id], state.burstGeneration)?.let(model::hydrate)
-            // U2b: mark-read, once the read boundary is latched (never before — marking read is what
-            // destroys the record of where the reader left off).
+            val seq = frameSeq.next()
+            // A pending jump hydrates through its `around` slice instead: asking for both would
+            // double-fetch, and the latest slice would fight the jump.
+            hydrate.check(state.connection, state.buffers[key.id], state.burstGeneration, jumpPending = scroll.jumpPending)
+                ?.let(model::hydrate)
+            val step = scroll.onFrame(state, key, seq)
+            step.loadAround?.let { anchor -> model.loadAround(key, anchorId = anchor) }
+            if (step.optionsChanged) publishOptions()
+            if (step.optionsChanged || step.loadAround != null) revision++
+            // New traffic while we're on screen: keep it marked read — never before the boundary is
+            // latched (`ConversationScroll.marksRead`), and only while the screen can be seen (iOS's
+            // `view.window != nil`). ⚠ A WRITE: the server's pointer moves for every device. Asked
+            // when this buffer's messages changed (or it's the first mark), as iOS's deduped `apply`
+            // asks — not for every frame of every other buffer, each of which would scan this one's.
+            val held = state.messages[key.id]
+            if (scroll.marksRead && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) && held !== jobs.markedFor) {
+                jobs.markedFor = held
+                model.markRead(key)
+            }
+            frames.value = Frame(seq, state)
         }
+    }
+    // Coming into view marks read too (iOS's `viewDidAppear`) — the same gate.
+    LifecycleStartEffect(key, scroll) {
+        if (scroll.marksRead) model.markRead(key)
+        onStopOrDispose {}
     }
 
     val banner = rememberConnectionBannerState(model)
+    var connectionShown by remember { mutableStateOf(false) }
 
     // The title moves on its own — a DM peer's presence turns over with nothing else changing — and it
     // moves nothing else, so it's its own stream rather than a reason to rebuild every row.
@@ -168,19 +263,161 @@ fun ConversationScreen(
     val initialTitle = remember(model, key) { ConversationModel.title(model.state, key, kind) }
     val title by titleFlow.collectAsStateWithLifecycle(initialValue = initialTitle)
 
-    // The rows' inputs, re-projected on every frame AND on a one-second tick while anybody is typing:
-    // a typing entry's lease expires by the clock, not by a frame — the last thing a peer sends is
-    // `active`, and what happens next is nothing — so without the tick the line would sit there until
-    // some unrelated frame redrew it. Distinct by `same`, so most ticks change nothing.
+    val clock = rememberDayClock()
+    val clockFlow = remember { snapshotFlow { clock.value } }
+
+    // The builds. Re-projected on every processed frame AND on a one-second tick while anybody is
+    // typing: a typing entry's lease expires by the clock, not by a frame — the last thing a peer
+    // sends is `active`, and what happens next is nothing — so without the tick the line would sit
+    // there until some unrelated frame redrew it. Distinct by `same`, so most ticks change nothing;
+    // then rebuilt for the screen's own options (the divider, a jump's exemption, a `/clear` reveal)
+    // and the zone (a time-zone change moves every day boundary).
     val ticks = remember(key) { MutableStateFlow(0) }
     val projector = remember(key) { ConversationProjector(key, kind) }
-    val inputsFlow = remember(model, key) {
-        combine(model.statePublisher.conflate(), ticks) { state, _ -> projector.project(state) }
-            .distinctUntilChanged(ConversationInputs::same)
+    // The first build, on the main thread, once: so a screen that opens on loaded history draws it
+    // on its first frame — and a restored scroll position has rows to restore onto — rather than
+    // flashing "Loading messages…" for the frame the first background build takes.
+    val initialBuilt = remember(model, key) {
+        ConversationModel.built(projector.project(model.state), scroll.options, seq = 0, zone = clock.value.zone)
     }
-    val initialInputs = remember(model, key) { projector.project(model.state) }
-    val inputs by inputsFlow.collectAsStateWithLifecycle(initialValue = initialInputs)
-    val someoneTyping = inputs.typists.isNotEmpty()
+    val builtFlow = remember(model, key) {
+        val inputs = combine(frames.filterNotNull(), ticks) { frame, _ -> Stamped(frame.seq, projector.project(frame.state)) }
+            .distinctUntilChanged { old, new -> ConversationInputs.same(old.inputs, new.inputs) }
+        combine(inputs, options, clockFlow) { stamped, opts, day ->
+            ConversationModel.built(stamped.inputs, opts, seq = stamped.seq, zone = day.zone)
+        }
+            .conflate()
+            .flowOn(Dispatchers.Default)
+            .conflate()
+    }
+    var current by remember(model, key) { mutableStateOf(initialBuilt) }
+    var forceLoading by remember(key) { mutableStateOf(false) }
+    var pills by remember(key) { mutableStateOf(ConversationScroll.Pills()) }
+    var flash by remember(key) { mutableStateOf<RowFlash?>(null) }
+
+    // MARK: - Landing
+
+    fun finish(token: Any, interrupted: Boolean) {
+        val rows = current
+        when (val end = scroll.finishJump(token, rows, interrupted)) {
+            is ConversationScroll.Finish.Flash -> {
+                // The warm pulse behind the row it landed on — the "here it is" after a jump.
+                val pulse = RowFlash(rows.keys[end.row], ++jobs.flashes)
+                flash = pulse
+                scope.launch {
+                    delay(FLASH_HOLD_MS + FLASH_FADE_MS + 100)
+                    if (flash === pulse) flash = null
+                }
+            }
+            ConversationScroll.Finish.AtTail -> listState.requestScrollToItem(0)
+            ConversationScroll.Finish.Release -> Unit
+        }
+        revision++
+    }
+
+    // A jump's convergence: centre the target, re-resolved by message id on every pass against the
+    // build on screen — never a cached index, which a rebuild between passes would slide onto the
+    // wrong message — for a few frames, while the jump stays pending so nothing else (a follow, the
+    // banner) steals the scroll in between. Bounded, and released by the reader's own drag.
+    suspend fun converge(token: Any) {
+        var interrupted = false
+        try {
+            repeat(JUMP_PASSES) {
+                if (!scroll.isCurrent(token)) return
+                awaitLayoutOf(listState, current)
+                // Whatever is on screen now — a build may have landed while we waited.
+                val rows = current
+                val row = scroll.jumpTargetRow(rows) ?: return
+                centre(listState, rows, row)
+                withFrameNanos {}
+            }
+        } catch (e: CancellationException) {
+            // The reader took hold of the list (their drag outranks our scroll), or the screen went.
+            interrupted = true
+            throw e
+        } finally {
+            if (scroll.isCurrent(token)) finish(token, interrupted)
+        }
+    }
+
+    fun land() {
+        when (val landing = scroll.landing(current)) {
+            ConversationScroll.Landing.Idle, ConversationScroll.Landing.Wait -> Unit
+            // Exact in one pass: the reverse layout puts item 0 at the bottom edge by construction.
+            ConversationScroll.Landing.AtTail -> listState.requestScrollToItem(0)
+            is ConversationScroll.Landing.Converge -> {
+                // A superseded chain would stop on its own at its next pass; it needn't scroll first.
+                jobs.converging?.cancel()
+                jobs.converging = scope.launch { converge(landing.token) }
+            }
+        }
+        revision++
+    }
+
+    // A jump the machine just took: its fetch (if the message isn't held) and its landing (if it is).
+    fun startJump() {
+        publishOptions()
+        scroll.requestAround(model.state, key, frameSeq.value)?.let { anchor -> model.loadAround(key, anchorId = anchor) }
+        land()
+    }
+
+    // A route's request that arrived after birth: a jump into the buffer already open.
+    LaunchedEffect(jump?.nonce) {
+        val request = jump ?: return@LaunchedEffect
+        if (scroll.consume(request)) startJump()
+    }
+
+    // MARK: - Builds
+
+    // A build, on its way onto the screen. Read where the reader is BEFORE it lands: following and
+    // holding are both about the rows they were reading.
+    fun accept(built: BuiltRows) {
+        val drawn = current
+        val wasNearBottom = ConversationModel.followsTail(
+            listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, followSlop,
+        )
+        val step = scroll.onRows(built, wasNearBottom)
+        if (step.optionsChanged) publishOptions()
+        val hold = if (step.follow || scroll.landingPending) {
+            null
+        } else {
+            ConversationScroll.hold(
+                firstVisibleIndex = listState.firstVisibleItemIndex,
+                firstVisibleOffset = listState.firstVisibleItemScrollOffset,
+                visible = visibleItems(listState),
+                drawn = drawn,
+                next = built,
+            )
+        }
+        current = built
+        // ⚠ A reverse layout does NOT follow the tail by itself: a lazy list keeps its first visible
+        // item by KEY, and the newest row is inserted in front of it, so a reader at the bottom
+        // would watch new lines arrive below the viewport. So the list is asked to stay at item 0
+        // for its next measure — the measure that lays these rows out.
+        if (step.follow) {
+            listState.requestScrollToItem(0)
+        } else if (hold != null) {
+            listState.requestScrollToItem(hold.index, hold.scrollOffset)
+            if (hold.thenScrollBy != 0) {
+                scope.launch {
+                    awaitLayoutOf(listState, built)
+                    listState.scrollBy(hold.thenScrollBy.toFloat())
+                }
+            }
+        }
+        // A window the filters thinned to nothing asks for more itself — no layout will — and says
+        // "Loading messages…" while the page is in the air rather than claiming the buffer is empty.
+        forceLoading = scroll.wantsTopUp(built) &&
+            model.loadOlder(key, showingClearedHistory = scroll.options.showsClearedHistory)
+        land()
+    }
+
+    LaunchedEffect(model, key) {
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            builtFlow.collect { built -> accept(built) }
+        }
+    }
+    val someoneTyping = current.inputs.typists.isNotEmpty()
     LaunchedEffect(someoneTyping) {
         // One second is well inside the shortest lease (6s), and coarse enough to be free.
         while (someoneTyping) {
@@ -189,8 +426,44 @@ fun ConversationScreen(
         }
     }
 
-    val rows = remember(inputs) { ConversationModel.buildRows(inputs) }
-    val keys = remember(rows) { MessageListLayout.rowKeys(rows) }
+    // MARK: - Layouts
+
+    // The reader taking hold of the list releases a converging jump — see `onUserDrag`.
+    LaunchedEffect(listState, scroll) {
+        listState.interactionSource.interactions.collect { interaction ->
+            if (interaction is DragInteraction.Start && scroll.onUserDrag()) jobs.converging?.cancel()
+        }
+    }
+    LaunchedEffect(listState, scroll) {
+        snapshotFlow { LayoutSample(listState.layoutInfo, current, connectionShown, revision) }
+            .collect { sample ->
+                val rows = sample.rows
+                if (rows.rows.isEmpty()) {
+                    pills = ConversationScroll.Pills()
+                    return@collect
+                }
+                val info = sample.layout
+                val facts = LayoutFacts.of(
+                    items = info.visibleItemsInfo.map { VisibleItem(it.key, it.index, it.offset, it.size) },
+                    built = rows,
+                    contentEnd = info.viewportEndOffset - info.afterContentPadding,
+                    nearBottomPx = followSlop,
+                    pagingPx = pagingDistance,
+                ) ?: return@collect
+                // Read live, as iOS's `isDetached` is: whether a page is worth asking for is a question
+                // about the server's latest word, not the frame that happened to trigger this pass.
+                val detached = model.state.buffers[key.id]?.hasMoreNewer == true
+                val step = scroll.onLayout(facts, rows, detached = detached, connectionBannerShown = sample.connectionShown)
+                pills = step.pills
+                if (step.loadOlder) model.loadOlder(key, showingClearedHistory = scroll.options.showsClearedHistory)
+                if (step.loadNewer) model.loadNewer(key)
+            }
+    }
+
+    // MARK: - Drawing
+
+    val rows = current.rows
+    val inputs = current.inputs
     val highlighter = remember(inputs.highlighterNicks) { NickHighlighter(inputs.highlighterNicks) }
 
     // Which spoilers the reader has opened, by message id, then by the spoiler's ordinal within it.
@@ -207,10 +480,10 @@ fun ConversationScreen(
         if (next.isEmpty()) revealed.remove(message.id) else revealed[message.id] = next
     }
 
-    val today by rememberToday()
+    val day = clock.value
     val style = rememberMessageTextStyle()
     val haptics = LocalHapticFeedback.current
-    val context = remember(rows, inputs, highlighter, style, today) {
+    val context = remember(rows, inputs, highlighter, style, day) {
         MessageListContext(
             style = style,
             networkName = { message -> ConversationModel.networkName(message, key, inputs.networks) },
@@ -221,9 +494,12 @@ fun ConversationScreen(
             row = { index -> rows.getOrNull(index) },
             revealedSpoilers = { message -> revealed[message.id].orEmpty() },
             onToggleSpoiler = ::toggleSpoiler,
-            // U2b: jump to the quoted line (`jumpToMessage`). Until then the quote is drawn and not
-            // tappable — a quote that lights up and goes nowhere reads as broken.
-            onJumpToReply = null,
+            // The quoted line, through the same jump a search hit takes (lurker-ios#184) — it may be
+            // outside the loaded slice, and then it's fetched.
+            onJumpToReply = { quote ->
+                scroll.jumpTo(quote.id)
+                startJump()
+            },
             reactions = ReactionContext(
                 groups = { message ->
                     if (Reactions.canCarry(message, networkId = key.networkId)) inputs.reactionGroups(message.id) else emptyList()
@@ -241,74 +517,211 @@ fun ConversationScreen(
                 // U6: the reaction sheet (`ReactionSheetViewController`).
                 onOpen = {},
             ),
-            today = today,
+            zone = day.zone,
+            today = day.today,
         )
-    }
-
-    // New rows arriving at the bottom stay pinned to the bottom when the reader is there; anywhere
-    // else the viewport holds. ⚠ A reverse layout does NOT do the first half by itself: a lazy list
-    // keeps its first visible item by KEY, and the newest row is inserted in front of that item, so a
-    // reader at the bottom would watch new lines arrive below the viewport. So when the rows change and
-    // the reader was at the bottom (read before this frame lays out), the list is asked to stay at item
-    // 0 for its next measure. Holding the viewport elsewhere is the lazy list's own key anchoring.
-    // U2b: everything finer — prepends, jumps, the detached-slice rule (`followsTail`'s `wasDetached`).
-    val listState = rememberLazyListState()
-    val followSlop = with(LocalDensity.current) { FOLLOW_SLOP.roundToPx() }
-    val atBottom by remember(listState, followSlop) {
-        derivedStateOf {
-            ConversationModel.followsTail(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, followSlop)
-        }
-    }
-    val drawn = remember(key) { DrawnRows() }
-    val follow = drawn.rows != null && drawn.rows !== rows && atBottom
-    SideEffect {
-        if (follow) listState.requestScrollToItem(0)
-        drawn.rows = rows
     }
 
     // Server errors are `MainScaffold`'s (`ServerErrorDialog`): always composed, so one never waits
     // unseen behind the buffer list on a phone and surfaces later over an unrelated conversation.
 
-    val placeholder = ConversationModel.placeholder(hasRows = rows.isNotEmpty(), inputs = inputs)
+    val placeholder = ConversationModel.placeholder(hasRows = rows.isNotEmpty(), inputs = inputs, forceLoading = forceLoading)
     ConversationContent(
         title = title,
         showsBack = showsBack,
         onBack = onBack,
         banner = banner,
+        onConnectionBannerShown = { connectionShown = it },
         rows = rows,
-        keys = keys,
+        keys = current.keys,
         context = context,
         placeholder = placeholder,
         empty = ConversationModel.emptyState(kind, inputs.buffer?.target ?: key.target),
         listState = listState,
+        pills = pills,
+        flash = flash,
+        onJumpToUnread = { if (scroll.jumpToFirstUnread()) startJump() },
+        onJumpToLatest = {
+            // U3: sending from a detached slice re-attaches through this same path (iOS's `send`),
+            // since the line just sent isn't in the slice and no scroll will reach it.
+            val detached = model.state.buffers[key.id]?.hasMoreNewer == true
+            when (scroll.jumpToLatest(hasRows = rows.isNotEmpty(), detached = detached)) {
+                ConversationScroll.ToLatest.Reattach -> model.loadLatest(key)
+                ConversationScroll.ToLatest.ScrollDown -> {
+                    publishOptions()
+                    scope.launch { listState.animateScrollToItem(0) }
+                }
+                ConversationScroll.ToLatest.Nothing -> Unit
+            }
+            revision++
+        },
     )
 }
 
-/** What the list last drew — not state: comparing it must not itself recompose anything. */
-private class DrawnRows {
-    var rows: List<MessageRow>? = null
+/** A frame, stamped with the order the screen processed it in. Identity is the comparison. */
+private class Frame(val seq: Long, val state: ChatState)
+
+/** Projected inputs, with the frame they came from. */
+private class Stamped(val seq: Long, val inputs: ConversationInputs)
+
+/** The frame stamp: a counter, not state — reading it must not recompose anything. */
+private class FrameCounter {
+    var value = 0L
+        private set
+
+    fun next(): Long = ++value
+}
+
+/** The screen's running coroutines and bookkeeping — not state. */
+private class Jobs {
+    var converging: Job? = null
+    var flashes = 0L
+
+    /** This buffer's message list as of the last mark-read. */
+    var markedFor: List<Message>? = null
+}
+
+/** What the layout stream reads, in one value, so a change to any of it re-decides. */
+private data class LayoutSample(
+    val layout: LazyListLayoutInfo,
+    val rows: BuiltRows,
+    val connectionShown: Boolean,
+    val revision: Int,
+)
+
+/** The row a finished jump pulses, by key, and which pulse — so the same row can pulse twice. */
+internal class RowFlash(val key: String, val nonce: Long)
+
+/** Saves the machine's [ConversationScroll.Memory] across recreation. */
+private fun scrollSaver(kind: BufferKind): Saver<ConversationScroll, ConversationScroll.Memory> =
+    Saver(save = { it.memory() }, restore = { ConversationScroll(kind, it) })
+
+/** The laid-out items, in plain numbers. */
+private fun visibleItems(listState: LazyListState): List<VisibleItem> =
+    listState.layoutInfo.visibleItemsInfo.map { VisibleItem(it.key, it.index, it.offset, it.size) }
+
+/**
+ * Wait until the lazy list has measured [rows] — every laid-out item's key is the one these rows put
+ * at that index. A scroll asked of the list before then would be measured against the previous
+ * rows, and an index past their end is clamped and kept. Bounded: a list that never lays out (an
+ * empty build draws the placeholder instead) mustn't hang the caller.
+ */
+private suspend fun awaitLayoutOf(listState: LazyListState, rows: BuiltRows) {
+    withTimeoutOrNull(LAYOUT_WAIT_MS) {
+        snapshotFlow { listState.layoutInfo }.first { info ->
+            info.totalItemsCount == rows.rows.size &&
+                info.visibleItemsInfo.isNotEmpty() &&
+                info.visibleItemsInfo.all { rows.keys.getOrNull(rows.itemIndex(it.index)) == it.key }
+        }
+    }
+}
+
+/**
+ * Put [row] in the middle of the viewport — clamped near an edge, as centred as it can be (a recent
+ * row with little below it lands lower). Brought on screen first if it isn't, then nudged by the
+ * difference: the list's scroll-to-item puts an item at its START, which in a reverse layout is
+ * the bottom edge, and takes no negative offset to lift it from there.
+ */
+private suspend fun centre(listState: LazyListState, rows: BuiltRows, row: Int) {
+    val key = rows.keys[row]
+    var item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+    if (item == null) {
+        listState.scrollToItem(rows.itemIndex(row))
+        item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key } ?: return
+    }
+    val info = listState.layoutInfo
+    val contentEnd = info.viewportEndOffset - info.afterContentPadding
+    val wanted = (contentEnd - item.size) / 2
+    // Forward is toward older rows, which lowers every offset — so forward by how far above the
+    // middle it sits (a negative amount, backward, when it's below).
+    listState.scrollBy((item.offset - wanted).toFloat())
 }
 
 /** iOS's `isNearBottom`: within 80pt of the newest row still counts as following the conversation. */
 private val FOLLOW_SLOP = 80.dp
 
+/** iOS's paging distance: within 300pt of either end of what's loaded, ask for the next page. */
+private val PAGING_DISTANCE = 300.dp
+
 /**
- * Today's date, advanced at local midnight. The day dividers say "Today" and "Yesterday", and a row
- * carries only its day — so a buffer left open past midnight would go on calling yesterday "Today"
- * until some unrelated change redrew it, and a quiet buffer is exactly the one that gets none. iOS
- * reloads on `NSCalendarDayChanged` for the same reason. (A locale change recreates the activity.)
+ * How many frames a jump re-centres before settling (iOS's `jumpConvergePasses`). The first pass
+ * lands — a lazy list measures the rows it shows rather than estimating them — so the rest are the
+ * correction for rows still composing under it.
+ */
+private const val JUMP_PASSES = 3
+
+/** How long a converging pass waits for the list to measure a new build. */
+private const val LAYOUT_WAIT_MS = 1_000L
+
+/** iOS's pulse: the wash holds for half a second, then fades over 1.2s. */
+private const val FLASH_HOLD_MS = 500L
+private const val FLASH_FADE_MS = 1_200
+
+/**
+ * The day the labels read, and the zone that decides it. A row carries only an instant, and the day
+ * dividers say "Today" and "Yesterday" — so a buffer left open past midnight would go on calling
+ * yesterday "Today" until some unrelated change redrew it, and a quiet buffer is exactly the one that
+ * gets none. iOS's "date-label invalidation" (`NSCalendarDayChanged`), which also covers what a
+ * midnight timer can't: a time-zone change moves the boundary itself (and every row's day with it —
+ * the builds take the zone), and a clock set by hand moves "now". A locale change recreates the
+ * activity, which is the other half of iOS's rule.
+ */
+internal data class DayClock(val today: LocalDate, val zone: ZoneId) {
+    companion object {
+        fun now(): DayClock {
+            val zone = ZoneId.systemDefault()
+            return DayClock(LocalDate.now(zone), zone)
+        }
+    }
+}
+
+@Composable
+private fun rememberDayClock() = run {
+    val context = LocalContext.current.applicationContext
+    produceState(initialValue = DayClock.now(), context) {
+        val changed = Channel<Unit>(Channel.CONFLATED)
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                changed.trySend(Unit)
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
+            addAction(Intent.ACTION_TIME_CHANGED)
+            addAction(Intent.ACTION_DATE_CHANGED)
+        }
+        // System broadcasts reach an unexported receiver; nothing else should be able to.
+        context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        try {
+            while (true) {
+                // Measured between instants, in the zone, so a day that's 23 or 25 hours long (a DST
+                // change) still wakes at its midnight rather than an hour either side of it.
+                val zone = ZoneId.systemDefault()
+                val midnight = LocalDate.now(zone).plusDays(1).atStartOfDay(zone).toInstant()
+                withTimeoutOrNull(Duration.between(Instant.now(), midnight).toMillis() + 1_000) { changed.receive() }
+                value = DayClock.now()
+            }
+        } finally {
+            context.unregisterReceiver(receiver)
+        }
+    }
+}
+
+/**
+ * The row-flash wash's strength: 1 for half a second, then faded to 0 over 1.2s (iOS's `flashRow`),
+ * or null for a row that isn't flashing. A state, read at draw time, so the fade redraws the row
+ * without recomposing it every frame.
  */
 @Composable
-private fun rememberToday() = produceState(initialValue = LocalDate.now()) {
-    while (true) {
-        // Measured between instants, in the zone, so a day that's 23 or 25 hours long (a DST
-        // change) still wakes at its midnight rather than an hour either side of it.
-        val zone = ZoneId.systemDefault()
-        val now = Instant.now()
-        val midnight = LocalDate.now(zone).plusDays(1).atStartOfDay(zone).toInstant()
-        delay(Duration.between(now, midnight).toMillis() + 1_000)
-        value = LocalDate.now()
+private fun rememberFlashStrength(nonce: Long?): State<Float>? {
+    if (nonce == null) return null
+    val strength = remember { Animatable(1f) }
+    LaunchedEffect(nonce) {
+        strength.snapTo(1f)
+        delay(FLASH_HOLD_MS)
+        strength.animateTo(0f, tween(FLASH_FADE_MS, easing = LinearOutSlowInEasing))
     }
+    return strength.asState()
 }
 
 /**
@@ -327,6 +740,11 @@ internal fun ConversationContent(
     placeholder: BufferPlaceholder,
     empty: EmptyState,
     listState: LazyListState,
+    pills: ConversationScroll.Pills = ConversationScroll.Pills(),
+    flash: RowFlash? = null,
+    onConnectionBannerShown: (Boolean) -> Unit = {},
+    onJumpToUnread: () -> Unit = {},
+    onJumpToLatest: () -> Unit = {},
 ) {
     val colors = LurkerTheme.colors
     Scaffold(
@@ -353,6 +771,7 @@ internal fun ConversationContent(
         // is better than a crash.
         val platform = LocalUriHandler.current
         val uriHandler = remember(platform) { SafeUriHandler(platform) }
+        val bottom = padding.calculateBottomPadding()
         CompositionLocalProvider(LocalUriHandler provides uriHandler) {
             Box(
                 Modifier
@@ -376,7 +795,7 @@ internal fun ConversationContent(
                         // Newest at the bottom, and the list starts there: item 0 is the last row.
                         reverseLayout = true,
                         // U3: the composer's height joins this reservation.
-                        contentPadding = PaddingValues(bottom = padding.calculateBottomPadding()),
+                        contentPadding = PaddingValues(bottom = bottom),
                         modifier = Modifier.fillMaxSize(),
                     ) {
                         items(
@@ -385,15 +804,41 @@ internal fun ConversationContent(
                             contentType = { item -> MessageListLayout.contentType(rows[rows.size - 1 - item]) },
                         ) { item ->
                             val index = rows.size - 1 - item
+                            // The warm pulse behind a row a jump just landed on, in the highlight
+                            // colour — behind the content, so a matched line's own wash reads over it.
+                            val pulse = rememberFlashStrength(flash?.takeIf { it.key == keys[index] }?.nonce)
+                            val wash = colors.highlightBubble
+                            val modifier = if (pulse == null) {
+                                Modifier
+                            } else {
+                                Modifier.drawBehind {
+                                    val strength = pulse.value
+                                    if (strength > 0f) drawRect(wash.copy(alpha = wash.alpha * strength))
+                                }
+                            }
                             // U6: long-press for the line's actions (lurker-ios#60).
-                            MessageListRow(rows[index], index, context)
+                            MessageListRow(rows[index], index, context, modifier = modifier)
                         }
                     }
                 }
-                // Over the rows, not above them: it floats, and the list scrolls under it.
+                // Over the rows, not above them: they float, and the list scrolls under them. Each sits
+                // on the edge it takes you to — the unread banner up top (in the connection banner's
+                // slot, which wins it), the jump pill in the bottom-trailing corner.
                 ConnectionBanner(
                     state = banner,
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp, start = 16.dp, end = 16.dp),
+                    onShownChange = onConnectionBannerShown,
+                )
+                UnreadBanner(
+                    visible = pills.showsUnread,
+                    onClick = onJumpToUnread,
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp, start = 16.dp, end = 16.dp),
+                )
+                JumpToLatestButton(
+                    visible = pills.showsLatest,
+                    newCount = pills.newCount,
+                    onClick = onJumpToLatest,
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = bottom + 12.dp),
                 )
             }
         }
@@ -416,7 +861,7 @@ private class SafeUriHandler(private val platform: UriHandler) : UriHandler {
 // MARK: - Previews
 
 @Composable
-private fun ConversationPreview(dark: Boolean, empty: Boolean) {
+private fun ConversationPreview(dark: Boolean, empty: Boolean, pills: ConversationScroll.Pills = ConversationScroll.Pills()) {
     LurkerTheme(darkTheme = dark) {
         val style = rememberMessageTextStyle()
         val rows = if (empty) emptyList() else previewMessageRows()
@@ -438,6 +883,7 @@ private fun ConversationPreview(dark: Boolean, empty: Boolean) {
             placeholder = if (empty) BufferPlaceholder.Empty else BufferPlaceholder.None,
             empty = ConversationModel.emptyState(BufferKind.Channel, "#lurker"),
             listState = rememberLazyListState(),
+            pills = pills,
         )
     }
 }
@@ -449,6 +895,16 @@ private fun ConversationPreviewLight() = ConversationPreview(dark = false, empty
 @Preview(name = "Conversation — dark", widthDp = 360, heightDp = 640)
 @Composable
 private fun ConversationPreviewDark() = ConversationPreview(dark = true, empty = false)
+
+private val previewPills = ConversationScroll.Pills(showsLatest = true, newCount = 4, showsUnread = true)
+
+@Preview(name = "Unread above, new below — light", widthDp = 360, heightDp = 640)
+@Composable
+private fun PillsPreviewLight() = ConversationPreview(dark = false, empty = false, pills = previewPills)
+
+@Preview(name = "Unread above, new below — dark", widthDp = 360, heightDp = 640)
+@Composable
+private fun PillsPreviewDark() = ConversationPreview(dark = true, empty = false, pills = previewPills)
 
 @Preview(name = "Empty — light", widthDp = 360, heightDp = 640)
 @Composable
