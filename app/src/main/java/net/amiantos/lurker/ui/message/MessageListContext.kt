@@ -6,7 +6,9 @@ package net.amiantos.lurker.ui.message
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.buildAnnotatedString
+import net.amiantos.lurker.ui.media.PreviewContext
 import net.amiantos.lurkerkit.model.ConsolidationSummary
+import net.amiantos.lurkerkit.model.LinkPreview
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageRow
 import net.amiantos.lurkerkit.model.ReactionGroup
@@ -75,7 +77,18 @@ class MessageListContext(
     /** Today, as the day labels read it — the screen advances it at midnight. */
     val today: LocalDate = LocalDate.now(zone),
     val locale: Locale = Locale.getDefault(),
-    // U8: link previews (iOS's `PreviewContext`) and a media viewer to open them in.
+    /**
+     * Link previews (iOS's `PreviewContext`), or null on the screens that don't show them — the feeds,
+     * and any screen while both settings are off. Rebuilt with a new `revision` when preview state
+     * moved for something on screen, which is how a resolved preview reaches a row whose message
+     * didn't change.
+     */
+    val previews: PreviewContext? = null,
+    /**
+     * Present a message's media full-screen, positioned on one item — the viewer `MainScaffold`
+     * hosts. Null on screens with nothing to present from, where a tap opens the address instead.
+     */
+    val onOpenMedia: ((List<LinkPreview>, Int) -> Unit)? = null,
 ) {
     companion object {
         /**
@@ -97,6 +110,8 @@ class MessageListContext(
             zone: ZoneId = ZoneId.systemDefault(),
             today: LocalDate = LocalDate.now(zone),
             locale: Locale = Locale.getDefault(),
+            previews: PreviewContext? = null,
+            onOpenMedia: ((List<LinkPreview>, Int) -> Unit)? = null,
         ): MessageListContext = MessageListContext(
             style = style,
             networkName = networkName,
@@ -113,6 +128,8 @@ class MessageListContext(
             zone = zone,
             today = today,
             locale = locale,
+            previews = previews,
+            onOpenMedia = onOpenMedia,
         )
     }
 }

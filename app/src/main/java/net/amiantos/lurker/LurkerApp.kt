@@ -23,6 +23,8 @@ import net.amiantos.lurker.prefs.PrefsDefaultsStorage
 import net.amiantos.lurker.prefs.SharedStringPrefs
 import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.dcc.DccOffers
+import net.amiantos.lurker.ui.media.PreviewImageLoader
+import net.amiantos.lurker.ui.media.PreviewUpdates
 import net.amiantos.lurkerkit.session.AppBadge
 import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.session.OAuthClients
@@ -150,10 +152,22 @@ class LurkerApp : Application() {
             events.send(AppEvent.BufferRenamed(from, to))
         }
 
-        // U8: drop the decoded-image cache (link previews). Sign-out must: the images are the
-        // previous account's reading history, and against a different instance the signed proxy
-        // tokens wouldn't verify anyway.
-        model.onPreviewCachesCleared = {}
+        // Drop the decoded-image cache (link previews). Sign-out must: the images are the previous
+        // account's reading history, and against a different instance the signed proxy tokens
+        // wouldn't verify anyway. In memory only, so cheap on the main thread where the kit calls it.
+        // (⚠ The kit's own teardown beside it — `clearMediaCache`'s `Cache.evictAll` and
+        // `clearStagedMedia` — deletes files on the calling thread, which is the main thread: a kit
+        // debt this can't reach from here.)
+        model.onPreviewCachesCleared = {
+            PreviewImageLoader.reset()
+            PreviewUpdates.reset()
+        }
+
+        // Preview metadata landing — which URLs moved — as a version per URL that each row reads, so
+        // exactly the rows mentioning them recompose, whichever screen they're on (iOS's chat screen
+        // takes the store's one callback per screen). Touches the store, which the kit builds lazily;
+        // it's a few empty maps.
+        PreviewUpdates.install(model.linkPreviews)
 
         // A join this device asked for landed — navigate to it (lurker-ios#57).
         model.onJoinOpened = { key -> events.send(AppEvent.OpenBuffer(key)) }

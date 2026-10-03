@@ -3,12 +3,10 @@
 
 package net.amiantos.lurker.ui.conversation
 
-import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.util.Log
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearOutSlowInEasing
 import androidx.compose.animation.core.tween
@@ -62,7 +60,6 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalUriHandler
-import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -96,6 +93,9 @@ import net.amiantos.lurker.ui.composer.SuggestionsView
 import net.amiantos.lurker.ui.feeds.AppView
 import net.amiantos.lurker.ui.feeds.ConversationViewsActions
 import net.amiantos.lurker.ui.composer.rememberComposerState
+import net.amiantos.lurker.ui.media.MediaSource
+import net.amiantos.lurker.ui.media.PreviewContext
+import net.amiantos.lurker.ui.media.PreviewToggles
 import net.amiantos.lurker.ui.message.MessageListContext
 import net.amiantos.lurker.ui.message.MessageListLayout
 import net.amiantos.lurker.ui.message.MessageListRow
@@ -106,6 +106,7 @@ import net.amiantos.lurker.ui.message.rememberMessageTextStyle
 import net.amiantos.lurker.ui.shell.ConnectionBanner
 import net.amiantos.lurker.ui.shell.JumpLedger
 import net.amiantos.lurker.ui.shell.JumpRequest
+import net.amiantos.lurker.ui.shell.SafeUriHandler
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.shell.StatusTitle
 import net.amiantos.lurker.ui.shell.StatusTitleText
@@ -116,6 +117,7 @@ import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.BufferPlaceholder
 import net.amiantos.lurkerkit.model.ConnectionBannerState
+import net.amiantos.lurkerkit.model.LinkPreview
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageRow
 import net.amiantos.lurkerkit.model.Reactions
@@ -160,7 +162,9 @@ import java.time.ZoneOffset
  * A long press on a row opens its actions sheet (lurker-android#37): the line's, a link's, or — on
  * the chips — who reacted. Reply goes through `ComposerState.startReply`. See `MessageActionsHost`.
  *
- * U8: link previews.
+ * Link previews and inline media draw under the rows that carry them (lurker-android#15): the kit
+ * resolves them at ingest, and each row re-plans when one of its own URLs moves (`PreviewUpdates`). A
+ * tap on a picture opens [onOpenMedia]'s viewer.
  *
  * @param jump the message to land on rather than the bottom (`BufferRoute.jump`) — a new request on
  *   the same buffer arrives here without rebuilding the screen.
@@ -183,6 +187,9 @@ import java.time.ZoneOffset
  * @param onShowInfo the bar's info button (U5) — this buffer's info and settings, on every buffer.
  * @param sideBySide whether the list is beside this screen — the bar's views come out as buttons (U7).
  * @param onOpenView the bar's views — Search, Activity, Bookmarks (U7), which `MainScaffold` hosts.
+ * @param onOpenMedia the media viewer `MainScaffold` hosts, over a message's pictures and positioned on
+ *   one; null and a tap on a picture opens its address.
+ * @param media where preview pictures come from — `MainScaffold`'s, shared with the viewer.
  */
 @Composable
 fun ConversationScreen(
@@ -203,6 +210,8 @@ fun ConversationScreen(
     onShowInfo: () -> Unit = {},
     sideBySide: Boolean = false,
     onOpenView: ((AppView) -> Unit)? = null,
+    onOpenMedia: ((List<LinkPreview>, Int) -> Unit)? = null,
+    media: MediaSource,
 ) {
     val kind = remember(key) { BufferKind.of(networkId = key.networkId, target = key.target) }
 
@@ -245,6 +254,8 @@ fun ConversationScreen(
         Jobs(nearBottom = ConversationModel.followsTail(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, followSlop))
     }
 
+    var instanceHasPreviews by remember(model) { mutableStateOf(model.features.linkPreviews) }
+
     // The two things the screen must DO about every frame, rather than draw, in iOS's order: notice
     // the buffer disappearing (or moving), ask for its history, ask for a jump's slice, latch the
     // read boundary, and mark read. Side effects, never Compose state — straight off the publisher.
@@ -275,6 +286,11 @@ fun ConversationScreen(
                 }
                 BufferWatch.Verdict.Present, BufferWatch.Verdict.Waiting -> Unit
             }
+            // The instance's preview flag isn't state: it's re-read from `/api/config` on every
+            // reconnect, so it's sampled here, on every frame — a reconnect's own frames carry the new
+            // answer to the rows. (A flag turning off between frames fetches nothing meanwhile: the
+            // media source checks it live, see `MediaSource.of`.)
+            instanceHasPreviews = model.features.linkPreviews
             val seq = frameSeq.next()
             // A pending jump hydrates through its `around` slice instead: asking for both would
             // double-fetch, and the latest slice would fight the jump.
@@ -579,6 +595,15 @@ fun ConversationScreen(
         if (next.isEmpty()) revealed.remove(message.id) else revealed[message.id] = next
     }
 
+    // MARK: - Link previews
+
+    val currentOnOpenMedia by rememberUpdatedState(onOpenMedia)
+    val openMedia: ((List<LinkPreview>, Int) -> Unit)? = if (onOpenMedia == null) {
+        null
+    } else {
+        remember { { previews: List<LinkPreview>, index: Int -> currentOnOpenMedia?.invoke(previews, index) } }
+    }
+
     val day = clock.value
     val style = rememberMessageTextStyle()
     val haptics = LocalHapticFeedback.current
@@ -603,7 +628,10 @@ fun ConversationScreen(
     }
 
     // Keyed on everything the resolvers capture, the sheets' state and the keyboard's included.
-    val context = remember(rows, inputs, highlighter, style, day, actions, keyboard, focusManager, haptics) {
+    // Which previews draw: both settings and the instance's flag (`PreviewToggles`). A preview landing
+    // doesn't come through here — each row reads its own URLs' versions (`PreviewUpdates`).
+    val previewToggles = PreviewToggles.resolve(instanceHasPreviews, inputs.settings)
+    val context = remember(rows, inputs, highlighter, style, day, actions, keyboard, focusManager, haptics, previewToggles, media, openMedia) {
         MessageListContext(
             style = style,
             networkName = { message -> ConversationModel.networkName(message, key, inputs.networks) },
@@ -640,6 +668,8 @@ fun ConversationScreen(
             onLongPress = ::onLongPress,
             zone = day.zone,
             today = day.today,
+            previews = previewToggles?.let { PreviewContext(model.linkPreviews, media, it) },
+            onOpenMedia = openMedia,
         )
     }
 
@@ -1063,19 +1093,6 @@ internal fun ConversationContent(
                 overlay(bottom)
                 sheets()
             }
-        }
-    }
-}
-
-/** The platform's link opener, minus the crash when nothing on the device takes the link. */
-private class SafeUriHandler(private val platform: UriHandler) : UriHandler {
-    override fun openUri(uri: String) {
-        try {
-            platform.openUri(uri)
-        } catch (e: ActivityNotFoundException) {
-            Log.w("Lurker", "no app opens $uri", e)
-        } catch (e: IllegalArgumentException) {
-            Log.w("Lurker", "can't open $uri", e)
         }
     }
 }

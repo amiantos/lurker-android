@@ -88,9 +88,21 @@ internal class PressTargets {
     var chips: LayoutCoordinates? = null
 
     /**
-     * What a press at [position] (in [row]'s space) is about: the chips, then a link, then the line.
-     * A link is looked for before the line is required — a consolidated run of topic changes has no
-     * single message, and a URL in one is still a URL you can act on (iOS learned that the hard way).
+     * Each attachment's box — a mosaic tile, a media box, a card — by the address it stands for. An
+     * attachment re-planned away leaves composition and its coordinates detach, so a stale entry is
+     * simply never matched.
+     */
+    val attachments = HashMap<String, LayoutCoordinates>()
+
+    /**
+     * What a press at [position] (in [row]'s space) is about: the chips, then an attachment, then a
+     * link, then the line.
+     *
+     * A press on a picture or a card is about ITS address, as a press on a link in the text is — and
+     * for a picture that took its address out of the text it's the only way to that address's Copy,
+     * Open and Share. A link is looked for before the line is required — a consolidated run of topic
+     * changes has no single message, and a URL in one is still a URL you can act on (iOS learned that
+     * the hard way).
      */
     fun resolve(position: Offset, message: Message?): RowPress? {
         val row = row?.takeIf { it.isAttached }
@@ -98,7 +110,12 @@ internal class PressTargets {
             val chips = chips?.takeIf { it.isAttached }
             if (chips != null && contains(chips, chips.localPositionOf(row, position))) return RowPress.Reactions(message)
         }
-        if (row != null) linkAt(row, position)?.let { return RowPress.Link(it) }
+        if (row != null) {
+            for ((url, box) in attachments) {
+                if (box.isAttached && contains(box, box.localPositionOf(row, position))) return RowPress.Link(url)
+            }
+            linkAt(row, position)?.let { return RowPress.Link(it) }
+        }
         return message?.let { RowPress.Line(it) }
     }
 
