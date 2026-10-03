@@ -77,4 +77,27 @@ class ComposerInsertsTest {
         inserts.mount(android, there.insert)
         assertTrue(there.got.isEmpty())
     }
+
+    @Test
+    fun goingSomewhereElseFirstDropsWhatWasWaiting() {
+        val inserts = ComposerInserts()
+        inserts.insert(android, "shared text")
+        // The reader opened another buffer before ##android's composer appeared.
+        inserts.mount(lurker, Field().insert)
+        val later = Field()
+        inserts.mount(android, later.insert)
+        assertTrue(later.got.isEmpty())
+    }
+
+    @Test
+    fun heldTextLapses() {
+        var now = 0L
+        val inserts = ComposerInserts(clock = { now })
+        inserts.insert(android, "shared text")
+        // Backed out to the list, where no composer mounts, and came back much later.
+        now += ComposerInserts.PATIENCE_MS + 1
+        val later = Field()
+        inserts.mount(android, later.insert)
+        assertTrue(later.got.isEmpty())
+    }
 }

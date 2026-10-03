@@ -287,6 +287,10 @@ class UploadRun(
                 platform.stage(source)
             } catch (_: CancellationException) {
                 StageResult.Cancelled
+            } catch (error: Exception) {
+                // A provider's refusal is one unreadable file, never the end of the app: whatever a
+                // content provider throws for an address it won't serve, it's counted with the rest.
+                StageResult.Failed(error.message ?: "Couldn't read the file.")
             }
         }
 
@@ -328,6 +332,9 @@ class UploadRun(
                     platform.prepareImage(file, platform.maxStaticImageDimension)
                 } catch (_: CancellationException) {
                     return Outcome.Cancelled
+                } catch (_: Exception) {
+                    // A redraw that broke uploads the original instead, as a refused one does.
+                    null
                 }
                 if (converted != null) {
                     // Pixels the server would have thrown away, or a HEIC its libheif can't decode —

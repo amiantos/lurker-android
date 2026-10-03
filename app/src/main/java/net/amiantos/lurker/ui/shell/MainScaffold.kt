@@ -15,6 +15,7 @@ import net.amiantos.lurker.ui.uploads.LocalUploadServices
 import net.amiantos.lurker.ui.uploads.SharePickerDialog
 import net.amiantos.lurker.ui.uploads.UploadReportDialog
 import net.amiantos.lurker.ui.uploads.UploadServices
+import net.amiantos.lurker.ui.uploads.UploadTargets
 import net.amiantos.lurker.ui.uploads.UploadsSheetsHost
 import net.amiantos.lurker.ui.uploads.rememberUploadsSheets
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -420,10 +421,15 @@ fun MainScaffold(
     // Message into that conversation's composer; from the list it can't, there being no composer there.
     val uploadsSheets = rememberUploadsSheets()
 
-    // A view from a menu: the uploads browser, or one of the feeds. [from] is the conversation that asked,
-    // if one did — the one place Add to Message has somewhere to go.
+    // A view from a menu: the uploads browser, or one of the feeds. [from] is the buffer whose bar asked,
+    // if one did — Add to Message's destination, offered only when that buffer takes uploads at all
+    // (`UploadTargets`): never from the list, a server log or the Lurker console.
     fun openView(view: AppView, from: BufferKey? = null) {
-        if (view == AppView.Uploads) uploadsSheets.show(insertInto = from) else feedSheets.show(view)
+        if (view == AppView.Uploads) {
+            uploadsSheets.show(insertInto = from?.takeIf(UploadTargets::takes))
+        } else {
+            feedSheets.show(view)
+        }
     }
 
     // A share from another app (lurker-android#15), once the reader has said which conversation: open it

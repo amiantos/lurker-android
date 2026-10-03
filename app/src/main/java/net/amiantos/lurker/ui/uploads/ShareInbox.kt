@@ -56,8 +56,19 @@ class ShareInbox {
 }
 
 /**
- * The share picker's list: every conversation a share can land in, under its network — channels,
- * DMs and DCC chats. Not server logs or the Lurker buffer, which take commands, not files.
+ * Which buffers take uploads at all: the conversations — channels, DMs and DCC chats. Not a server log
+ * or the Lurker buffer, which take commands, not files. One rule for every place it's asked — the share
+ * picker's list, the paperclip, where a finished link may land, and Add to Message — so a buffer can't
+ * be offered as a destination by one and refused by another.
+ */
+object UploadTargets {
+    fun takes(kind: BufferKind): Boolean = kind == BufferKind.Channel || kind == BufferKind.Dm || kind == BufferKind.Dcc
+
+    fun takes(key: BufferKey): Boolean = takes(BufferKind.of(networkId = key.networkId, target = key.target))
+}
+
+/**
+ * The share picker's list: every conversation a share can land in ([UploadTargets]), under its network.
  *
  * Only what the picker draws — names and keys, never unread counts — so a list built from every state
  * frame compares equal until a conversation actually comes or goes.
@@ -69,7 +80,7 @@ object ShareTargets {
     data class Section(val title: String, val targets: List<Target>)
 
     fun sections(networks: Map<Int, Network>, buffers: Collection<Buffer>): List<Section> {
-        val takers = buffers.filter { it.kind == BufferKind.Channel || it.kind == BufferKind.Dm || it.kind == BufferKind.Dcc }
+        val takers = buffers.filter { UploadTargets.takes(it.kind) }
         return takers
             .groupBy { it.networkId }
             .entries

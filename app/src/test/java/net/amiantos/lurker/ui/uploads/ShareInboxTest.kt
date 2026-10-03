@@ -8,6 +8,7 @@ import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.Network
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -62,5 +63,15 @@ class ShareInboxTest {
         assertEquals(listOf("#Lurker", "&local", "bob"), sections[1].targets.map { it.name })
         assertEquals(BufferKey(1, "#Lurker"), sections[1].targets[0].key)
         assertEquals(listOf("=carol"), sections[2].targets.map { it.name })
+    }
+
+    @Test
+    fun onlyConversationsTakeUploads() {
+        assertTrue(UploadTargets.takes(BufferKey(1, "#lurker")))
+        assertTrue(UploadTargets.takes(BufferKey(1, "&local")))
+        assertTrue(UploadTargets.takes(BufferKey(1, "bob")))
+        assertTrue(UploadTargets.takes(BufferKey(1, "=carol")))
+        assertFalse(UploadTargets.takes(BufferKey(1, Buffer.serverTarget(1))))
+        assertFalse(UploadTargets.takes(BufferKey(null, Buffer.systemTarget)))
     }
 }

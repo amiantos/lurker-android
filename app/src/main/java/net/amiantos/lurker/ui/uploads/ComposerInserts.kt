@@ -17,7 +17,7 @@ import net.amiantos.lurkerkit.model.BufferKey
  * **A stack, not a slot.** A conversation pane animates in over the one leaving, so for a moment two
  * are mounted; the newest is the one on screen, and the old one's unmount mustn't clear it.
  */
-class ComposerInserts {
+class ComposerInserts(private val clock: () -> Long = { System.nanoTime() / 1_000_000 }) {
     /** A composer's way in: put [text] in the field — at the caret when `atCaret`, else at the end. */
     fun interface Insert {
         fun insert(text: String, atCaret: Boolean)
@@ -27,8 +27,11 @@ class ComposerInserts {
 
     private val mounted = mutableListOf<Mounted>()
 
-    /** Text waiting for a particular buffer's composer to appear, by `BufferKey.id`, oldest first. */
-    private val pending = mutableMapOf<String, MutableList<String>>()
+    /** Text waiting for one buffer's composer to appear, oldest first, and when it was asked for. */
+    private class Pending(val texts: MutableList<String>, val since: Long)
+
+    /** By `BufferKey.id`. */
+    private val pending = mutableMapOf<String, Pending>()
 
     /** The buffer whose composer is on screen, or null when none is (a phone on the buffer list). */
     val activeKey: BufferKey? get() = mounted.lastOrNull()?.key
@@ -36,11 +39,18 @@ class ComposerInserts {
     /**
      * A composer is on screen. Anything held for its buffer goes in now, at the caret (it's what the
      * reader asked for on the way here). Returns the handle [unmount] takes.
+     *
+     * ⚠ And anything held for ANY OTHER buffer is dropped: the reader went somewhere else before that
+     * composer appeared, so the text is no longer on its way anywhere — left held, it would turn up in
+     * that buffer whenever it was next opened, hours later, from nowhere the reader remembers. Held
+     * text also lapses after [PATIENCE_MS] (the reader backed out to the list, where no composer mounts).
      */
     fun mount(key: BufferKey, insert: Insert): Any {
         val entry = Mounted(key, insert)
         mounted.add(entry)
-        pending.remove(key.id)?.forEach { insert.insert(it, atCaret = true) }
+        val held = pending.remove(key.id)
+        pending.clear()
+        if (held != null && clock() - held.since <= PATIENCE_MS) held.texts.forEach { insert.insert(it, atCaret = true) }
         return entry
     }
 
@@ -67,12 +77,17 @@ class ComposerInserts {
         if (active != null && active.key.id == key.id) {
             active.insert.insert(text, atCaret = true)
         } else {
-            pending.getOrPut(key.id) { mutableListOf() }.add(text)
+            pending.getOrPut(key.id) { Pending(mutableListOf(), clock()) }.texts.add(text)
         }
     }
 
     /** Sign-out: text held for the previous account's buffers must not land in the next one's. */
     fun clear() {
         pending.clear()
+    }
+
+    companion object {
+        /** How long text waits for its buffer's composer — a navigation and a frame, with room to spare. */
+        const val PATIENCE_MS = 10_000L
     }
 }

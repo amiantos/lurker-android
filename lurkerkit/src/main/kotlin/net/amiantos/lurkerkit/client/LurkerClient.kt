@@ -2302,7 +2302,9 @@ internal class LurkerClient(
      * body afterwards — onto [ioDispatcher], so a 200 MB video doesn't freeze the main thread for
      * the length of the copy. Everything else stays on the caller's thread, which is main: the
      * progress-sink map, the response handling and `reportUnauthorized`. The copy itself isn't
-     * interruptible, so a cancel during it lands once it's done, and the body is deleted then.
+     * interruptible, so a cancel during it lands once it's done, and the body is deleted then —
+     * owned by a `finally` from inside the hop, since `withContext` discards what it returns when
+     * the caller was cancelled meanwhile.
      */
     suspend fun upload(
         fileURL: File,
@@ -2315,14 +2317,20 @@ internal class LurkerClient(
         val token = token ?: throw UploadError.NotSignedIn
         val url = (baseURL + "/api/uploads").toHttpUrlOrNull() ?: throw UploadError.NotSignedIn
 
-        // `NonCancellable`, so a cancel mid-copy can't drop a finished body on the floor before the
-        // `finally` below owns it; `ensureActive` then takes the cancel, and the `finally` deletes.
-        val body = withContext(NonCancellable + ioDispatcher) {
-            MultipartBody.assemble(
-                token = progressToken, fileURL = fileURL, filename = filename, mime = mime,
-            )
-        }
+        // ⚠ The body is OWNED by the `finally` below from inside the hop, never by `withContext`'s
+        // return value. A cancel during the copy is honoured when `withContext` resumes — it throws
+        // there and discards the value it was returning — so a body handed back that way was a
+        // 200 MB file in the temp directory that nothing would ever delete. Recorded the moment it
+        // exists, it's deleted whichever way this ends. `NonCancellable` lets the copy finish
+        // rather than leave a half-written file mid-write.
+        var assembled: MultipartBody.Assembled? = null
         try {
+            withContext(NonCancellable + ioDispatcher) {
+                assembled = MultipartBody.assemble(
+                    token = progressToken, fileURL = fileURL, filename = filename, mime = mime,
+                )
+            }
+            val body = checkNotNull(assembled)
             currentCoroutineContext().ensureActive()
             // Registered before a byte goes out, and torn down on every exit — including the
             // throws below, which is why it's a `finally` rather than a line after the response.
@@ -2382,7 +2390,7 @@ internal class LurkerClient(
                 uploadProgressSinks.remove(progressToken)
             }
         } finally {
-            withContext(NonCancellable + ioDispatcher) { body.fileURL.delete() }
+            assembled?.let { body -> withContext(NonCancellable + ioDispatcher) { body.fileURL.delete() } }
         }
     }
 
