@@ -8,6 +8,8 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import net.amiantos.lurker.ui.settings.SettingsDialog
 import net.amiantos.lurker.ui.bufferinfo.BufferSheetsHost
+import net.amiantos.lurker.ui.feeds.FeedSheetsHost
+import net.amiantos.lurker.ui.feeds.rememberFeedSheets
 import net.amiantos.lurker.ui.bufferinfo.rememberBufferSheets
 import net.amiantos.lurker.ui.networks.rememberNetworkSheets
 import net.amiantos.lurker.ui.networks.NetworkSheetsHost
@@ -392,6 +394,10 @@ fun MainScaffold(
     // pushed networks screen), so the two can be up at once.
     var showingSettings by rememberSaveable { mutableStateOf(false) }
 
+    // Search, Activity and Bookmarks (U7) — here for the networks dialogs' reason. A row's tap closes
+    // the dialog and opens the buffer at that line, through `open` like every other way in.
+    val feedSheets = rememberFeedSheets()
+
     // The kit's asks of the screen (`AppEvents`), taken for as long as this scaffold is composed.
     // Attached across a configuration change — that gap is what the queue bridges — and detached
     // when the screen goes for good, so nothing waits for a launch hours later.
@@ -409,6 +415,7 @@ fun MainScaffold(
                 is AppEvent.OpenBuffer -> {
                     sheets.dismiss()
                     bufferSheets.dismiss()
+                    feedSheets.dismiss()
                     showingSettings = false
                     open(event.key, jumpTo = event.jumpTo)
                 }
@@ -435,6 +442,7 @@ fun MainScaffold(
                         onClose = ::close,
                         onOpenSettings = { showingSettings = true },
                         sheets = sheets,
+                        onOpenView = { view -> feedSheets.show(view) },
                     )
                 }
             },
@@ -471,6 +479,8 @@ fun MainScaffold(
                             onShowMembers = { bufferSheets.showMembers(bufferKey) },
                             onShowInfo = { bufferSheets.showInfo(bufferKey) },
                             onShowProfile = { networkId, nick -> bufferSheets.showProfile(networkId, nick) },
+                            sideBySide = sideBySide,
+                            onOpenView = { view -> feedSheets.show(view) },
                         )
                     }
                 }
@@ -500,7 +510,8 @@ fun MainScaffold(
             )
         }
         // Over the conversation it's about: Send Message closes it and opens the DM, as iOS's `leaveSheet`.
-        BufferSheetsHost(sheets = bufferSheets, model = model, onOpenBuffer = { key -> openWhenListed(key) })
+        BufferSheetsHost(sheets = bufferSheets, model = model, onOpenBuffer = { key -> openWhenListed(key) }, onSearch = feedSheets::showSearch)
+        FeedSheetsHost(sheets = feedSheets, model = model, onJump = { key, messageId -> open(key, jumpTo = messageId) })
         // After Settings, so a networks list opened from it is the window on top.
         NetworkSheetsHost(sheets = sheets, model = model) { networkId, channel ->
             model.requestJoin(networkId = networkId, channel = channel, opens = true)

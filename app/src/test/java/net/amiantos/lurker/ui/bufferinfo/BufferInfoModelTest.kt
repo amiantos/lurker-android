@@ -68,7 +68,7 @@ class BufferInfoModelTest {
             sections[1].rows,
         )
         assertEquals("Created D5", sections[1].footer)
-        assertEquals(listOf(InfoRow.Members(3)), sections[2].rows)
+        assertEquals(listOf(InfoRow.Members(3), InfoRow.Search("in:#lurker on:Libera ")), sections[2].rows)
         assertEquals(BufferInfoModel.notifications, sections[3])
     }
 
@@ -95,14 +95,17 @@ class BufferInfoModelTest {
     @Test
     fun theMemberCountIsWhoTheNicklistShows() {
         val ignores = IgnoreSet(global = listOf(IgnoreRule(mask = "*!*@spam", levels = listOf("ALL"))))
-        assertEquals(InfoRow.Members(2), sections(state(ignores = ignores))[2].rows.single())
+        assertEquals(InfoRow.Members(2), sections(state(ignores = ignores))[2].rows.first())
     }
 
     @Test
     fun aDmGetsWhoisAndNotifications() {
         val dm = Buffer(networkId = 1, target = "alice", kind = BufferKind.Dm)
         val sections = sections(state(), opened = dm)
-        assertEquals(listOf(listOf<InfoRow>(InfoRow.Whois), BufferInfoModel.notifications.rows), sections.map { it.rows })
+        assertEquals(
+            listOf(listOf(InfoRow.Whois, InfoRow.Search("in:alice on:Libera ")), BufferInfoModel.notifications.rows),
+            sections.map { it.rows },
+        )
     }
 
     @Test
@@ -120,8 +123,16 @@ class BufferInfoModelTest {
         val live = sections(state().copy(dccChats = mapOf(1 to listOf("Bob"))), opened = chat)
         assertEquals(listOf(InfoRow.DccStatus("Connected", StatusLight.Good), InfoRow.DccVerb(DccChatAction.End)), live[0].rows)
         assertEquals("End Chat", InfoRow.DccVerb(DccChatAction.End).title)
-        assertEquals(listOf<InfoRow>(InfoRow.Whois), live[1].rows)
+        assertEquals(listOf(InfoRow.Whois, InfoRow.Search("in:=bob on:Libera ")), live[1].rows)
         assertEquals("bob", BufferInfoModel.dccPeer(chat.key))
+    }
+
+    @Test
+    fun searchIsScopedToTheBufferAndLeavesOutANetworkNameItCantRoundTrip() {
+        val spaced = state().let { it.copy(networks = it.networks.mapValues { (_, network) -> network.copy(name = "My Net") }) }
+        assertEquals(InfoRow.Search("in:#lurker "), sections(spaced)[2].rows.last())
+        val server = Buffer(networkId = 1, target = Buffer.serverTarget(1), kind = BufferKind.Server)
+        assertTrue(sections(state(), opened = server).flatMap { it.rows }.none { it is InfoRow.Search })
     }
 
     @Test

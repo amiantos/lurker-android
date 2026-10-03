@@ -177,6 +177,8 @@ internal class BufferInfoActions(
     val onModeList: (letter: String, name: String) -> Unit,
     val onNetworkVerb: (NetworkAction) -> Unit,
     val onDccVerb: (DccChatAction) -> Unit,
+    /** Search this buffer: the dialog closes and search opens, seeded with [InfoRow.Search.scope] (U7). */
+    val onSearch: (scope: String) -> Unit = {},
 )
 
 /**
@@ -242,6 +244,8 @@ private fun InfoRowView(row: InfoRow, actions: BufferInfoActions) {
         is InfoRow.Members -> NavRow(LurkerIcons.Group, "Members", row.count.toString(), actions.onMembers)
         // No nick alongside it — the title already says whose DM this is.
         InfoRow.Whois -> NavRow(LurkerIcons.AccountCircle, "Whois", null, actions.onWhois)
+        // Named for the buffer rather than "Search in Buffer": the title already says which one.
+        is InfoRow.Search -> NavRow(LurkerIcons.Search, "Search This Conversation", null) { actions.onSearch(row.scope) }
         // Announced as the switch it draws — off, and disabled — since the row carries the semantics.
         is InfoRow.NotifyPlaceholder -> ListItem(
             modifier = Modifier.toggleable(value = false, enabled = false, role = Role.Switch, onValueChange = {}),
