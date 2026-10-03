@@ -3,6 +3,9 @@
 
 package net.amiantos.lurker.ui.conversation
 
+import java.time.ZoneId
+import java.time.Instant
+import kotlinx.coroutines.flow.conflate
 import android.content.ActivityNotFoundException
 import android.util.Log
 import androidx.compose.foundation.layout.Box
@@ -14,13 +17,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -73,7 +74,6 @@ import net.amiantos.lurkerkit.rendering.NickHighlighter
 import net.amiantos.lurkerkit.session.ChatViewModel
 import java.time.Duration
 import java.time.LocalDate
-import java.time.LocalDateTime
 import java.time.ZoneOffset
 
 /**
@@ -131,7 +131,7 @@ fun ConversationScreen(
         val hydrate = HydrateGate(kind)
         // Once: every later frame would say the same, and each would ask the navigator to leave again.
         var left = false
-        model.statePublisher.collect { state ->
+        model.statePublisher.conflate().collect { state ->
             if (left) return@collect
             when (val verdict = watch.check(state)) {
                 BufferWatch.Verdict.Gone -> {
@@ -160,7 +160,7 @@ fun ConversationScreen(
     // The title moves on its own — a DM peer's presence turns over with nothing else changing — and it
     // moves nothing else, so it's its own stream rather than a reason to rebuild every row.
     val titleFlow = remember(model, key) {
-        model.statePublisher.map { ConversationModel.title(it, key, kind) }.distinctUntilChanged()
+        model.statePublisher.conflate().map { ConversationModel.title(it, key, kind) }.distinctUntilChanged()
     }
     val initialTitle = remember(model, key) { ConversationModel.title(model.state, key, kind) }
     val title by titleFlow.collectAsStateWithLifecycle(initialValue = initialTitle)
@@ -172,7 +172,7 @@ fun ConversationScreen(
     val ticks = remember(key) { MutableStateFlow(0) }
     val projector = remember(key) { ConversationProjector(key, kind) }
     val inputsFlow = remember(model, key) {
-        combine(model.statePublisher, ticks) { state, _ -> projector.project(state) }
+        combine(model.statePublisher.conflate(), ticks) { state, _ -> projector.project(state) }
             .distinctUntilChanged(ConversationInputs::same)
     }
     val initialInputs = remember(model, key) { projector.project(model.state) }
@@ -263,20 +263,8 @@ fun ConversationScreen(
         drawn.rows = rows
     }
 
-    // A server error, said once in a dialog until it's acknowledged — iOS's `surface(_:)`. Its own
-    // stream: it moves nothing else on screen. Acknowledging clears it in the store, which is what
-    // lets the same error come back as news rather than be dropped as a duplicate.
-    val errorFlow = remember(model) { model.statePublisher.map { it.error }.distinctUntilChanged() }
-    val error by errorFlow.collectAsStateWithLifecycle(initialValue = model.state.error)
-    error?.let { message ->
-        AlertDialog(
-            // Back and a tap outside acknowledge it too — Android's dialog convention, where iOS's
-            // alert has only its button.
-            onDismissRequest = model::clearError,
-            confirmButton = { TextButton(onClick = model::clearError) { Text("OK") } },
-            text = { Text(message) },
-        )
-    }
+    // Server errors are `MainScaffold`'s (`ServerErrorDialog`): always composed, so one never waits
+    // unseen behind the buffer list on a phone and surfaces later over an unrelated conversation.
 
     val placeholder = ConversationModel.placeholder(hasRows = rows.isNotEmpty(), inputs = inputs)
     ConversationContent(
@@ -310,8 +298,11 @@ private val FOLLOW_SLOP = 80.dp
 @Composable
 private fun rememberToday() = produceState(initialValue = LocalDate.now()) {
     while (true) {
-        val now = LocalDateTime.now()
-        val midnight = now.toLocalDate().plusDays(1).atStartOfDay()
+        // Measured between instants, in the zone, so a day that's 23 or 25 hours long (a DST
+        // change) still wakes at its midnight rather than an hour either side of it.
+        val zone = ZoneId.systemDefault()
+        val now = Instant.now()
+        val midnight = LocalDate.now(zone).plusDays(1).atStartOfDay(zone).toInstant()
         delay(Duration.between(now, midnight).toMillis() + 1_000)
         value = LocalDate.now()
     }

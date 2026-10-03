@@ -355,6 +355,7 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
             },
         )
         SnackbarHost(snackbar, modifier = Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
+        ServerErrorDialog(model)
     }
 }
 
