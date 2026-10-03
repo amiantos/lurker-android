@@ -6,6 +6,9 @@ package net.amiantos.lurker.ui.shell
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
@@ -29,5 +32,56 @@ class BufferRouteTest {
         val bytes = ByteArrayOutputStream().also { ObjectOutputStream(it).use { out -> out.writeObject(route) } }.toByteArray()
         val back = ObjectInputStream(ByteArrayInputStream(bytes)).use { it.readObject() }
         assertEquals(route, back)
+    }
+
+    /** A jump rides the route into the saved history, nonce and all — so a rotation can't re-jump. */
+    @Test
+    fun `a route's jump survives serialization`() {
+        val route = BufferRoute.of(BufferKey(networkId = 3, target = "#Lurker"), jump = JumpRequest(messageId = 42, nonce = 7))
+        val bytes = ByteArrayOutputStream().also { ObjectOutputStream(it).use { out -> out.writeObject(route) } }.toByteArray()
+        val back = ObjectInputStream(ByteArrayInputStream(bytes)).use { it.readObject() }
+        assertEquals(route, back)
+    }
+
+    /** Jumping to the same message twice is two requests, so it lands twice. */
+    @Test
+    fun `two jumps to one message are two requests on one conversation`() {
+        val key = BufferKey(networkId = 3, target = "#lurker")
+        val first = BufferRoute.of(key, jump = JumpRequest.to(42))
+        val second = BufferRoute.of(key, jump = JumpRequest.to(42))
+        assertNotEquals(first.jump, second.jump)
+        assertEquals(first.key.id, second.key.id)
+        assertEquals(BufferRoute.of(key), first.copy(jump = null))
+    }
+
+    /**
+     * Notification-jump to #a, push #b, back: #a's screen is rebuilt from the same route, request
+     * and all — and the scaffold's ledger, not the screen's own saved state, says it's spent.
+     */
+    @Test
+    fun `a jump request is claimed once for the navigator's session, however often its screen is rebuilt`() {
+        val ledger = JumpLedger()
+        val route = BufferRoute.of(BufferKey(networkId = 1, target = "#a"), jump = JumpRequest(messageId = 9, nonce = 1))
+        assertTrue(ledger.claim(route.jump!!))
+        // #b over it, then back: a fresh screen asks again.
+        assertFalse(ledger.claim(route.jump!!))
+        // An in-place jump is its own request; once a navigation retires it, the route's original
+        // request comes back into view — and is still spent.
+        assertTrue(ledger.claim(JumpRequest(messageId = 12, nonce = 2)))
+        assertFalse(ledger.claim(route.jump!!))
+        // Saved with the history and restored after process death, it still knows.
+        val restored = JumpLedger(ledger.saved().toList())
+        assertFalse(restored.claim(route.jump!!))
+        assertFalse(restored.claim(JumpRequest(messageId = 12, nonce = 2)))
+        assertTrue(restored.claim(JumpRequest(messageId = 9, nonce = 3)))
+    }
+
+    /**
+     * Routes saved by an earlier build must still restore after an update: the added nullable
+     * `jump` is a compatible change, and Java rejects a stream whose UID moved.
+     */
+    @Test
+    fun `a route keeps the serial version it shipped with`() {
+        assertEquals(1L, java.io.ObjectStreamClass.lookup(BufferRoute::class.java).serialVersionUID)
     }
 }

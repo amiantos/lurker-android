@@ -20,8 +20,12 @@ import net.amiantos.lurkerkit.model.BufferKey
  * don't share a lifetime, so the events wait between them.
  */
 sealed interface AppEvent {
-    /** A join or a DCC chat this device asked for has its buffer — go there (lurker-ios#57). */
-    data class OpenBuffer(val key: BufferKey) : AppEvent
+    /**
+     * A join or a DCC chat this device asked for has its buffer — go there (lurker-ios#57). With
+     * [jumpTo], land on that message rather than the bottom: U9's notification tap, which carries
+     * the message the push was about (`MainScaffold.open`).
+     */
+    data class OpenBuffer(val key: BufferKey, val jumpTo: Long? = null) : AppEvent
 
     /** A one-line notice over whatever is on screen — a join that didn't happen says why. */
     class Notice(val message: String) : AppEvent

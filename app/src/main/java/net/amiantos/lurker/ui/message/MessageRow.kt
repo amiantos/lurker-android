@@ -340,7 +340,7 @@ private fun HeaderLine(header: CompactHeader, style: MessageTextStyle, textStyle
  * A reply's quote, as the body's first line — part of the message, so a reply doesn't break its
  * author's run (lurker memory: the quote lives INSIDE the body). Faded as a whole (the web's opacity
  * 0.45), so the quoted nick keeps its colour under the fade. Tappable only when the screen gives it
- * somewhere to go — U2b's jump.
+ * somewhere to go — the conversation's jump (`ConversationScroll.jumpTo`).
  */
 @Composable
 private fun ReplyQuoteLine(

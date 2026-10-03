@@ -28,6 +28,7 @@ import net.amiantos.lurkerkit.model.StatusLight
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
 import java.time.Instant
+import java.time.ZoneId
 
 /**
  * Exactly the part of `ChatState` the conversation's rows draw from — lurker-ios's
@@ -166,7 +167,7 @@ data class EmptyState(val title: String, val subtitle: String? = null)
 internal object ConversationModel {
 
     /**
-     * The rows for this frame. iOS's `apply` filter chain, then `rebuildRows`.
+     * The messages this frame draws, filtered: iOS's `apply` filter chain, its `messages`.
      *
      * Filter by what this *kind* of buffer renders: the system buffer's content is entirely
      * `type: "system"`, which a channel never shows, and a blanket speech filter left it empty. Then
@@ -175,19 +176,20 @@ internal object ConversationModel {
      * see what the ignore filter left (the rules match the bot's real nick and its whole envelope).
      * Replies (lurker-ios#184) last of all: a quote and its stripped address are judged against the
      * line as it now displays, and the quote screens the CURRENT ignore rules.
+     *
+     * [keeping] is the jump target (`RowOptions.keeping`), which the ignore filter must not drop: the
+     * landing resolves its anchor against RENDERED rows, so a target a rule now covers would never
+     * resolve and the jump would never land.
      */
-    fun buildRows(inputs: ConversationInputs, now: Instant = Instant.now()): List<MessageRow> {
+    fun visibleMessages(inputs: ConversationInputs, keeping: Long? = null, now: Instant = Instant.now()): List<Message> {
         val key = inputs.key
-        val ownNick = inputs.ownNick
-        val visible = Replies.presenting(
+        return Replies.presenting(
             inputs.relayBots.reattributing(
                 inputs.ignores.visible(
                     inputs.messages.orEmpty().filter { inputs.kind.renders(it.type) && it.isRenderable },
                     networkId = key.networkId,
                     target = key.target,
-                    // U2b: `keeping = jumpExemptId`, so a jump target an ignore rule now covers still
-                    // renders — the landing resolves against rendered rows.
-                    keeping = null,
+                    keeping = keeping,
                     now = now,
                 ),
                 networkId = key.networkId,
@@ -196,29 +198,65 @@ internal object ConversationModel {
             target = key.target,
             ignores = inputs.ignores,
             relayBots = inputs.relayBots,
-            ownNick = ownNick,
+            ownNick = inputs.ownNick,
             now = now,
         )
+    }
+
+    /**
+     * The rows for this frame — [visibleMessages], then iOS's `rebuildRows` — and everything else one
+     * build produces, for the screen — built off the main thread, so composition only
+     * draws. Safe there because every input is immutable: `ConversationInputs` holds the store's own
+     * lists and kit models (`ChatState` is replaced, never mutated), `RowOptions` is a value, and the
+     * kit's filters and `MessageRows.build` are pure functions of their arguments — their only
+     * caches are `by lazy` regexes, which are synchronized.
+     */
+    fun built(
+        inputs: ConversationInputs,
+        options: RowOptions,
+        seq: Long = 0,
+        now: Instant = Instant.now(),
+        zone: ZoneId = ZoneId.systemDefault(),
+    ): BuiltRows {
+        val visible = visibleMessages(inputs, options.keeping, now)
+        return BuiltRows(
+            inputs = inputs,
+            options = options,
+            visible = visible,
+            rows = rows(inputs, visible, options, now, zone),
+            seq = seq,
+        )
+    }
+
+    private fun rows(
+        inputs: ConversationInputs,
+        visible: List<Message>,
+        options: RowOptions,
+        now: Instant,
+        zone: ZoneId,
+    ): List<MessageRow> {
         val buffer = inputs.buffer
         return MessageRows.build(
             messages = visible,
-            // U2b: the read boundary, latched once `readStateKnown` says the server told us where it
-            // is — and the unread divider and banner with it.
-            dividerAfterId = null,
+            // The read boundary, latched once `readStateKnown` says the server told us where it is
+            // (`ConversationScroll`). Null until then, which draws no divider.
+            dividerAfterId = options.dividerAfterId,
             // True when unknown: "no more history" has to be something the server told us, or an
             // unhydrated buffer claims to have reached its beginning.
             hasMoreOlder = buffer?.hasMoreOlder ?: true,
             hasMoreNewer = buffer?.hasMoreNewer == true,
             clearedBeforeId = buffer?.clearedBeforeId ?: 0,
             clearedAt = buffer?.clearedAt,
-            // U2b: a jump onto a row the `/clear` marker hides peels it back (`showsClearedHistory`).
-            showsClearedHistory = false,
+            // A jump onto a row the `/clear` marker hides peels it back — screen state, see
+            // `ConversationScroll.revealIfJumpTargetHidden`.
+            showsClearedHistory = options.showsClearedHistory,
             typists = inputs.typists,
             settings = inputs.settings,
             speakers = inputs.speakers ?: SpeakerMap(),
-            ownNick = ownNick,
-            away = awayState(inputs.networks, key, inputs.kind),
+            ownNick = inputs.ownNick,
+            away = awayState(inputs.networks, inputs.key, inputs.kind),
             now = now,
+            zone = zone,
         )
     }
 
@@ -260,10 +298,12 @@ internal object ConversationModel {
      * build to nothing, and reading the messages there would suppress the placeholder over a blank
      * screen. iOS's `updatePlaceholder`.
      *
-     * U2b: a top-up page requested because the filters thinned the window out forces Loading.
+     * [forceLoading]: a top-up page is on its way because the filters thinned the window out to
+     * nothing (`ConversationScroll.wantsTopUp`), so it says "Loading messages…" rather than claiming
+     * the buffer is empty while a page is in the air to prove otherwise.
      */
-    fun placeholder(hasRows: Boolean, inputs: ConversationInputs): BufferPlaceholder =
-        BufferPlaceholder.of(
+    fun placeholder(hasRows: Boolean, inputs: ConversationInputs, forceLoading: Boolean = false): BufferPlaceholder =
+        if (forceLoading && !hasRows) BufferPlaceholder.Loading else BufferPlaceholder.of(
             hasMessages = hasRows,
             hydrated = inputs.buffer?.hydrated ?: false,
             hydratesOnDemand = inputs.kind.hydratesOnDemand,
@@ -335,9 +375,10 @@ internal object ConversationModel {
         (message.originNetworkId ?: key.networkId)?.let { networks[it]?.name }
 
     /**
-     * Whether the list is parked at its newest row, so what arrives should be followed down to — iOS's
-     * `isNearBottom` (within 80pt). The list is reverse-laid-out, so the newest row is item 0 and the
-     * bottom is its start.
+     * Whether the list is parked at its newest row — iOS's `isNearBottom` (within 80pt), read from the
+     * previous rows' layout as new ones arrive. Following them down takes more than this
+     * (`ConversationScroll.onRows`: not on a detached slice, not mid-landing). The list is
+     * reverse-laid-out, so the newest row is item 0 and the bottom is its start.
      */
     fun followsTail(firstVisibleIndex: Int, firstVisibleOffsetPx: Int, thresholdPx: Int): Boolean =
         firstVisibleIndex == 0 && firstVisibleOffsetPx <= thresholdPx
@@ -371,8 +412,8 @@ internal class HydrateGate(private val kind: BufferKind) {
     private var sawHydrated = false
 
     /**
-     * The key to hydrate now, or null. [row] is the store's row for this buffer; [jumpPending] is
-     * U2b's — a pending jump hydrates through an `around` slice instead, and asking for both would
+     * The key to hydrate now, or null. [row] is the store's row for this buffer; [jumpPending]
+     * is `ConversationScroll`'s — a pending jump hydrates through an `around` slice instead, and asking for both would
      * double-fetch and have the latest slice fight the jump.
      */
     fun check(connection: SocketStatus, row: Buffer?, burstGeneration: Int, jumpPending: Boolean = false): BufferKey? {

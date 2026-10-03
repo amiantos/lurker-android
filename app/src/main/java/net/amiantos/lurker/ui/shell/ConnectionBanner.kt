@@ -29,6 +29,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,7 +71,16 @@ import net.amiantos.lurkerkit.store.ChatState
  * colour — the Material way of saying "floating over the content".
  */
 @Composable
-fun ConnectionBanner(state: ConnectionBannerState, modifier: Modifier = Modifier) {
+fun ConnectionBanner(
+    state: ConnectionBannerState,
+    modifier: Modifier = Modifier,
+    /**
+     * Whether the capsule is actually up — after the grace, not when the state merely wants it. The
+     * conversation's unread banner shares this slot and yields it (U2b), and yields to what's on
+     * screen, as iOS reads `connectionBanner.isVisible`: during the grace there's nothing to yield to.
+     */
+    onShownChange: (Boolean) -> Unit = {},
+) {
     // Whether the banner occupies its slot. Lags `state` by the grace on the way in; follows it
     // at once on the way out.
     var shown by remember { mutableStateOf(false) }
@@ -91,6 +101,9 @@ fun ConnectionBanner(state: ConnectionBannerState, modifier: Modifier = Modifier
             shown = true
         }
     }
+
+    val currentOnShownChange by rememberUpdatedState(onShownChange)
+    LaunchedEffect(shown) { currentOnShownChange(shown) }
 
     // Nudged up under the bar so it slides down into place rather than fading in flat. A fade-out
     // interrupted by a new outage reverses from where it is, which is what iOS's "pull it back

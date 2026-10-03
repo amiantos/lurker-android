@@ -15,7 +15,8 @@ import androidx.compose.ui.unit.dp
  * material3 stopped depending on `material-icons-core` (1.4), so there is no `Icons.Default` in
  * this build, and `material-icons-extended` is a multi-megabyte dependency for a handful of
  * shapes. The path data is Material's own (`edit`, `more_vert`, `add`, `close`, `arrow_back`,
- * `keyboard`, `visibility`, `visibility_off`, `search`, `warning` — Apache-2.0), so a
+ * `keyboard`, `visibility`, `visibility_off`, `search`, `warning`, `keyboard_arrow_up`,
+ * `keyboard_arrow_down` — Apache-2.0), so a
  * glyph here is the one every Android user already reads. Tinted by the `Icon` that draws it.
  */
 object LurkerIcons {
@@ -103,6 +104,16 @@ object LurkerIcons {
                 " 5.91,16 9.5,16c1.61,0 3.09,-0.59 4.23,-1.57l0.27,0.28v0.79l5,4.99L20.49,19l-4.99,-5z" +
                 "M9.5,14C7.01,14 5,11.99 5,9.5S7.01,5 9.5,5 14,7.01 14,9.5 11.99,14 9.5,14z",
         )
+    }
+
+    /** The unread banner's lead-in — iOS's `chevron.up`: unread messages are up there (U2b). */
+    val KeyboardArrowUp: ImageVector by lazy {
+        icon("KeyboardArrowUp", "M7.41,15.41L12,10.83l4.59,4.58L18,14l-6,-6 -6,6z")
+    }
+
+    /** The jump-to-latest pill — iOS's `chevron.down`: back down to the newest message (U2b). */
+    val KeyboardArrowDown: ImageVector by lazy {
+        icon("KeyboardArrowDown", "M7.41,8.59L12,13.17l4.59,-4.58L18,10l-6,6 -6,-6 1.41,-1.41z")
     }
 
     /** A refusal pinned in a form — iOS's `exclamationmark.triangle.fill` beside the reason. */
