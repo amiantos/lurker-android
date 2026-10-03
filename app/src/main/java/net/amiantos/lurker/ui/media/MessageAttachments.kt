@@ -74,6 +74,9 @@ import net.amiantos.lurkerkit.model.PreviewKind
  * @param rowActions the row's TalkBack actions, for a row with nothing else to carry them — every
  *   address hidden behind its picture, and no author line above (U2a's custom actions would otherwise
  *   be on no element at all).
+ * @param onLinkActions an attachment's link actions — Copy, Open, Share of its address — the long
+ *   press's answer (`RowPress.Link`), offered to TalkBack as a custom action, since the long press
+ *   itself is the row's pointer detector and TalkBack never sees it. Null where there are none.
  * @param onPlaced where each attachment landed, by the address it stands for — so the row can resolve
  *   a long press on a tile or a card to that address's link actions, as on a link in the text. Every
  *   attachment is keyed by its address, so one re-planned onto a different preview is a new element and
@@ -86,12 +89,14 @@ fun MessageAttachments(
     onOpenGallery: ((List<LinkPreview>, Int) -> Unit)?,
     modifier: Modifier = Modifier,
     rowActions: List<CustomAccessibilityAction> = emptyList(),
+    onLinkActions: ((url: String) -> Unit)? = null,
     onPlaced: (url: String, coordinates: LayoutCoordinates) -> Unit = { _, _ -> },
 ) {
     if (previews.isEmpty()) return
     val blocks = remember(previews) { AttachmentLayout.blocks(previews) }
     val gallery = remember(previews) { AttachmentLayout.gallery(previews) }
     val uriHandler = LocalUriHandler.current
+    val actions = AttachmentActions(rowActions, onLinkActions)
     // Tap → the viewer, positioned on this picture; or the address, if nothing can present it.
     val onMedia: (String) -> Unit = { url ->
         when (val tap = AttachmentLayout.tap(url, gallery, canPresent = onOpenGallery != null)) {
@@ -105,12 +110,33 @@ fun MessageAttachments(
         for (block in blocks) {
             key(block.key) {
                 when (block) {
-                    is AttachmentLayout.Block.Mosaic -> Mosaic(block.rows, media, onMedia, rowActions, onPlaced)
-                    is AttachmentLayout.Block.Media -> MediaBox(block.preview, media, onMedia, rowActions, onPlaced)
-                    is AttachmentLayout.Block.Card -> Card(block.preview, media, onCard, rowActions, onPlaced)
+                    is AttachmentLayout.Block.Mosaic -> Mosaic(block.rows, media, onMedia, actions, onPlaced)
+                    is AttachmentLayout.Block.Media -> MediaBox(block.preview, media, onMedia, actions, onPlaced)
+                    is AttachmentLayout.Block.Card -> Card(block.preview, media, onCard, actions, onPlaced)
                 }
             }
         }
+    }
+}
+
+/**
+ * What TalkBack can do on an attachment besides open it: its link actions, then the row's own when the
+ * row has nothing else to carry them.
+ */
+private class AttachmentActions(
+    private val row: List<CustomAccessibilityAction>,
+    private val onLinkActions: ((String) -> Unit)?,
+) {
+    fun forUrl(url: String): List<CustomAccessibilityAction> = buildList {
+        onLinkActions?.let { open ->
+            add(
+                CustomAccessibilityAction("Link actions") {
+                    open(url)
+                    true
+                },
+            )
+        }
+        addAll(row)
     }
 }
 
@@ -126,7 +152,7 @@ private fun Modifier.attachmentSemantics(
     label: String,
     actionLabel: String,
     onActivate: () -> Unit,
-    rowActions: List<CustomAccessibilityAction>,
+    actions: List<CustomAccessibilityAction>,
 ): Modifier = clearAndSetSemantics {
     contentDescription = label
     role = Role.Button
@@ -134,7 +160,7 @@ private fun Modifier.attachmentSemantics(
         onActivate()
         true
     }
-    if (rowActions.isNotEmpty()) customActions = rowActions
+    if (actions.isNotEmpty()) customActions = actions
 }
 
 /**
@@ -159,7 +185,7 @@ private fun Mosaic(
     rows: List<AttachmentLayout.MosaicRow>,
     media: MediaSource,
     onTap: (String) -> Unit,
-    rowActions: List<CustomAccessibilityAction>,
+    actions: AttachmentActions,
     onPlaced: (String, LayoutCoordinates) -> Unit,
 ) {
     val gap = AttachmentLayout.MOSAIC_GAP.dp
@@ -171,18 +197,18 @@ private fun Mosaic(
                     Modifier.fillMaxWidth().height(AttachmentLayout.MOSAIC_THREE_UP_HEIGHT.dp),
                     horizontalArrangement = Arrangement.spacedBy(gap),
                 ) {
-                    Tile(row.tall, media, onTap, rowActions, onPlaced, Modifier.weight(1f).fillMaxHeight())
+                    Tile(row.tall, media, onTap, actions, onPlaced, Modifier.weight(1f).fillMaxHeight())
                     Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(gap)) {
-                        Tile(row.top, media, onTap, rowActions, onPlaced, Modifier.weight(1f).fillMaxWidth())
-                        Tile(row.bottom, media, onTap, rowActions, onPlaced, Modifier.weight(1f).fillMaxWidth())
+                        Tile(row.top, media, onTap, actions, onPlaced, Modifier.weight(1f).fillMaxWidth())
+                        Tile(row.bottom, media, onTap, actions, onPlaced, Modifier.weight(1f).fillMaxWidth())
                     }
                 }
                 is AttachmentLayout.MosaicRow.Pair -> Row(
                     Modifier.fillMaxWidth().height(AttachmentLayout.MOSAIC_ROW_HEIGHT.dp),
                     horizontalArrangement = Arrangement.spacedBy(gap),
                 ) {
-                    Tile(row.left, media, onTap, rowActions, onPlaced, Modifier.weight(1f).fillMaxHeight())
-                    Tile(row.right, media, onTap, rowActions, onPlaced, Modifier.weight(1f).fillMaxHeight())
+                    Tile(row.left, media, onTap, actions, onPlaced, Modifier.weight(1f).fillMaxHeight())
+                    Tile(row.right, media, onTap, actions, onPlaced, Modifier.weight(1f).fillMaxHeight())
                 }
             }
         }
@@ -195,7 +221,7 @@ private fun Tile(
     preview: LinkPreview,
     media: MediaSource,
     onTap: (String) -> Unit,
-    rowActions: List<CustomAccessibilityAction>,
+    actions: AttachmentActions,
     onPlaced: (String, LayoutCoordinates) -> Unit,
     modifier: Modifier,
 ) {
@@ -208,7 +234,7 @@ private fun Tile(
             .onSizeChanged { box = it }
             .clip(RoundedCornerShape(AttachmentLayout.CORNER.dp))
             .background(boxFill())
-            .attachmentSemantics(AttachmentLayout.mediaLabel(PreviewKind.Image, animated), "open", { onTap(preview.url) }, rowActions)
+            .attachmentSemantics(AttachmentLayout.mediaLabel(PreviewKind.Image, animated), "open", { onTap(preview.url) }, actions.forUrl(preview.url))
             .clickable { onTap(preview.url) },
         contentAlignment = Alignment.Center,
     ) {
@@ -231,7 +257,7 @@ private fun MediaBox(
     preview: LinkPreview,
     media: MediaSource,
     onTap: (String) -> Unit,
-    rowActions: List<CustomAccessibilityAction>,
+    actions: AttachmentActions,
     onPlaced: (String, LayoutCoordinates) -> Unit,
 ) {
     val picture = preview.inlinePicture
@@ -247,7 +273,7 @@ private fun MediaBox(
             .onSizeChanged { box = it }
             .clip(RoundedCornerShape(AttachmentLayout.CORNER.dp))
             .background(boxFill())
-            .attachmentSemantics(AttachmentLayout.mediaLabel(preview.kind, animated), "open", { onTap(preview.url) }, rowActions)
+            .attachmentSemantics(AttachmentLayout.mediaLabel(preview.kind, animated), "open", { onTap(preview.url) }, actions.forUrl(preview.url))
             .clickable { onTap(preview.url) },
         contentAlignment = Alignment.Center,
     ) {
@@ -287,7 +313,7 @@ private fun Card(
     preview: LinkPreview,
     media: MediaSource,
     onOpen: (String) -> Unit,
-    rowActions: List<CustomAccessibilityAction>,
+    actions: AttachmentActions,
     onPlaced: (String, LayoutCoordinates) -> Unit,
 ) {
     val colors = LurkerTheme.colors
@@ -298,7 +324,7 @@ private fun Card(
         Modifier
             .fillMaxWidth()
             .onPlaced { onPlaced(preview.url, it) }
-            .attachmentSemantics(AttachmentLayout.cardLabel(preview), "open link", { onOpen(preview.url) }, rowActions)
+            .attachmentSemantics(AttachmentLayout.cardLabel(preview), "open link", { onOpen(preview.url) }, actions.forUrl(preview.url))
             .clickable { onOpen(preview.url) }
             .drawBehind {
                 val width = 3.dp.toPx()

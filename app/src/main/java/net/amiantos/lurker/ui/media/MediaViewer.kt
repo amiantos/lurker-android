@@ -59,6 +59,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.isSpecified
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.graphicsLayer
@@ -358,6 +360,14 @@ private fun ImagePage(preview: LinkPreview, media: MediaSource, onTap: () -> Uni
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
     var size by remember { mutableStateOf(IntSize.Zero) }
+    // The picture's own size, for the pan bounds — whichever of the two is drawn.
+    val drawn = painter?.intrinsicSize?.takeIf { it.isSpecified }
+        ?: still?.let { Size(it.image.width.toFloat(), it.image.height.toFloat()) }
+        ?: Size.Zero
+    val imageSize by rememberUpdatedState(drawn)
+    // The picture as fitted on the page, which is what the bounds are measured against.
+    fun content(): Pair<Float, Float> =
+        MediaViewerModel.fitted(imageSize.width, imageSize.height, size.width.toFloat(), size.height.toFloat())
     val scope = rememberCoroutineScope()
     val currentOnTap by rememberUpdatedState(onTap)
     val currentOnZoom by rememberUpdatedState(onZoomChange)
@@ -389,8 +399,10 @@ private fun ImagePage(preview: LinkPreview, media: MediaSource, onTap: () -> Uni
                         if (MediaViewerModel.isZoomed(scale)) {
                             zoomTo(1f, 0f, 0f)
                         } else {
+                            val (contentWidth, contentHeight) = content()
                             val (x, y) = MediaViewerModel.zoomOffset(
-                                at.x, at.y, MediaViewerModel.DOUBLE_TAP_SCALE, size.width.toFloat(), size.height.toFloat(),
+                                at.x, at.y, MediaViewerModel.DOUBLE_TAP_SCALE,
+                                size.width.toFloat(), size.height.toFloat(), contentWidth, contentHeight,
                             )
                             zoomTo(MediaViewerModel.DOUBLE_TAP_SCALE, x, y)
                         }
@@ -408,8 +420,10 @@ private fun ImagePage(preview: LinkPreview, media: MediaSource, onTap: () -> Uni
                         if (fingers >= 2 || MediaViewerModel.isZoomed(scale)) {
                             val next = (scale * event.calculateZoom()).coerceIn(1f, MediaViewerModel.MAX_SCALE)
                             val pan = event.calculatePan()
+                            val (contentWidth, contentHeight) = content()
                             val (x, y) = MediaViewerModel.clampOffset(
-                                offsetX + pan.x, offsetY + pan.y, next, size.width.toFloat(), size.height.toFloat(),
+                                offsetX + pan.x, offsetY + pan.y, next,
+                                size.width.toFloat(), size.height.toFloat(), contentWidth, contentHeight,
                             )
                             val wasZoomed = MediaViewerModel.isZoomed(scale)
                             scale = next

@@ -23,6 +23,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.withContext
 import net.amiantos.lurkerkit.model.MediaFetch
+import okio.ByteString
 import java.io.IOException
 import java.nio.ByteBuffer
 import kotlin.math.max
@@ -152,7 +153,7 @@ object PreviewImageLoader {
             try {
                 result = when (val fetched = media.fetch(path)) {
                     // Bytes we cannot decode are a verdict too: asking again gets the same bytes.
-                    is MediaFetch.Success -> decodeStill(fetched.data.toByteArray(), mode, box)?.let(Result::Loaded) ?: Result.Failed
+                    is MediaFetch.Success -> decodeStill(fetched.data, mode, box)?.let(Result::Loaded) ?: Result.Failed
                     MediaFetch.Retryable -> Result.Retryable
                     MediaFetch.Permanent -> Result.Failed
                 }
@@ -197,6 +198,7 @@ object PreviewImageLoader {
         val started = generation
         val fetched = media.fetch(path) as? MediaFetch.Success ?: return null
         val drawable = withContext(Dispatchers.Default) {
+            // The copy out of the response is a picture's worth of bytes: off Main, with the decode.
             decode(fetched.data.toByteArray()) { w, h ->
                 val screen = Resources.getSystem().displayMetrics
                 DecodeSize.Plan(
@@ -233,10 +235,12 @@ object PreviewImageLoader {
      * should not be. Whether a file moves is known only once it has decoded — `image/webp` says nothing
      * either way — which is why the play badge appears when the still lands, at no layout cost.
      */
-    private suspend fun decodeStill(bytes: ByteArray, mode: DecodeSize.Mode, box: DecodeSize.Pixels): Still? =
+    private suspend fun decodeStill(data: ByteString, mode: DecodeSize.Mode, box: DecodeSize.Pixels): Still? =
         withContext(Dispatchers.Default) {
             var cropped = false
-            val drawable = decode(bytes) { w, h ->
+            // The copy out of the response is a picture's worth of bytes: off Main, with the decode — the
+            // loader's own scope is `Main.immediate`.
+            val drawable = decode(data.toByteArray()) { w, h ->
                 DecodeSize.inline(w, h, box, mode).also { cropped = it.crop != null }
             }
             when (drawable) {

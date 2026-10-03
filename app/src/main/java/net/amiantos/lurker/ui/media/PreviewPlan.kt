@@ -121,15 +121,21 @@ class MediaSource(
 ) {
     companion object {
         /**
-         * The view model's media. ⚠ A picture is fetched only while the instance still has previews:
-         * a reconnect can find the feature switched off, and its proxy routes then aren't mounted — a
-         * row still on screen would get a 404, which the loader would latch as a verdict for the rest of
-         * the session. Answered as retryable instead, so nothing is remembered and nothing leaves.
+         * The view model's media, asked only while the instance still has previews — checked live, on
+         * every call, since a reconnect can find the feature switched off under a screen (or a viewer)
+         * that's still open.
+         *
+         * ⚠ A picture: the proxy routes then aren't mounted, and a row still on screen would get a 404
+         * that the loader latches as a verdict for the rest of the session. Answered as retryable
+         * instead, so nothing is remembered and nothing leaves.
+         *
+         * A clip: no address, so a gallery left open across that reconnect says "There's nothing to
+         * play here." rather than starting a video the instance no longer offers.
          */
         fun of(model: ChatViewModel): MediaSource =
             MediaSource(
                 fetch = { path -> if (model.features.linkPreviews) model.proxiedMedia(path) else MediaFetch.Retryable },
-                playable = { path, mime -> model.playableMediaURL(path, mime) },
+                playable = { path, mime -> if (model.features.linkPreviews) model.playableMediaURL(path, mime) else null },
             )
 
         /** Nothing behind it — every fetch is refused. For previews and for screens without a model. */
