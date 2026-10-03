@@ -27,6 +27,7 @@ class LurkerIconsTest {
             LurkerIcons.AttachFile, LurkerIcons.PhotoLibrary, LurkerIcons.Star, LurkerIcons.StarBorder, 
             LurkerIcons.Movie, LurkerIcons.Audiotrack, LurkerIcons.Description, LurkerIcons.InsertDriveFile, LurkerIcons.Delete,
             LurkerIcons.FilterList, LurkerIcons.Link,
+            LurkerIcons.ErrorOutline, LurkerIcons.Dns, LurkerIcons.AutoAwesome, LurkerIcons.Forum, LurkerIcons.PublicOff,
         )
         for (icon in icons) assertTrue(icon.name, icon.root.iterator().hasNext())
     }

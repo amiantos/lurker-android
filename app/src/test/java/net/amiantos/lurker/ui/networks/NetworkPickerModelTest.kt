@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.networks
 
+import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurkerkit.model.BuiltinNetworks
 import net.amiantos.lurkerkit.model.NetworkDraft
 import net.amiantos.lurkerkit.model.NetworkPreset
@@ -65,7 +66,11 @@ class NetworkPickerModelTest {
         val rows = NetworkPickerModel.rows(emptyList(), allowsCustom = false, query = "")
         assertTrue(rows.isEmpty())
         assertEquals(
-            PickerPlaceholder("No networks available", "This server's administrator chooses which networks can be added."),
+            PickerPlaceholder(
+                "No networks available",
+                "This server's administrator chooses which networks can be added.",
+                StateSymbol.NoNetworks,
+            ),
             NetworkPickerModel.placeholder(emptyList(), allowsCustom = false, query = ""),
         )
         // Both at once would be the same sentence twice.
@@ -74,7 +79,7 @@ class NetworkPickerModelTest {
 
     @Test
     fun aSearchThatMissesSaysSoRatherThanBlamingTheAdmin() {
-        assertEquals(PickerPlaceholder("No matches"), NetworkPickerModel.placeholder(listOf(home), allowsCustom = false, query = "zzz"))
+        assertEquals(PickerPlaceholder("No matches", symbol = StateSymbol.Search), NetworkPickerModel.placeholder(listOf(home), allowsCustom = false, query = "zzz"))
         // With the custom row there's always a row, so never a placeholder.
         assertNull(NetworkPickerModel.placeholder(listOf(home), allowsCustom = true, query = "zzz"))
     }

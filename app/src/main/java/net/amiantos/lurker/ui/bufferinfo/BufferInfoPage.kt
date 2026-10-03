@@ -223,7 +223,7 @@ private fun BufferInfoContent(
                     Column {
                         section.header?.let { FormSectionHeader(it) }
                         section.rows.forEach { row -> InfoRowView(row, actions) }
-                        section.footer?.let { FormSectionFooter(it) }
+                        section.footer?.let { FormSectionFooter(it, announce = section.announcesFooter) }
                     }
                 }
             }

@@ -159,6 +159,17 @@ class BufferInfoModelTest {
         assertEquals("Your account is paused.", sections(blocked, opened = server, error = "Your account is paused.").single().footer)
     }
 
+    /** Only the footers that carry a refusal are read out when they change (#20); the standing notes aren't. */
+    @Test
+    fun onlyTheRefusalFootersAnnounce() {
+        val server = Buffer(networkId = 1, target = Buffer.serverTarget(1), kind = BufferKind.Server)
+        assertTrue(sections(state(), opened = server, error = "Your account is paused.").single().announcesFooter)
+        val chat = Buffer(networkId = 1, target = "=bob", kind = BufferKind.Dcc)
+        assertTrue(sections(state(), opened = chat, error = "No such nick")[0].announcesFooter)
+        // A channel's topic setter and created date are notes, not answers.
+        assertTrue(sections(state()).none { it.announcesFooter })
+    }
+
     @Test
     fun aServerLogWhoseNetworkIsntKnownAndTheSystemBufferHaveNothing() {
         val server = Buffer(networkId = 7, target = Buffer.serverTarget(7), kind = BufferKind.Server)

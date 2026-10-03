@@ -320,6 +320,8 @@ private fun NetworksRow(onClick: () -> Unit) {
 @Composable
 private fun UnavailableRow(loaded: Boolean) {
     ListItem(
+        // One stop for the title and its explanation, as a state view is (#20).
+        modifier = Modifier.semantics(mergeDescendants = true) {},
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         headlineContent = {
             Text(SettingsModel.unavailableTitle(loaded), color = MaterialTheme.colorScheme.onSurfaceVariant)

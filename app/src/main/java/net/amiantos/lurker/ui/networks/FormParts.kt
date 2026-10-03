@@ -26,8 +26,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -69,10 +73,14 @@ internal fun FormSectionHeader(text: String) {
 
 /** A section's footer — the guidance under it, in the secondary colour. */
 @Composable
-internal fun FormSectionFooter(text: String) {
+internal fun FormSectionFooter(text: String, announce: Boolean = false) {
     Text(
         text,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = FormInset, vertical = 4.dp)
+            // A footer that carries a refusal is read out when it changes (#20); a standing note isn't.
+            .then(if (announce) Modifier.semantics { liveRegion = LiveRegionMode.Polite } else Modifier),
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
@@ -202,15 +210,24 @@ internal fun FormActionRow(title: String, onClick: () -> Unit, destructive: Bool
     )
 }
 
-/** A refusal: the warning glyph and the reason, in the refusal colour. */
+/**
+ * A refusal: the warning glyph and the reason, in the refusal colour.
+ *
+ * A polite live region, so a save or a write refused while the reader is on the form is read out
+ * where it lands (#20) — the words set on the row itself, since a live region announces changes to
+ * its OWN content, and a merged child's change is reported against the child.
+ */
 @Composable
 internal fun FormErrorRow(message: String) {
     Row(
-        Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 10.dp).semantics(mergeDescendants = true) {},
+        Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 10.dp).clearAndSetSemantics {
+            contentDescription = "Error, $message"
+            liveRegion = LiveRegionMode.Polite
+        },
         verticalAlignment = Alignment.Top,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Icon(LurkerIcons.Warning, contentDescription = "Error", tint = LurkerTheme.colors.badText, modifier = Modifier.size(20.dp))
+        Icon(LurkerIcons.Warning, contentDescription = null, tint = LurkerTheme.colors.badText, modifier = Modifier.size(20.dp))
         Text(message, style = MaterialTheme.typography.bodyLarge, color = LurkerTheme.colors.badText)
     }
 }

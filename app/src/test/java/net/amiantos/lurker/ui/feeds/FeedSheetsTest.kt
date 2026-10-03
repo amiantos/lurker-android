@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.feeds
 
+import net.amiantos.lurker.ui.shell.StateSymbol
 import androidx.compose.runtime.saveable.SaverScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -52,5 +53,16 @@ class FeedSheetsTest {
         assertEquals("No recent activity", HistoryFeed.Activity.words(FeedPlaceholder.Empty).title)
         assertEquals("Press and hold a message, then Save Message, to keep it here.", HistoryFeed.Bookmarks.words(FeedPlaceholder.Empty).subtitle)
         assertEquals("Couldn't load bookmarks", HistoryFeed.Bookmarks.words(FeedPlaceholder.Error).title)
+    }
+
+    /** iOS's symbols: `at` for Activity's empty, `bookmark` for Bookmarks', the warning for a failure, none while loading. */
+    @Test
+    fun theHistoryFeedsCarryIosGlyphs() {
+        assertEquals(StateSymbol.Mention, HistoryFeed.Activity.words(FeedPlaceholder.Empty).symbol)
+        assertEquals(StateSymbol.Bookmark, HistoryFeed.Bookmarks.words(FeedPlaceholder.Empty).symbol)
+        for (feed in HistoryFeed.entries) {
+            assertEquals(StateSymbol.Warning, feed.words(FeedPlaceholder.Error).symbol)
+            assertNull(feed.words(FeedPlaceholder.Loading).symbol)
+        }
     }
 }

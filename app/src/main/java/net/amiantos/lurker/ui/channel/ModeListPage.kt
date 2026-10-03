@@ -40,6 +40,9 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -55,6 +58,7 @@ import kotlinx.coroutines.withContext
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormInset
 import net.amiantos.lurker.ui.networks.PageExit
+import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
@@ -269,7 +273,11 @@ private fun ModeListContent(
                     item(key = "footer") {
                         Text(
                             footer,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 8.dp),
+                            // A change refused while the list is open is read out where it lands (#20).
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = FormInset, vertical = 8.dp)
+                                .semantics { liveRegion = LiveRegionMode.Polite },
                             style = MaterialTheme.typography.bodyMedium,
                             color = LurkerTheme.colors.badText,
                         )
@@ -282,12 +290,14 @@ private fun ModeListContent(
                 }
             }
             // Loading, the fetch's refusal, or an empty list — said in place of rows. A pull shows its
-            // own spinner, so the page's stays away while one is out.
-            when (status) {
-                ModeListStatus.Loading -> if (!refreshing) StateView(title = "Loading…", isLoading = true)
-                is ModeListStatus.Failed -> StateView(title = status.message)
-                is ModeListStatus.Ready -> if (entries.isEmpty()) StateView(title = ModeListModel.EMPTY)
+            // own spinner, so the page's stays away while one is out. One `StateView` for all three, so a
+            // load that fails while the reader waits is a change TalkBack reads out (see `StateView`).
+            val placeholder = when (status) {
+                ModeListStatus.Loading -> if (refreshing) null else StateModel("Loading…", isLoading = true)
+                is ModeListStatus.Failed -> StateModel(status.message)
+                is ModeListStatus.Ready -> if (entries.isEmpty()) StateModel(ModeListModel.EMPTY) else null
             }
+            if (placeholder != null) StateView(placeholder)
         }
     }
 }

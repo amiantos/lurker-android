@@ -72,8 +72,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.IntSize
@@ -596,7 +599,14 @@ private fun ViewerFallback(message: String, url: String, onClose: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(message, color = Color.White, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+        Text(
+            message,
+            color = Color.White,
+            style = MaterialTheme.typography.bodyMedium,
+            textAlign = TextAlign.Center,
+            // A load that fails while the reader is on the page is read out, not just drawn (#20).
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        )
         if (url.toHttpUrlOrNull() != null) {
             TextButton(
                 onClick = {

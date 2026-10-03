@@ -32,12 +32,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
-import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.text.font.FontWeight
@@ -98,10 +96,10 @@ private fun ReadoutCapsule(readout: UploadReadout, onCancel: () -> Unit) {
                 modifier = Modifier
                     .weight(1f, fill = false)
                     .padding(vertical = 10.dp)
-                    .clearAndSetSemantics {
-                        contentDescription = readout.accessibility
-                        liveRegion = LiveRegionMode.Polite
-                    },
+                    // Read when focused, NOT a live region — as iOS's label isn't one. The percentage moves
+                    // every few hundred milliseconds, and a live region would queue "Uploading… 41%",
+                    // "42%"… for as long as the upload runs, over whatever the reader is doing (#20).
+                    .clearAndSetSemantics { contentDescription = readout.accessibility },
             )
             if (readout.showsCancel) {
                 Box(

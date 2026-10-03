@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.feeds
 
+import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurkerkit.model.FeedCursor
 import net.amiantos.lurkerkit.model.HighlightItem
 import net.amiantos.lurkerkit.model.HighlightsPage
@@ -10,8 +11,8 @@ import net.amiantos.lurkerkit.model.HighlightsPage
 /** Which of a feed's three placeholders stands in for its rows — each feed words them itself. */
 enum class FeedPlaceholder { Loading, Empty, Error }
 
-/** A placeholder's words: a title and an optional subtitle — iOS's `StateView.Model`, minus the symbol. */
-data class StateWords(val title: String, val subtitle: String? = null)
+/** A placeholder's words: a title, an optional subtitle and the glyph — iOS's `StateView.Model`. */
+data class StateWords(val title: String, val subtitle: String? = null, val symbol: StateSymbol? = null)
 
 /** One page to fetch: the first (newest) one, or the next older one from [cursor]. */
 sealed interface FeedFetch {

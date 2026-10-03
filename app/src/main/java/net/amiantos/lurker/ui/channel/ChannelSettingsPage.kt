@@ -19,6 +19,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -296,7 +299,11 @@ private fun ChannelSettingsContent(
                         if (footer.isError) {
                             Text(
                                 footer.text,
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 4.dp),
+                                // A save refused while the page is open is read out where it lands (#20).
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = FormInset, vertical = 4.dp)
+                                    .semantics { liveRegion = LiveRegionMode.Polite },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = LurkerTheme.colors.badText,
                             )

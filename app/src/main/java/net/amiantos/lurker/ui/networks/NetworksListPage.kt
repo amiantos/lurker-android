@@ -29,7 +29,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -128,6 +131,7 @@ private fun NetworksListContent(
             Box(Modifier.fillMaxSize().padding(padding)) {
                 StateView(
                     title = placeholder.title,
+                    symbol = placeholder.symbol,
                     subtitle = placeholder.subtitle,
                     isLoading = placeholder.isLoading,
                     actionTitle = placeholder.actionTitle,
@@ -177,7 +181,8 @@ private fun NetworkListRow(
         headlineContent = { Text(config.name) },
         supportingContent = {
             if (error != null) {
-                Text(error, color = LurkerTheme.colors.badText)
+                // The answer to a verb picked from the menu, landing after the menu has gone: read out (#20).
+                Text(error, color = LurkerTheme.colors.badText, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
             } else {
                 Text(NetworksListModel.subtitle(config, row), color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

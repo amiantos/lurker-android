@@ -14,6 +14,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import net.amiantos.lurker.ui.networks.PagedDialog
+import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurker.ui.networks.PagedFlow
 import net.amiantos.lurker.ui.networks.rememberPagedFlow
 import net.amiantos.lurker.ui.search.SearchPage
@@ -110,8 +111,12 @@ enum class HistoryFeed(val title: String, val loading: StateWords, val empty: St
     Activity(
         title = "Activity",
         loading = StateWords("Loading activity…"),
-        empty = StateWords("No recent activity", "Mentions, replies to you and reactions to your messages show up here."),
-        error = StateWords("Couldn't load activity", "Pull to try again."),
+        empty = StateWords(
+            "No recent activity",
+            "Mentions, replies to you and reactions to your messages show up here.",
+            StateSymbol.Mention,
+        ),
+        error = StateWords("Couldn't load activity", "Pull to try again.", StateSymbol.Warning),
     ),
 
     /**
@@ -125,8 +130,8 @@ enum class HistoryFeed(val title: String, val loading: StateWords, val empty: St
         loading = StateWords("Loading bookmarks…"),
         // Names the action exactly as the message's actions do, since that's what the reader has to go
         // and find.
-        empty = StateWords("No bookmarks", "Press and hold a message, then Save Message, to keep it here."),
-        error = StateWords("Couldn't load bookmarks", "Pull to try again."),
+        empty = StateWords("No bookmarks", "Press and hold a message, then Save Message, to keep it here.", StateSymbol.Bookmark),
+        error = StateWords("Couldn't load bookmarks", "Pull to try again.", StateSymbol.Warning),
     ),
     ;
 

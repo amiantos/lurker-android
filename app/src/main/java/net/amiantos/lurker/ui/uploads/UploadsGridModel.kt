@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.uploads
 
+import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurkerkit.model.LinkPreview
 import net.amiantos.lurkerkit.model.PreviewKind
 import net.amiantos.lurkerkit.model.UploadItem
@@ -210,13 +211,25 @@ data class UploadsGrid(
         get() = when {
             items.isNotEmpty() -> null
             isLoading -> UploadsPlaceholder("Loading uploads…", isLoading = true)
-            loadFailed -> UploadsPlaceholder("Couldn't load uploads", "Pull to try again.")
-            filter.query.isNotEmpty() -> UploadsPlaceholder("No matches", filter.noMatchesLine)
+            loadFailed -> UploadsPlaceholder("Couldn't load uploads", "Pull to try again.", symbol = StateSymbol.Warning)
+            filter.query.isNotEmpty() -> UploadsPlaceholder("No matches", filter.noMatchesLine, symbol = StateSymbol.Search)
             // Names the gesture, as Bookmarks does: an empty starred view is what somebody who has never
             // starred anything sees, and how to put something in it is the useful thing to say.
-            filter.favoritesOnly -> UploadsPlaceholder("No ${filter.scope}", "Press and hold an upload, then Star, to keep it here.")
-            filter.isNarrowed -> UploadsPlaceholder("No ${filter.scope}", "Nothing you've uploaded is under this filter.")
-            else -> UploadsPlaceholder("No uploads yet", "Files you send with the paperclip in a conversation are kept here.")
+            filter.favoritesOnly -> UploadsPlaceholder(
+                "No ${filter.scope}",
+                "Press and hold an upload, then Star, to keep it here.",
+                symbol = StateSymbol.Star,
+            )
+            filter.isNarrowed -> UploadsPlaceholder(
+                "No ${filter.scope}",
+                "Nothing you've uploaded is under this filter.",
+                symbol = StateSymbol.Filter,
+            )
+            else -> UploadsPlaceholder(
+                "No uploads yet",
+                "Files you send with the paperclip in a conversation are kept here.",
+                symbol = StateSymbol.Uploads,
+            )
         }
 
     /**
@@ -239,8 +252,13 @@ data class UploadsGrid(
     }
 }
 
-/** An empty grid's words. */
-data class UploadsPlaceholder(val title: String, val subtitle: String? = null, val isLoading: Boolean = false)
+/** An empty grid's words, and its glyph (iOS's symbol). */
+data class UploadsPlaceholder(
+    val title: String,
+    val subtitle: String? = null,
+    val isLoading: Boolean = false,
+    val symbol: StateSymbol? = null,
+)
 
 /** Everything a press-and-hold offers on one tile, in iOS's order. */
 enum class UploadAction(val title: String) {

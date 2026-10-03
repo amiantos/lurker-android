@@ -5,6 +5,7 @@ package net.amiantos.lurker.ui.uploads
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,6 +19,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -33,7 +35,11 @@ import kotlinx.coroutines.flow.map
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FullScreenDialog
 import net.amiantos.lurker.ui.networks.PageExit
+import net.amiantos.lurker.ui.shell.ConnectionBanner
+import net.amiantos.lurker.ui.shell.StateModel
+import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurker.ui.shell.StateView
+import net.amiantos.lurker.ui.shell.rememberConnectionBannerState
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.session.ChatViewModel
@@ -59,7 +65,19 @@ fun SharePickerDialog(model: ChatViewModel, onPick: (BufferKey) -> Unit, onDismi
     val shown by flow.collectAsStateWithLifecycle(initialValue = initial)
     FullScreenDialog(onDismissRequest = onDismiss) {
         DialogPage(title = "Choose a Conversation", exit = PageExit.Close, onExit = onDismiss) { padding ->
-            SharePickerList(sections = shown.first, settled = shown.second, onPick = onPick, modifier = Modifier.padding(padding))
+            Box(Modifier.fillMaxSize().padding(padding)) {
+                SharePickerList(sections = shown.first, settled = shown.second, onPick = onPick)
+                // The app's own connection, over the list, as the buffer list carries it. Android needs
+                // this where iOS has no such screen: "Loading buffers…" waits on the roster's burst, which
+                // never lands while the app is offline — and this dialog covers the scaffold's banner, so
+                // without its own nothing on screen would say why the spinner doesn't stop (#20). The
+                // banner answers "is the app connected", the spinner "is the list here" — not the same
+                // thing said twice.
+                ConnectionBanner(
+                    state = rememberConnectionBannerState(model),
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp, start = 16.dp, end = 16.dp),
+                )
+            }
         }
     }
 }
@@ -73,11 +91,17 @@ private fun SharePickerList(
 ) {
     if (sections.isEmpty()) {
         // A share can open the app cold: until the burst has landed, an empty list is "not yet", not "none".
-        if (settled) {
-            StateView(title = "No conversations", subtitle = "Join a channel or start a conversation, then share again.", modifier = modifier)
+        // One `StateView` for both, so the list settling to empty is a change TalkBack reads out.
+        val state = if (settled) {
+            StateModel(
+                "No conversations",
+                StateSymbol.Buffers,
+                subtitle = "Join a channel or start a conversation, then share again.",
+            )
         } else {
-            StateView(title = "Loading buffers…", isLoading = true, modifier = modifier)
+            StateModel("Loading buffers…", isLoading = true)
         }
+        StateView(state, modifier = modifier)
         return
     }
     val colors = LurkerTheme.colors

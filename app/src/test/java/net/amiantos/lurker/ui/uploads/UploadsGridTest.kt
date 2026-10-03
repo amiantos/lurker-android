@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.uploads
 
+import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurkerkit.model.UploadItem
 import net.amiantos.lurkerkit.model.UploadKind
 import net.amiantos.lurkerkit.model.UploadsFilter
@@ -86,7 +87,7 @@ class UploadsGridTest {
         assertTrue(failed.items.isEmpty())
         assertNull(failed.cursor)
         assertFalse(failed.hasMore)
-        assertEquals(UploadsPlaceholder("Couldn't load uploads", "Pull to try again."), failed.placeholder)
+        assertEquals(UploadsPlaceholder("Couldn't load uploads", "Pull to try again.", symbol = StateSymbol.Warning), failed.placeholder)
     }
 
     @Test
@@ -213,19 +214,19 @@ class UploadsGridTest {
     fun anEmptyGridNamesWhyInWords() {
         assertEquals("Loading uploads…", UploadsGrid().reload().first.placeholder!!.title)
         assertEquals(
-            UploadsPlaceholder("No uploads yet", "Files you send with the paperclip in a conversation are kept here."),
+            UploadsPlaceholder("No uploads yet", "Files you send with the paperclip in a conversation are kept here.", symbol = StateSymbol.Uploads),
             loaded().placeholder,
         )
         assertEquals(
-            UploadsPlaceholder("No matches", "No starred image uploads match “march”."),
+            UploadsPlaceholder("No matches", "No starred image uploads match “march”.", symbol = StateSymbol.Search),
             loaded(filter = UploadsFilter(query = "march", kind = UploadKind.Image, favoritesOnly = true)).placeholder,
         )
         assertEquals(
-            UploadsPlaceholder("No starred uploads", "Press and hold an upload, then Star, to keep it here."),
+            UploadsPlaceholder("No starred uploads", "Press and hold an upload, then Star, to keep it here.", symbol = StateSymbol.Star),
             loaded(filter = UploadsFilter(favoritesOnly = true)).placeholder,
         )
         assertEquals(
-            UploadsPlaceholder("No video uploads", "Nothing you've uploaded is under this filter."),
+            UploadsPlaceholder("No video uploads", "Nothing you've uploaded is under this filter.", symbol = StateSymbol.Filter),
             loaded(filter = UploadsFilter(kind = UploadKind.Video)).placeholder,
         )
     }

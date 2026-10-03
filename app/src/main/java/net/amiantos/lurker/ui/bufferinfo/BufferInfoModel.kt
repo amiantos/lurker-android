@@ -198,7 +198,17 @@ sealed interface InfoRow {
     }
 }
 
-data class InfoSection(val header: String? = null, val footer: String? = null, val rows: List<InfoRow>)
+/**
+ * A section of the page. [announcesFooter] marks a footer that carries a refusal — a Connect or Start
+ * refused while the page is open — so TalkBack reads it where it lands rather than leaving a verb
+ * that visibly did nothing (#20). The standing notes (the topic's setter, the created date) don't.
+ */
+data class InfoSection(
+    val header: String? = null,
+    val footer: String? = null,
+    val rows: List<InfoRow>,
+    val announcesFooter: Boolean = false,
+)
 
 /**
  * What a buffer *is*, rather than what's been said in it — lurker-ios's `BufferInfoViewController`,
@@ -281,7 +291,7 @@ object BufferInfoModel {
                 }
                 val verb = live?.let { InfoRow.DccVerb(if (it) DccChatAction.End else DccChatAction.Start) }
                 listOf(
-                    InfoSection(header = "DCC Chat", footer = actionError, rows = listOfNotNull(status, verb)),
+                    InfoSection(header = "DCC Chat", footer = actionError, rows = listOfNotNull(status, verb), announcesFooter = true),
                     // The Whois row is the peer's — the profile peels the `=` off.
                     InfoSection(rows = listOf(InfoRow.Whois) + searchRows(inputs)),
                     notifications,
@@ -315,6 +325,7 @@ object BufferInfoModel {
             header = "Connection",
             footer = footer,
             rows = listOf(InfoRow.Connection(row.connection.label, row.light)) + row.connectionActions.map { InfoRow.NetworkVerb(it) },
+            announcesFooter = true,
         )
     }
 
