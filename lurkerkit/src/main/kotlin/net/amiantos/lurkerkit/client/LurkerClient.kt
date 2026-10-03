@@ -2387,7 +2387,7 @@ internal class LurkerClient(
          * timeouts are `URLSessionConfiguration.default`'s 60 s, which the notes in this file
          * count on ("the session's 60s default"), where OkHttp's own default is 10 s.
          */
-        private fun bearerOnlyConfiguration(): OkHttpClient =
+        internal fun bearerOnlyConfiguration(): OkHttpClient =
             OkHttpClient.Builder()
                 .cookieJar(CookieJar.NO_COOKIES)
                 .connectTimeout(Duration.ofSeconds(60))

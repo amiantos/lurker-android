@@ -317,22 +317,9 @@ class SettingsTests {
      * Port note: LurkerKit gives each test a fresh `UserDefaults` suite; here a map behind the
      * kit's `DefaultsStorage`.
      */
-    private fun isolatedCache(): SettingsCache = SettingsCache(defaults = MapStorage())
+    private fun isolatedCache(): SettingsCache = SettingsCache(defaults = InMemoryDefaultsStorage())
 
     /** `DefaultsStorage` over a map — the in-memory stand-in for `UserDefaults`. */
-    private class MapStorage : DefaultsStorage {
-        private val stored = mutableMapOf<String, JsonObject>()
-
-        override fun dictionary(key: String): JsonObject? = stored[key]
-
-        override fun set(value: JsonObject, key: String) {
-            stored[key] = value
-        }
-
-        override fun removeObject(key: String) {
-            stored.remove(key)
-        }
-    }
 
     @Test
     fun testCacheRoundTripsEveryValueKind() {
@@ -580,7 +567,7 @@ class SettingsTests {
      */
     @Test
     fun testTheCacheSkipsAStoredValueItCannotRepresent() {
-        val storage = MapStorage()
+        val storage = InMemoryDefaultsStorage()
         storage.set(
             buildJsonObject {
                 put("good", true)

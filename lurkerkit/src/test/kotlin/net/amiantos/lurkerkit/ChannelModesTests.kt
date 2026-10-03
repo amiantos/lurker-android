@@ -3,11 +3,17 @@
 
 package net.amiantos.lurkerkit
 
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import net.amiantos.lurkerkit.client.ChannelSnapshot
 import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.client.TopicMeta
+import net.amiantos.lurkerkit.client.VerbReply
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.ChannelModeDrafts
 import net.amiantos.lurkerkit.model.ChannelModeForm
@@ -19,6 +25,7 @@ import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.channelAccess
+import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.store.LurkerStore
 import net.amiantos.lurkerkit.model.ModeChange
 import net.amiantos.lurkerkit.model.ModeChangeKind
@@ -139,6 +146,51 @@ class ChannelModesTests {
     }
 
     @Test
+    fun testVerbReplyCarriesItsData() {
+        val list = FrameParser.parseVerbReply(
+            """
+            {"kind":"send-result","clientId":"ios-verb-3","ok":true,"data":{"ok":true,"channel":"#c","letter":"b",
+             "entries":[{"mask":"*!*@bad","setBy":"op","setAt":"2026-09-01T10:00:00.000Z"},{"mask":"x!*@*","setBy":null,"setAt":null},{"mask":""}]}}
+            """.trimIndent(),
+        )
+        assertEquals("ios-verb-3", list?.clientId)
+        assertEquals(true, list?.reply?.ok)
+        assertEquals(listOf("*!*@bad", "x!*@*"), list?.reply?.entries?.map { it.mask }, "an entry with no mask names nothing")
+        assertEquals("op", list?.reply?.entries?.firstOrNull()?.setBy)
+        assertNotNull(list?.reply?.entries?.firstOrNull()?.setAt)
+
+        val refused = FrameParser.parseVerbReply(
+            """
+            {"kind":"send-result","clientId":"ios-verb-4","ok":false,"error":"refused","data":{"ok":false,"error":"refused","numeric":"482","text":"You're not a channel operator"}}
+            """.trimIndent(),
+        )
+        assertEquals("Only channel operators can see this list.", ChatViewModel.listError(refused!!.reply))
+        assertNull(FrameParser.parseVerbReply("""{"kind":"send-result","ok":true}"""), "no clientId, nobody waiting")
+    }
+
+    @Test
+    fun testVerbErrorsAreWorded() {
+        assertNull(ChatViewModel.saveError(VerbReply(ok = true, error = null)))
+        assertEquals("Not connected.", ChatViewModel.saveError(VerbReply.notSent))
+        assertEquals("The server didn't answer.", ChatViewModel.saveError(VerbReply.noAnswer))
+        assertEquals("Couldn't save (unknown-mode:x).", ChatViewModel.saveError(VerbReply(ok = false, error = "unknown-mode:x")))
+        assertEquals(
+            "The server refused: No such channel",
+            ChatViewModel.listError(VerbReply(ok = false, error = "refused", numeric = "403", text = "No such channel")),
+        )
+        assertEquals("The server didn't answer.", ChatViewModel.listError(VerbReply.noAnswer))
+        assertEquals("The server didn't answer.", ChatViewModel.listError(VerbReply(ok = false, error = "no-reply")))
+        assertEquals(
+            "This account is paused, so nothing can be fetched.",
+            ChatViewModel.listError(VerbReply(ok = false, error = "account-paused")), "a refusal is not silence",
+        )
+        assertEquals(
+            "Couldn't load the list (unsupported-list-mode).",
+            ChatViewModel.listError(VerbReply(ok = false, error = "unsupported-list-mode")),
+        )
+    }
+
+    @Test
     fun testNetworkConfigReadsChannelKeys() {
         val configs = FrameParser.parseNetworkConfigs(
             """
@@ -153,6 +205,46 @@ class ChannelModesTests {
     }
 
     // MARK: - Live lines
+
+    /**
+     * The settings screens patch lists and read refusals off these — including for a detached
+     * buffer, which holds live lines out of its log. So they come off the frame, not the store.
+     *
+     * Port note: the collector runs on an unconfined test dispatcher, so it is subscribed before
+     * the first frame, as Combine's `sink` is the moment it is called.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class) // `UnconfinedTestDispatcher`, `runCurrent`
+    @Test
+    fun testLiveLinesAndResyncsReachChannelEvents() = runTest {
+        val model = testViewModel()
+        val seen = mutableListOf<String>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            model.channelEvents.collect { event ->
+                when (event) {
+                    is ChatViewModel.ChannelEvent.Line -> seen.add("${event.key.id} ${event.message.type.rawValue}")
+                    ChatViewModel.ChannelEvent.Resynced -> seen.add("resynced")
+                }
+            }
+        }
+        model.handle(
+            ServerFrame.Live(
+                networkId = 1, target = "#C",
+                message = Message(
+                    id = 7, type = EventType.Mode, nick = "op", text = "+b x",
+                    modes = listOf(ModeChange(mode = "+b", param = "x", kind = ModeChangeKind.List)),
+                ),
+            ),
+        )
+        model.handle(ServerFrame.SocketOpen)
+        model.handle(
+            ServerFrame.Snapshot(
+                listOf(NetworkSnapshot(id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList())),
+                globalIgnores = emptyList(), maxUploadBytes = null,
+            ),
+        )
+        runCurrent()
+        assertEquals(listOf("1::#c mode", "resynced"), seen, "after the snapshot, not the socket opening")
+    }
 
     // MARK: - Store
 
@@ -592,6 +684,19 @@ class ChannelModesTests {
         assertEquals(emptyList(), refusals.current, "a new change starts clean")
     }
 
+    @Test
+    fun testASaveFailureSaysWhetherAnythingCanHaveGoneOut() {
+        assertNull(ChatViewModel.saveFailure(VerbReply(ok = true, error = null)))
+        assertEquals(true, ChatViewModel.saveFailure(VerbReply.notSent)?.certainlyUnsent)
+        assertEquals(true, ChatViewModel.saveFailure(VerbReply(ok = false, error = "account-paused"))?.certainlyUnsent)
+        assertEquals(false, ChatViewModel.saveFailure(VerbReply.noAnswer)?.certainlyUnsent, "it may have gone out")
+        assertEquals(false, ChatViewModel.saveFailure(VerbReply.connectionLost)?.certainlyUnsent)
+        assertEquals(
+            "The connection dropped before the server answered.",
+            ChatViewModel.saveFailure(VerbReply.connectionLost)?.message,
+        )
+    }
+
     // MARK: - Lists
 
     private fun modeRow(nick: String, changes: List<ModeChange>): Message =
@@ -698,8 +803,4 @@ class ChannelModesTests {
         assertEquals(drafts.topic, noted.topic)
         assertNotEquals(drafts, noted)
     }
-
-    // Waiting on ChatViewModel (and SessionStore):
-    // testVerbReplyCarriesItsData, testVerbErrorsAreWorded, testLiveLinesAndResyncsReachChannelEvents,
-    // testASaveFailureSaysWhetherAnythingCanHaveGoneOut
 }

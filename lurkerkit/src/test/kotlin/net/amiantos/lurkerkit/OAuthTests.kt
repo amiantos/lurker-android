@@ -10,6 +10,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import net.amiantos.lurkerkit.client.OAuth
 import net.amiantos.lurkerkit.client.PKCE
 import net.amiantos.lurkerkit.client.asString
+import net.amiantos.lurkerkit.session.OAuthClients
 import net.amiantos.lurkerkit.support.unicodeRegex
 import okhttp3.Request
 import okio.Buffer
@@ -219,9 +220,37 @@ class OAuthTests {
 
     // MARK: - Saved registrations
 
-    // Waiting on OAuthClients: testRegistrationsAreKeptPerServer
+    @Test
+    fun testRegistrationsAreKeptPerServer() {
+        // Port note: a fresh in-memory store stands in for a defaults suite removed afterwards.
+        val defaults = InMemoryDefaultsStorage()
+        val clients = OAuthClients(defaults)
+
+        assertNull(clients.clientId(server = "https://app.lurker.chat"))
+        clients.save("hosted", server = "https://app.lurker.chat")
+        clients.save("home", server = "http://xerxes.local:8010")
+        clients.forget("https://app.lurker.chat")
+        assertNull(clients.clientId(server = "https://app.lurker.chat"))
+        assertEquals("home", clients.clientId(server = "http://xerxes.local:8010"))
+    }
 
     // Port-only:
+
+    /**
+     * The saved ids are read the way `as? [String: String]` reads them: one value that isn't a
+     * string and none of them is there.
+     */
+    @Test
+    fun testSavedRegistrationsAreReadAllOrNothing() {
+        val defaults = InMemoryDefaultsStorage()
+        defaults.set(
+            JsonObject(mapOf("https://a" to JsonPrimitive("one"), "https://b" to JsonPrimitive(2))),
+            key = "lurker.oauth.clientIds",
+        )
+        assertNull(OAuthClients(defaults).clientId(server = "https://a"))
+        OAuthClients(defaults).save("three", server = "https://c")
+        assertEquals(JsonObject(mapOf("https://c" to JsonPrimitive("three"))), defaults.dictionary("lurker.oauth.clientIds"))
+    }
 
     /**
      * `URLComponents.queryItems` leaves a `+` as a `+`, and decodes `%2B` to one; `HttpUrl`'s

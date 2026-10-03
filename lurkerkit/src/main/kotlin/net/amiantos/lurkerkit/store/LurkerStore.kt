@@ -3,9 +3,7 @@
 
 package net.amiantos.lurkerkit.store
 
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import net.amiantos.lurkerkit.client.HistoryMode
 import net.amiantos.lurkerkit.client.Incompatibility
 import net.amiantos.lurkerkit.client.NetworkSnapshot
@@ -47,6 +45,7 @@ import net.amiantos.lurkerkit.model.SystemLevel
 import net.amiantos.lurkerkit.model.TypingActivity
 import net.amiantos.lurkerkit.model.TypingEntry
 import net.amiantos.lurkerkit.model.WhoisResult
+import net.amiantos.lurkerkit.support.CurrentValueSubject
 import net.amiantos.lurkerkit.support.bumped
 import net.amiantos.lurkerkit.support.moving
 import net.amiantos.lurkerkit.support.setting
@@ -1117,29 +1116,24 @@ data class ChatState(
  * reads `clock`, which defaults to the system and lets a test pin the typing lease and the
  * speaker map's fallback time through the store.
  *
- * Port note: the subject is a `SharedFlow` with a replay of one and an unbounded buffer, not a
- * `StateFlow`, because `CurrentValueSubject` has two properties a `StateFlow` lacks and the
- * kit leans on both: every assignment publishes, equal or not (a `send-result` or a
- * `join-error` re-sends the same state), and a subscriber sees every value in order. A
- * `StateFlow` drops an equal value and lets a collector that has fallen behind skip to the
- * latest — so a connect burst applied in one looper turn (snapshot, backlogs,
+ * Port note: the subject is `support.CurrentValueSubject` — a replaying `SharedFlow` with an
+ * unbounded buffer, not a `StateFlow` — because `CurrentValueSubject` has two properties a
+ * `StateFlow` lacks and the kit leans on both: every assignment publishes, equal or not (a
+ * `send-result` or a `join-error` re-sends the same state), and a subscriber sees every value in
+ * order. A `StateFlow` drops an equal value and lets a collector that has fallen behind skip to
+ * the latest — so a connect burst applied in one looper turn (snapshot, backlogs,
  * `backlog-complete`) would reach `AppBadge` as a single settled state, and the settled edge it
- * writes the badge on (lurker-ios#134) would never be seen. The buffer only holds values a
- * live collector has not yet taken; with no collector it holds the replay alone.
+ * writes the badge on (lurker-ios#134) would never be seen.
  */
 internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
-    private val subject = MutableSharedFlow<ChatState>(replay = 1, extraBufferCapacity = Int.MAX_VALUE - 1)
+    private val subject = CurrentValueSubject(ChatState())
 
-    init {
-        publish(ChatState())
-    }
+    val state: ChatState get() = subject.value
+    val statePublisher: SharedFlow<ChatState> = subject.flow
 
-    val state: ChatState get() = subject.replayCache.first()
-    val statePublisher: SharedFlow<ChatState> = subject.asSharedFlow()
-
-    /** The one assignment — `subject.value = next` in LurkerKit. Never suspends: the buffer is unbounded. */
+    /** The one assignment — `subject.value = next` in LurkerKit. */
     private fun publish(next: ChatState) {
-        check(subject.tryEmit(next))
+        subject.value = next
     }
 
     /**

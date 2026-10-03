@@ -19,6 +19,7 @@ import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.RelayBotSet
 import net.amiantos.lurkerkit.model.ReplyParent
+import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.LurkerStore
 import java.time.Duration
@@ -505,6 +506,21 @@ class DraftsTests {
     }
 
     @Test
+    fun testAMergeDropsTheAbsorbedEditInTheViewModelToo() {
+        val model = viewModel()
+        model.handle(ServerFrame.DraftUpdated(entry(BufferKey(networkId = 1, target = "bob"), body = "survivor's, saved")))
+        val to = BufferKey(networkId = 1, target = "bobby")
+        model.editDraft(to, ComposerDraft(body = "absorbed"))
+        model.handle(
+            ServerFrame.BufferRenamed(
+                networkId = 1, from = "bob", to = "bobby", bufferId = 5, merged = true, mergedFromBufferId = 6,
+            ),
+        )
+        assertFalse(model.isDraftProtected(to))
+        assertEquals("survivor's, saved", model.draft(to)?.body)
+    }
+
+    @Test
     fun testAnAdoptedEditCanStillBePutBack() {
         // The source has nothing pending: the absorbed buffer's in-flight edit stays, and its
         // failure still restores — the source's stale `latest` must not replace its own.
@@ -545,11 +561,73 @@ class DraftsTests {
 
     // MARK: - The view model
 
-    // Waiting on ChatViewModel, SessionStore (and the private `viewModel` helper):
-    // testAMergeDropsTheAbsorbedEditInTheViewModelToo,
-    // testAnEditOutranksTheServerUntilItGoesOut, testAFlushWithNoSocketKeepsTheEditForTheNextConnect,
-    // testAnotherDevicesWriteLandsWhenNothingHereIsNewer, testTheSystemBufferAndServerLogsKeepNoDraft,
-    // testClosingABufferDropsItsWaitingEdit, testARenameCarriesTheWaitingEdit
+    /** Its own secure storage and its own defaults, so nothing here touches the app's. */
+    private fun viewModel(): ChatViewModel = testViewModel()
+
+    @Test
+    fun testAnEditOutranksTheServerUntilItGoesOut() {
+        val model = viewModel()
+        model.editDraft(chat, ComposerDraft(body = "typing"))
+        model.handle(ServerFrame.DraftUpdated(entry(body = "from the browser")))
+        model.handle(ServerFrame.DraftSnapshot(listOf(entry(body = "from the snapshot"))))
+        assertEquals("typing", model.draft(chat)?.body)
+        assertTrue(model.isDraftProtected(chat))
+    }
+
+    @Test
+    fun testAFlushWithNoSocketKeepsTheEditForTheNextConnect() {
+        // ⚠⚠ Without the hold, the reconnect's snapshot would put the server's older copy back
+        // over what was typed while offline.
+        val model = viewModel()
+        model.editDraft(chat, ComposerDraft(body = "written offline"))
+        model.flushDraft(chat)
+        assertEquals("written offline", model.state.drafts[chat.id]?.body, "the pencil shows it at once")
+        assertTrue(model.isDraftProtected(chat))
+        model.handle(ServerFrame.DraftSnapshot(listOf(entry(body = "older"))))
+        assertEquals("written offline", model.draft(chat)?.body)
+        assertEquals("written offline", model.state.drafts[chat.id]?.body)
+    }
+
+    @Test
+    fun testAnotherDevicesWriteLandsWhenNothingHereIsNewer() {
+        val model = viewModel()
+        model.handle(ServerFrame.DraftUpdated(entry(body = "from the browser")))
+        assertEquals("from the browser", model.draft(chat)?.body)
+        assertFalse(model.isDraftProtected(chat))
+    }
+
+    @Test
+    fun testTheSystemBufferAndServerLogsKeepNoDraft() {
+        val model = viewModel()
+        model.editDraft(BufferKey(networkId = null, target = ":system:"), ComposerDraft(body = "/help"))
+        model.editDraft(BufferKey(networkId = 1, target = ":server:1"), ComposerDraft(body = "/quote x"))
+        assertNull(model.draft(BufferKey(networkId = null, target = ":system:")))
+        assertNull(model.draft(BufferKey(networkId = 1, target = ":server:1")))
+    }
+
+    @Test
+    fun testClosingABufferDropsItsWaitingEdit() {
+        val model = viewModel()
+        model.editDraft(chat, ComposerDraft(body = "x"))
+        model.handle(ServerFrame.BufferClosed(networkId = 1, target = "#chat"))
+        assertNull(model.draft(chat))
+        assertFalse(model.isDraftProtected(chat))
+    }
+
+    @Test
+    fun testARenameCarriesTheWaitingEdit() {
+        val model = viewModel()
+        val from = BufferKey(networkId = 1, target = "bob")
+        val to = BufferKey(networkId = 1, target = "bobby")
+        model.editDraft(from, ComposerDraft(body = "x"))
+        model.handle(
+            ServerFrame.BufferRenamed(
+                networkId = 1, from = "bob", to = "bobby", bufferId = null, merged = false, mergedFromBufferId = null,
+            ),
+        )
+        assertEquals("x", model.draft(to)?.body)
+        assertNull(model.draft(from))
+    }
 
     // Port-only: `Drafts.pendingReply`, the wire types and `DraftSync.reset`, which LurkerKit
     // reaches only through `ChatState.seedDrafts` and the view model. The first three are the

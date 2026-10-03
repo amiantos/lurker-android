@@ -11,6 +11,7 @@ import net.amiantos.lurkerkit.model.MemberPrefix
 import net.amiantos.lurkerkit.model.NickNote
 import net.amiantos.lurkerkit.model.NickNoteSet
 import net.amiantos.lurkerkit.model.WhoisResult
+import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.LurkerStore
 import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
@@ -32,6 +33,9 @@ import kotlin.test.fail
  * each was a shipped bug (lurker#818) before it was a rule, and each fails differently.
  */
 class WhoisTests {
+
+    /** Its own secure storage and its own defaults, so nothing here touches the app's. */
+    private fun viewModel(): ChatViewModel = testViewModel()
 
     // MARK: - The payload
 
@@ -318,6 +322,25 @@ class WhoisTests {
     // MARK: - Asking
 
     @Test
+    fun testRequestingAWhoisWithNoSocketClaimsNothing() {
+        // ⚠⚠ Rule 2 of the marker (lurker#818): claim only if the WHOIS actually left. A slot
+        // held for a request that never went out wedges exactly like one that is never freed —
+        // no reply is coming. A fresh view model has no socket, so `sendRaw` returns false.
+        val model = viewModel()
+        model.requestWhois(networkId = 1, nick = "alice")
+        assertTrue(model.state.whoisPending.isEmpty())
+    }
+
+    @Test
+    fun testRequestingAWhoisForNobodyDoesNothing() {
+        val model = viewModel()
+        for (nobody in listOf("", " ", "\n", "   \t ")) {
+            model.requestWhois(networkId = 1, nick = nobody)
+        }
+        assertTrue(model.state.whoisPending.isEmpty())
+    }
+
+    @Test
     fun testAPaddedNickIsKeyedTheWayTheServerWillAnswerIt() {
         // ⚠⚠ The reply names the bare nick, so keying the slot on the padded form would free
         // a slot nobody claimed and leave the claimed one held forever — the wedge again,
@@ -524,7 +547,4 @@ class WhoisTests {
         )
         assertNull(store.state.nickNotes.note(networkId = 7, nick = "alice"))
     }
-
-    // Waiting on ChatViewModel, SessionStore (and the `viewModel()` helper):
-    // testRequestingAWhoisWithNoSocketClaimsNothing, testRequestingAWhoisForNobodyDoesNothing
 }

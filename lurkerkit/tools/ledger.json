@@ -147,9 +147,9 @@
     "Client/JSON.swift": "→ `client/Json.kt`. `FailableDecodable` is `Json.decodeEach`. The reads bridge numbers and booleans the way `NSNumber` does.",
     "Model/ISOTime.swift": "One ISO parser covers both of LurkerKit's; no lock.",
     "Client/OAuth.swift": "An `object`. `Registration`/`Callback`/`TokenGrant` are sealed interfaces (payloads named `message`, `code`, `token`); `PKCE` a data class over `MessageDigest` + `SecureRandom`. `callback` reads the query by hand (`support.removingPercentEncoding`, shared with `PreviewSelection`; the fragment is found first, so a `?` inside it opens no query) so `+` stays `+` and `%2B` decodes to `+`, as `URLComponents` does.",
-    "Session/SessionStore.swift": "Keychain → interface here, Keystore in `:app`.",
-    "Session/OAuthClients.swift": "`UserDefaults` → interface here.",
-    "Store/SettingsCache.swift": "`UserDefaults` → `SettingsCacheStorage` (`dictionary`, `set`, `removeObject`, mirroring the three calls), implemented by `:app`; no default storage. Values travel as `JsonObject`.",
+    "Session/SessionStore.swift": "Keychain → `SecureStorage` (`read`/`write`/`delete` by account; implementations never throw), implemented by `:app` over the Keystore — readable after first unlock, excluded from backup and transfer, as the Swift’s accessibility attribute asked. `account`/`legacyAccount` keep their values; `service` has no counterpart. `save` is one replacing `write`. `SessionCodec` is kotlinx with `ignoreUnknownKeys`.",
+    "Session/OAuthClients.swift": "`UserDefaults` → the kit’s `DefaultsStorage` (shared with `SettingsCache`); the client ids travel as a `JsonObject` of strings, read all-or-nothing. `key` keeps its value and must survive sign-out.",
+    "Store/SettingsCache.swift": "`UserDefaults` → `DefaultsStorage` (`dictionary`, `set`, `removeObject`, mirroring the three calls), implemented by `:app`; no default storage. Values travel as `JsonObject`.",
     "Client/Uploads.swift": "`UploadProgressDelegate` keeps its name and whole-percent coalescing; `UploadProgressBody` is the counting OkHttp `RequestBody` (a `ForwardingSink`) that feeds it. `upload` streams the already-assembled multipart file, as the Swift does. `assemble` deletes its partial file on failure, which LurkerKit leaves to iOS.",
     "Model/Typing.swift": "`OutgoingTyping` is a mutable class (PORTING.md, structs that mutate, case 3). No Kotlin test until `TypingTests` can run against the store.",
     "Session/NewestAnswer.swift": "A mutable class (case 3).",
@@ -204,7 +204,8 @@
     "Model/ConnectionBannerState.swift": "`incompatible`’s unlabelled value is named `incompatibility`.",
     "Client/LurkerClient.swift": "`LurkerClient(scope, onFrame, httpClient = bearerOnlyConfiguration(), mediaCacheDirectory = null)`, main-confined. `async` → `suspend`; every `Task {}` from main-confined code → `support.task` (a `launch` that yields first, so a stored `Job` is assigned before its body runs under `Main.immediate`); listener callbacks hop to main with `scope.launch`. One suspending `OkHttpClient.await` over `enqueue`; per-request timeouts travel as a tag; JSON bodies written as bytes so Content-Type is exactly `application/json`. `URLSessionWebSocketTask` → `okhttp3.WebSocket`: first of `onClosing`/`onClosed`/`onFailure` wins; `onClosing` answers `close(1000)`; `.goingAway` → `close(1001)`; stale sockets ignored by identity. `send`: `onComplete` means queued; `onFlush` fires a turn later once `queueSize` drains (`awaitWritten`, 2 s bound) — the nearest OkHttp comes to \"written\". Reply continuations are resumed a turn later (`resumeLater`), as `CheckedContinuation` does, so a waiter never runs inline in `openSocket`/`close` under `Main.immediate`. The media client has its own `Dispatcher` (the shared five-per-host cap would queue REST and the upgrade behind image bodies); `clearMediaCache` swallows `IOException`. ⚠ Receive has no backpressure; a replaced socket finishes its upgrade before closing. `registerDevice` sends `transport: \"fcm\"` (server rule). Cleartext refusal has its own user-visible text. `[weak self]` dropped: a cancelled scope stops the work. `playableMediaURL`/`socketURL` return `String?`. Logging via `java.util.logging`. ⚠ `MultipartBody.assemble` and `evictAll` run on the calling thread — T7/U8 must move them off main.",
     "Client/LinkPreviews.swift": "`LinkPreviewStore(scope, now = Instant::now, jitter, resolve: suspend (List<String>) -> List<LinkPreview>)`; its tasks go through `support.task`. `retry` is insertion-ordered where Swift’s dictionary is not; the re-ask delay rounds up to the millisecond.",
-    "Client/InstanceConfig.swift": "An internal data class."
+    "Client/InstanceConfig.swift": "An internal data class.",
+    "Session/ChatViewModel.swift": "`ChatViewModel(scope, sessions, settingsCache, oauthClients, formatExpiry, httpClient = LurkerClient.bearerOnlyConfiguration(), mediaCacheDirectory = null)`, main-confined; the stores have no defaults because each needs platform storage the kit does not have. `sessionSubject`/`statusSubject` are `support.CurrentValueSubject`; `channelEvents` is a `SharedFlow` with an unbounded buffer (its two consumers patch open lists from every live MODE row and a burst lands before a collector runs). Every `Task` → `support.task`; stored ones (`reconnectTask`, `draftFlushes`) → `Job`; `[weak self]` dropped (the scope’s cancellation ends the work). `authorize` is `suspend (HttpUrl) -> String?`. `formatExpiry` is port-only: the kit never formats a date, so the app hands in the ignore-expiry formatter once and `send` passes it to `CommandParser`. `serverSupportsAPNs` checks for `fcm` (the server rule), name kept to grep across repos. `init` sits at the bottom so every property has initialised first. ⚠ Not exercised in Kotlin: `signIn` (needs HTTP), `logout`/`onAuthLost`, the 500 ms draft flush over a live socket, `enterBackground`’s drafts-plus-presence path. ⚠ `upload`/`clearStagedMedia`/`evictAll` still run on the calling thread — U8 moves them off main."
   },
   "testNotes": {
     "NotificationTapTests.swift": {
@@ -220,42 +221,8 @@
       ],
       "note": "Extension→MIME lookups are `MimeTypeMap` on Android, invisible to a JVM module; they belong in an instrumented `:app` test. Two more are ported in part: UTI-conformance assertions have no MIME equivalent."
     },
-    "WhoisTests.swift": {
-      "waiting": [
-        "testRequestingAWhoisWithNoSocketClaimsNothing",
-        "testRequestingAWhoisForNobodyDoesNothing"
-      ],
-      "note": "Waiting on ChatViewModel."
-    },
-    "ChannelModesTests.swift": {
-      "waiting": [
-        "testVerbReplyCarriesItsData",
-        "testVerbErrorsAreWorded",
-        "testLiveLinesAndResyncsReachChannelEvents",
-        "testASaveFailureSaysWhetherAnythingCanHaveGoneOut"
-      ],
-      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
-    },
-    "DraftsTests.swift": {
-      "waiting": [
-        "testAMergeDropsTheAbsorbedEditInTheViewModelToo",
-        "testAnEditOutranksTheServerUntilItGoesOut",
-        "testAFlushWithNoSocketKeepsTheEditForTheNextConnect",
-        "testAnotherDevicesWriteLandsWhenNothingHereIsNewer",
-        "testTheSystemBufferAndServerLogsKeepNoDraft",
-        "testClosingABufferDropsItsWaitingEdit",
-        "testARenameCarriesTheWaitingEdit"
-      ],
-      "note": "What each waits on is in the comment at the bottom of the Kotlin class."
-    },
     "AwayStripTests.swift": {
       "note": "Three assertions about what `DateFormatter` writes for a template are left to the app's formatter, on a device."
-    },
-    "OAuthTests.swift": {
-      "waiting": [
-        "testRegistrationsAreKeptPerServer"
-      ],
-      "note": "Waiting on OAuthClients."
     },
     "PreviewMediaRequestTests.swift": {
       "waiting": [],

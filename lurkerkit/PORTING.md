@@ -38,7 +38,7 @@ is an interface here and an implementation in `:app`:
 | `UserDefaults` (`SettingsCache`, `OAuthClients`) | interface in the kit, DataStore/SharedPreferences in `:app` |
 | `CryptoKit` | `java.security` |
 | `UniformTypeIdentifiers` | MIME type strings |
-| Combine (`CurrentValueSubject`, `PassthroughSubject`) | `StateFlow`, `SharedFlow` |
+| Combine (`CurrentValueSubject`, `PassthroughSubject`) | `support.CurrentValueSubject` (a replaying `SharedFlow`, never a `StateFlow`: every assignment publishes and a collector sees every value — `LurkerStore`'s note says why), `SharedFlow` |
 | `@MainActor` | main-thread confinement, stated in the KDoc |
 
 ## Types
