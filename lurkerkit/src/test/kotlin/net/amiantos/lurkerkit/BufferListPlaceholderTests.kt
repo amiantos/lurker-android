@@ -5,6 +5,7 @@ package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.model.BufferListPlaceholder
 import net.amiantos.lurkerkit.store.LurkerStore
 import net.amiantos.lurkerkit.store.SocketStatus
@@ -80,7 +81,7 @@ class BufferListPlaceholderTests {
     @Test
     fun testASnapshotAloneDoesNotMeanTheRosterLanded() {
         val store = LurkerStore()
-        store.apply(ServerFrame.Snapshot(emptyList(), globalIgnores = emptyList(), maxUploadBytes = null))
+        store.apply(ServerFrame.Snapshot(emptyList(), globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated))
         assertFalse(store.state.backlogComplete, "the snapshot is a prefix, not the whole answer")
     }
 

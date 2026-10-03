@@ -5,6 +5,7 @@ package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.client.Uploads
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.store.ChatState
@@ -55,7 +56,8 @@ class UploadCapTests {
             """{"kind":"snapshot","networks":[],"globalIgnores":[],"maxUploadBytes":26214400}""",
         )
         if (frame !is ServerFrame.Snapshot) fail("expected a snapshot, got $frame")
-        assertEquals(26_214_400L, frame.maxUploadBytes)
+        val limits = frame.uploadLimits
+        assertEquals(26_214_400L, limits.maxUploadBytes)
     }
 
     /** a snapshot from a server too old to advertise says nothing, not zero */
@@ -63,8 +65,9 @@ class UploadCapTests {
     fun anOldSnapshotSaysNothing() {
         val frame = snapshotFrame("""{"kind":"snapshot","networks":[],"globalIgnores":[]}""")
         if (frame !is ServerFrame.Snapshot) fail("expected a snapshot, got $frame")
-        assertNull(frame.maxUploadBytes)
-        assertEquals(Uploads.fallbackMaxBytes, Uploads.compressionTarget(advertised = frame.maxUploadBytes))
+        val limits = frame.uploadLimits
+        assertNull(limits.maxUploadBytes)
+        assertEquals(Uploads.fallbackMaxBytes, Uploads.compressionTarget(advertised = limits.maxUploadBytes))
     }
 
     /** a non-positive cap is read as no answer */
@@ -78,7 +81,8 @@ class UploadCapTests {
                 """{"kind":"snapshot","networks":[],"globalIgnores":[],"maxUploadBytes":""" + value + "}",
             )
             if (frame !is ServerFrame.Snapshot) fail("expected a snapshot")
-            assertNull(frame.maxUploadBytes, "$value is not a cap any file could satisfy")
+            val limits = frame.uploadLimits
+            assertNull(limits.maxUploadBytes, "$value is not a cap any file could satisfy")
         }
     }
 
@@ -89,9 +93,9 @@ class UploadCapTests {
             """{"kind":"settings","changes":{"uploads.image.max_upload_mb":12},"maxUploadBytes":12582912}""",
         )
         if (frame !is ServerFrame.SettingsChanged) fail("expected a settings frame, got $frame")
-        val (changes, maxUploadBytes) = frame
+        val (changes, limits) = frame
         assertEquals(SettingValue.Int(12), changes["uploads.image.max_upload_mb"])
-        assertEquals(12_582_912L, maxUploadBytes)
+        assertEquals(12_582_912L, limits.maxUploadBytes)
     }
 
     /** a settings frame about anything else carries no cap */
@@ -101,7 +105,8 @@ class UploadCapTests {
             """{"kind":"settings","changes":{"chat.consolidate_joins":true}}""",
         )
         if (frame !is ServerFrame.SettingsChanged) fail("expected a settings frame, got $frame")
-        assertNull(frame.maxUploadBytes, "absent here means unchanged, not uncapped")
+        val limits = frame.uploadLimits
+        assertNull(limits.maxUploadBytes, "absent here means unchanged, not uncapped")
     }
 
     // MARK: - Reaching the store
@@ -110,7 +115,10 @@ class UploadCapTests {
     @Test
     fun snapshotSeedsTheStore() {
         val state = LurkerStore.reduce(
-            ChatState(), ServerFrame.Snapshot(emptyList(), globalIgnores = emptyList(), maxUploadBytes = 26_214_400),
+            ChatState(),
+            ServerFrame.Snapshot(
+                emptyList(), globalIgnores = emptyList(), uploadLimits = UploadLimits(maxUploadBytes = 26_214_400),
+            ),
         )
         assertEquals(26_214_400L, state.maxUploadBytes)
     }
@@ -121,9 +129,14 @@ class UploadCapTests {
         // The snapshot is the cap's refresh point. Leaving the last server's number in force
         // would compress against a limit this one never claimed.
         var state = LurkerStore.reduce(
-            ChatState(), ServerFrame.Snapshot(emptyList(), globalIgnores = emptyList(), maxUploadBytes = 26_214_400),
+            ChatState(),
+            ServerFrame.Snapshot(
+                emptyList(), globalIgnores = emptyList(), uploadLimits = UploadLimits(maxUploadBytes = 26_214_400),
+            ),
         )
-        state = LurkerStore.reduce(state, ServerFrame.Snapshot(emptyList(), globalIgnores = emptyList(), maxUploadBytes = null))
+        state = LurkerStore.reduce(
+            state, ServerFrame.Snapshot(emptyList(), globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated),
+        )
         assertNull(state.maxUploadBytes)
         assertEquals(Uploads.fallbackMaxBytes, Uploads.compressionTarget(advertised = state.maxUploadBytes))
     }
@@ -132,12 +145,16 @@ class UploadCapTests {
     @Test
     fun aSettingsFrameRaisesTheCap() {
         var state = LurkerStore.reduce(
-            ChatState(), ServerFrame.Snapshot(emptyList(), globalIgnores = emptyList(), maxUploadBytes = 26_214_400),
+            ChatState(),
+            ServerFrame.Snapshot(
+                emptyList(), globalIgnores = emptyList(), uploadLimits = UploadLimits(maxUploadBytes = 26_214_400),
+            ),
         )
         state = LurkerStore.reduce(
             state,
             ServerFrame.SettingsChanged(
-                mapOf("uploads.image.max_upload_mb" to SettingValue.Int(50)), maxUploadBytes = 52_428_800,
+                mapOf("uploads.image.max_upload_mb" to SettingValue.Int(50)),
+                uploadLimits = UploadLimits(maxUploadBytes = 52_428_800),
             ),
         )
         assertEquals(52_428_800L, state.maxUploadBytes)
@@ -151,11 +168,16 @@ class UploadCapTests {
         // compressor back on the 90 MiB guess every time the user flipped an unrelated switch
         // — and it would stay there until the next reconnect.
         var state = LurkerStore.reduce(
-            ChatState(), ServerFrame.Snapshot(emptyList(), globalIgnores = emptyList(), maxUploadBytes = 209_715_200),
+            ChatState(),
+            ServerFrame.Snapshot(
+                emptyList(), globalIgnores = emptyList(), uploadLimits = UploadLimits(maxUploadBytes = 209_715_200),
+            ),
         )
         state = LurkerStore.reduce(
             state,
-            ServerFrame.SettingsChanged(mapOf("chat.consolidate_joins" to SettingValue.Bool(true)), maxUploadBytes = null),
+            ServerFrame.SettingsChanged(
+                mapOf("chat.consolidate_joins" to SettingValue.Bool(true)), uploadLimits = UploadLimits.unstated,
+            ),
         )
         assertEquals(209_715_200L, state.maxUploadBytes)
     }

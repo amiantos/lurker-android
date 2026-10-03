@@ -6,6 +6,7 @@ package net.amiantos.lurkerkit
 import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
@@ -165,7 +166,7 @@ class IgnoreScopeTests {
                         ignoredMasks = listOf(rule(mask = "local")),
                     ),
                 ),
-                globalIgnores = listOf(rule(mask = "spammer")), maxUploadBytes = null,
+                globalIgnores = listOf(rule(mask = "spammer")), uploadLimits = UploadLimits.unstated,
             ),
         )
         assertTrue(store.state.ignores.isHidden(networkId = 1, input = input(nick = "spammer")))
@@ -176,7 +177,7 @@ class IgnoreScopeTests {
         store.apply(
             ServerFrame.Snapshot(
                 listOf(NetworkSnapshot(id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList())),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
         assertTrue(store.state.ignores.isEmpty(1))
@@ -193,7 +194,7 @@ class IgnoreScopeTests {
                         ignoredMasks = listOf(rule(mask = "local")),
                     ),
                 ),
-                globalIgnores = listOf(rule(mask = "spammer")), maxUploadBytes = null,
+                globalIgnores = listOf(rule(mask = "spammer")), uploadLimits = UploadLimits.unstated,
             ),
         )
         // networkId null is the GLOBAL bucket here — not the system buffer, which is what a null

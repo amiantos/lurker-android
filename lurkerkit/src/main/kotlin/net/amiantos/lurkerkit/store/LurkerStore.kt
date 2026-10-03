@@ -411,6 +411,17 @@ data class ChatState(
      * the file to exactly this and don't budget for the boundaries again.
      */
     val maxUploadBytes: Long? = null,
+    /**
+     * The longest edge, in pixels, the server keeps of a static image (lurker#872,
+     * lurker-ios#155) — the number to shrink a photo to before uploading it. Carried exactly
+     * like `maxUploadBytes`: seeded by the snapshot, patched by a `settings` frame that touched
+     * it.
+     *
+     * ⚠⚠ null is **"the server hasn't said"**, and then images go up as they always did. There
+     * is no fallback dimension: a guessed 2048 would shrink photos on an instance that keeps
+     * 4096, and that loss is the user's, invisibly. Read it through `ImageShrink.plan`.
+     */
+    val maxStaticImageDimension: Int? = null,
     val error: String? = null,
     /**
      * Text the server refused to send, waiting for the buffer it was TYPED IN. Keyed by
@@ -1307,11 +1318,12 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                         // states are its own, not what was left over from before a drop (see
                         // `rowPresence`).
                         snapshotSinceOpen = true,
-                        // Assigned outright, null included: the snapshot is the cap's refresh
+                        // Assigned outright, null included: the snapshot is the limits' refresh
                         // point, so a reconnect to an instance that no longer advertises one has
                         // to put us back on the fallback rather than leave a number from the
                         // last server in force.
-                        maxUploadBytes = frame.maxUploadBytes,
+                        maxUploadBytes = frame.uploadLimits.maxUploadBytes,
+                        maxStaticImageDimension = frame.uploadLimits.maxStaticImageDimension,
                     )
                     applySnapshot(next, frame.networks, globalIgnores = frame.globalIgnores)
                 }
@@ -1652,12 +1664,15 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                     // Patch, never replace — the frame carries only what moved, so assigning it
                     // wholesale would drop every other stored setting until the next bootstrap.
                     var next = state.copy(settings = state.settings.apply(frame.changes))
-                    // ⚠⚠ Conditional, for the same reason: the cap rides this frame ONLY when it
-                    // was the thing that changed. Assigning it unconditionally would clear the
-                    // advertised number every time the user toggled anything else, quietly
-                    // putting the compressor back on the fallback until the next reconnect.
-                    val maxUploadBytes = frame.maxUploadBytes
-                    if (maxUploadBytes != null) next = next.copy(maxUploadBytes = maxUploadBytes)
+                    // ⚠⚠ Conditional, for the same reason: the limits ride this frame ONLY when one
+                    // of them changed. Assigning them unconditionally would clear the advertised
+                    // numbers every time the user toggled anything else, quietly putting the
+                    // compressor back on the fallback — and photos back to full size — until the
+                    // next reconnect.
+                    val bytes = frame.uploadLimits.maxUploadBytes
+                    if (bytes != null) next = next.copy(maxUploadBytes = bytes)
+                    val dimension = frame.uploadLimits.maxStaticImageDimension
+                    if (dimension != null) next = next.copy(maxStaticImageDimension = dimension)
                     next
                 }
                 is ServerFrame.SettingsValues -> {

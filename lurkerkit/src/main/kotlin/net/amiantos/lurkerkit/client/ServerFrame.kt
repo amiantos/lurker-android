@@ -38,7 +38,7 @@ import java.time.Instant
  *
  * Port note: a message id, a byte count and anything derived from one is a `Long` here
  * (PORTING.md, Types) — `lastReadId`, `clearedBeforeId`, `messageId`, `messageIds`, the keys of
- * `reactions`, and `maxUploadBytes`.
+ * `reactions`, and `UploadLimits.maxUploadBytes`.
  */
 internal sealed interface ServerFrame {
     /** REST `GET /api/networks`: the roster (names live here, not in the snapshot). */
@@ -57,20 +57,20 @@ internal sealed interface ServerFrame {
      * value rather than hidden in a default because a snapshot that dropped it would leave
      * the most common kind of rule silently inert until the next time one was edited.
      *
-     * `maxUploadBytes` is the account's advertised upload cap (lurker#627), refreshed on
-     * every reconnect. **null is "the server didn't say", not "no cap"** — an instance older
-     * than the field is a normal condition, and reading its silence as a number would be the
-     * guess this replaced. See `Uploads.compressionTarget(advertised)`.
+     * `uploadLimits` are the account's advertised upload cap (lurker#627) and static-image
+     * dimension (lurker#872), refreshed on every reconnect. **Each null is "the server didn't
+     * say", not "no limit"** — an instance older than the field is a normal condition, and
+     * reading its silence as a number would be the guess these replaced. See
+     * `Uploads.compressionTarget(advertised)` and `ImageShrink`.
      *
-     * It belongs to the account rather than to any network, so it rides the frame the way
-     * `globalIgnores` does. It is the second such field; a third (lurker-ios#17's
-     * `protocolVersion`, also on this frame) is the point at which these want to be a class of
-     * their own rather than a longer parameter list.
+     * They belong to the account rather than to any network, so they ride the frame the way
+     * `globalIgnores` does — grouped as one class, because a third and fourth positional
+     * value is where a parameter list stops being readable.
      */
     data class Snapshot(
         val networks: List<NetworkSnapshot>,
         val globalIgnores: List<IgnoreRule>,
-        val maxUploadBytes: Long?,
+        val uploadLimits: UploadLimits,
     ) : ServerFrame
 
     /**
@@ -531,13 +531,14 @@ internal sealed interface ServerFrame {
      * WS `settings`: the keys that just changed, fanned out to every device (including the
      * echo of this client's own `PATCH`). A patch, never a full set.
      *
-     * ⚠⚠ `maxUploadBytes` rides this frame **only when the cap was actually touched** — the
-     * server recomputes and re-sends it when `uploads.image.max_upload_mb` is among the
-     * changes, and omits it otherwise. So null here means "unchanged", NOT "no cap", and the
-     * store must patch it conditionally rather than assign it. Overwriting with null would
-     * drop the advertised cap on every unrelated settings change the user made.
+     * ⚠⚠ `uploadLimits` ride this frame **only when a limit was actually touched** — the
+     * server recomputes and re-sends both when `uploads.image.max_upload_mb` or
+     * `uploads.image.max_dimension` is among the changes, and omits them otherwise. So null
+     * here means "unchanged", NOT "no limit", and the store must patch each conditionally
+     * rather than assign it. Overwriting with null would drop the advertised numbers on every
+     * unrelated settings change the user made.
      */
-    data class SettingsChanged(val changes: Map<String, SettingValue>, val maxUploadBytes: Long?) : ServerFrame
+    data class SettingsChanged(val changes: Map<String, SettingValue>, val uploadLimits: UploadLimits) : ServerFrame
 
     /**
      * The `{values}` a REST reply carries (`PATCH /api/settings`) — the user's complete

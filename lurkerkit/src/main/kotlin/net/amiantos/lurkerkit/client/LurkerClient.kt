@@ -1144,21 +1144,17 @@ internal class LurkerClient(
         )
 
     /**
-     * Set yourself away on every network (`/away`), or clear it (`/back`, or `/away` with no
-     * message). User-scoped, so neither verb carries a networkId — the server keys on the
-     * account and fans out to all connections.
+     * Set yourself away (`/away`), or clear it (`/back`, or `/away` with no message), on the
+     * network named (lurker#994). The server widens it to every network for `all: true`, for
+     * the `away.all_networks` setting when `all` is null, and when there's no network (the
+     * system buffer).
      */
-    fun setAway(message: String) {
-        send(
-            buildJsonObject {
-                put("type", "away")
-                put("message", message)
-            },
-        )
+    fun setAway(message: String, networkId: Int?, all: Boolean?) {
+        send(awayFrame(type = "away", message = message, networkId = networkId, all = all))
     }
 
-    fun setBack() {
-        send(buildJsonObject { put("type", "back") })
+    fun setBack(networkId: Int?, all: Boolean?) {
+        send(awayFrame(type = "back", message = null, networkId = networkId, all = all))
     }
 
     /**
@@ -2466,6 +2462,14 @@ internal class LurkerClient(
             rule.pattern?.let { put("pattern", it) }
             rule.expiresAt?.let { put("expiresAt", ISOTime.string(date = it)) }
         }
+
+        fun awayFrame(type: String, message: String?, networkId: Int?, all: Boolean?): JsonObject =
+            buildJsonObject {
+                put("type", type)
+                message?.let { put("message", it) }
+                networkId?.let { put("networkId", it) }
+                all?.let { put("all", it) }
+            }
 
         /**
          * The request itself, against an explicit client — sign-out sends it with the token it

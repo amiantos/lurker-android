@@ -22,6 +22,7 @@ import net.amiantos.lurkerkit.client.OAuth
 import net.amiantos.lurkerkit.client.PKCE
 import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.client.UploadError
+import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.client.UploadResponse
 import net.amiantos.lurkerkit.client.UploadServerProgress
 import net.amiantos.lurkerkit.client.Uploads
@@ -588,6 +589,13 @@ class ChatViewModel(
     val uploadCapBytes: Long get() = Uploads.compressionTarget(advertised = state.maxUploadBytes)
 
     /**
+     * The longest edge the server keeps of a static image, or null when it hasn't said — in
+     * which case images go up untouched (lurker-ios#155). Read at upload time, like
+     * `uploadCapBytes`.
+     */
+    val maxStaticImageDimension: Int? get() = state.maxStaticImageDimension
+
+    /**
      * Which `/api/config` answer is the current one. Every reconnect attempt starts a read, so
      * several can be out at once, and an older answer landing last must not undo a newer one. See
      * `NewestAnswer` for why a newer read that fails doesn't count.
@@ -1066,8 +1074,9 @@ class ChatViewModel(
 
     /**
      * Carry out a command's effects in order against `key`'s buffer, returning the last UI
-     * follow-up (an `activate`, for `/msg`). Wire effects run on `key`'s network; `away`/
-     * `back` are user-scoped and carry none; `info` prints a local line.
+     * follow-up (an `activate`, for `/msg`). Wire effects run on `key`'s network, `away`/
+     * `back` too, which the server may widen to every network (lurker#994); `info` prints a
+     * local line.
      */
     private fun run(
         effects: List<CommandEffect>,
@@ -1132,9 +1141,9 @@ class ChatViewModel(
                     // would be wrong for anything that landed in between.
                     client.clearBuffer(networkId = networkId, target = effect.target, undo = effect.undo)
                 is CommandEffect.Away ->
-                    client.setAway(effect.message)
-                CommandEffect.Back ->
-                    client.setBack()
+                    client.setAway(effect.message, networkId = networkId, all = effect.all)
+                is CommandEffect.Back ->
+                    client.setBack(networkId = networkId, all = effect.all)
                 is CommandEffect.Ctcp ->
                     client.sendCTCP(
                         networkId = networkId, target = effect.target, issuingTarget = key.target,
@@ -1705,12 +1714,13 @@ class ChatViewModel(
     }
 
     /**
-     * `/back` from a control rather than the composer — the away strip's Back (lurker-ios#135).
-     * No local mutation: the strip comes down when the server's `away-state` echo folds in, on
-     * every device at once.
+     * `/back` from a control rather than the composer — the away strip's Back (lurker-ios#135),
+     * on the network the strip is showing, scoped as a typed `/back` is (lurker#994). No local
+     * mutation: the strip comes down when the server's `away-state` echo folds in, on every
+     * device at once.
      */
-    fun setBack() {
-        client.setBack()
+    fun setBack(networkId: Int?) {
+        client.setBack(networkId = networkId, all = null)
     }
 
     /**
@@ -2421,11 +2431,11 @@ class ChatViewModel(
         // so `settings.loaded` stays honestly false until a real bootstrap arrives, while every
         // behavior gate already reads the user's actual choice.
         val cached = settingsCache.load()
-        // No cap: the cache holds setting VALUES, and the advertised cap is not one of them —
-        // it is the server's resolution of three ceilings, only one of which the user owns.
-        // null here is the honest "nobody has said yet", and the snapshot lands on connect,
-        // well before there is a video to compress.
-        if (cached.isNotEmpty()) store.apply(ServerFrame.SettingsChanged(cached, maxUploadBytes = null))
+        // No limits: the cache holds setting VALUES, and the advertised limits are not among
+        // them — each is the server's resolution of an operator policy and a user setting, and
+        // only one of those is the user's. null here is the honest "nobody has said yet", and
+        // the snapshot lands on connect, well before there is anything to upload.
+        if (cached.isNotEmpty()) store.apply(ServerFrame.SettingsChanged(cached, uploadLimits = UploadLimits.unstated))
         restoreSession()
     }
 

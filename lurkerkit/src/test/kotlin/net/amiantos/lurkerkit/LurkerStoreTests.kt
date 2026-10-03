@@ -13,6 +13,7 @@ import net.amiantos.lurkerkit.client.HistoryMode
 import net.amiantos.lurkerkit.client.Incompatibility
 import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
@@ -72,7 +73,7 @@ class LurkerStoreTests {
         )
 
     private val emptySnapshot: ServerFrame =
-        ServerFrame.Snapshot(networks = emptyList(), globalIgnores = emptyList(), maxUploadBytes = null)
+        ServerFrame.Snapshot(networks = emptyList(), globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated)
 
     private fun texts(store: LurkerStore, key: String = chanKey): List<String?>? = store.state.messages[key]?.map { it.text }
 
@@ -589,7 +590,7 @@ class LurkerStoreTests {
                         ),
                     ),
                 ),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
 
@@ -617,7 +618,7 @@ class LurkerStoreTests {
                         channels = listOf(ChannelSnapshot(name = "#lurker", topic = null, members = members)),
                     ),
                 ),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
     }
@@ -1068,7 +1069,7 @@ class LurkerStoreTests {
         store.apply(
             ServerFrame.Snapshot(
                 listOf(NetworkSnapshot(id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList())),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
         store.apply(shell(joined = false))
@@ -1220,7 +1221,7 @@ class LurkerStoreTests {
         store.apply(
             ServerFrame.Snapshot(
                 listOf(NetworkSnapshot(id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList())),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
         store.apply(ServerFrame.Networks(listOf(Network(id = 1, name = "Libera", blocked = true))))

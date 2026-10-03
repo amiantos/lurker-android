@@ -6,6 +6,7 @@ package net.amiantos.lurkerkit
 import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.FavoriteEntry
 import net.amiantos.lurkerkit.model.FriendPresence
@@ -147,7 +148,7 @@ class ContactsAndPresenceTests {
                     id = id, state = ConnectionState.Connected, nick = "me", channels = emptyList(), peerPresence = presence,
                 ),
             ),
-            globalIgnores = emptyList(), maxUploadBytes = null,
+            globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
         )
 
     /**
@@ -215,7 +216,7 @@ class ContactsAndPresenceTests {
                         peerPresence = mapOf("darc" to PresenceState.Online),
                     ),
                 ),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
         assertEquals(FriendPresence.Offline, store.state.rowPresence(networkId = 2, nick = "darc"))
@@ -283,7 +284,7 @@ class ContactsAndPresenceTests {
                         peerPresence = mapOf("darc" to PresenceState.Online),
                     ),
                 ),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
         assertEquals(FriendPresence.Offline, store.state.presence(networkId = 2, nick = "darc"))
@@ -315,7 +316,7 @@ class ContactsAndPresenceTests {
                         peerPresence = mapOf("darc" to PresenceState.Online),
                     ),
                 ),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
         // A Friends chip reads the presence of ITS network's peer — the same nick elsewhere

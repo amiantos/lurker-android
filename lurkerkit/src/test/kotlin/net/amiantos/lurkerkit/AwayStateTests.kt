@@ -3,9 +3,13 @@
 
 package net.amiantos.lurkerkit
 
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.LurkerClient
 import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.model.AwayState
 import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.ISOTime
@@ -121,7 +125,7 @@ class AwayStateTests {
             listOf(
                 NetworkSnapshot(id = 2, state = ConnectionState.Connected, nick = "me", channels = emptyList(), away = away),
             ),
-            globalIgnores = emptyList(), maxUploadBytes = null,
+            globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
         )
 
     private val wentAway = AwayState(
@@ -191,5 +195,44 @@ class AwayStateTests {
         store.apply(ServerFrame.Networks(listOf(Network(id = 2, name = "Libera"))))
         assertEquals("Libera", store.state.networks[2]?.name)
         assertEquals(wentAway, store.state.networks[2]?.away)
+    }
+
+    // MARK: - Outgoing frames (lurker#994)
+
+    /**
+     * `/away` and `/back` name the network they were typed on and carry `-all`/`-one` as
+     * `all`; the system buffer names none, which the server reads as every network.
+     */
+    @Test
+    fun testAwayFramesCarryTheNetworkAndTheFlag() {
+        val typed = LurkerClient.awayFrame(type = "away", message = "lunch", networkId = 3, all = null)
+        assertEquals(
+            buildJsonObject {
+                put("type", "away")
+                put("message", "lunch")
+                put("networkId", 3)
+            },
+            typed,
+        )
+
+        val everywhere = LurkerClient.awayFrame(type = "back", message = null, networkId = 3, all = true)
+        assertEquals(
+            buildJsonObject {
+                put("type", "back")
+                put("networkId", 3)
+                put("all", true)
+            },
+            everywhere,
+        )
+
+        val system = LurkerClient.awayFrame(type = "away", message = "", networkId = null, all = false)
+        assertEquals(
+            buildJsonObject {
+                put("type", "away")
+                put("message", "")
+                put("all", false)
+            },
+            system,
+        )
     }
 }

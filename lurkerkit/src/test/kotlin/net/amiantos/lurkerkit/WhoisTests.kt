@@ -6,6 +6,7 @@ package net.amiantos.lurkerkit
 import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.MemberPrefix
 import net.amiantos.lurkerkit.model.NickNote
@@ -542,7 +543,7 @@ class WhoisTests {
         store.apply(
             ServerFrame.Snapshot(
                 listOf(NetworkSnapshot(id = 7, state = ConnectionState.Connected, nick = "me", channels = emptyList())),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
         assertNull(store.state.nickNotes.note(networkId = 7, nick = "alice"))

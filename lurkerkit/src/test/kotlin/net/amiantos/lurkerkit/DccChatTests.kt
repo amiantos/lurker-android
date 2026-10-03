@@ -6,6 +6,7 @@ package net.amiantos.lurkerkit
 import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.commands.ArgKind
 import net.amiantos.lurkerkit.commands.CommandCompletion
 import net.amiantos.lurkerkit.commands.CommandEffect
@@ -312,7 +313,7 @@ class DccChatTests {
                     id = id, state = state, nick = "me", channels = emptyList(), dccChats = chats, dccChatOffers = offers,
                 ),
             ),
-            globalIgnores = emptyList(), maxUploadBytes = null,
+            globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
         )
 
     private val bob = BufferKey(networkId = 1, target = "=bob")
@@ -442,7 +443,7 @@ class DccChatTests {
                         dccChatOffers = listOf("dave"),
                     ),
                 ),
-                globalIgnores = emptyList(), maxUploadBytes = null,
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
         store.apply(ServerFrame.Networks(listOf(Network(id = 2, name = "Other"))))
