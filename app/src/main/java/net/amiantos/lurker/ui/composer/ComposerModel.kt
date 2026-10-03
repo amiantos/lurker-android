@@ -15,6 +15,7 @@ import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.ChannelName
 import net.amiantos.lurkerkit.model.ComposerDraft
 import net.amiantos.lurkerkit.model.DccChat
+import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.MemberPrefix
 import net.amiantos.lurkerkit.model.Message
@@ -164,6 +165,31 @@ internal data class ComposerChrome(
             dccSession = inputs.dccSession,
             away = inputs.away,
         )
+    }
+}
+
+/**
+ * What the pills' candidates are drawn from, off the store — compared by identity (the store replaces
+ * what it changed), so a frame that moved none of it costs four reference checks. The lines the list
+ * renders are the other source; they're Compose state, and observed there.
+ */
+internal class CandidateSources(
+    val members: List<Member>?,
+    val ignores: IgnoreSet,
+    val buffers: Map<String, Buffer>,
+    val selfNick: String?,
+) {
+    companion object {
+        fun of(state: ChatState, key: BufferKey) = CandidateSources(
+            members = state.members[key.id],
+            ignores = state.ignores,
+            buffers = state.buffers,
+            selfNick = key.networkId?.let { state.networks[it]?.nick },
+        )
+
+        fun same(old: CandidateSources, new: CandidateSources): Boolean =
+            old.members === new.members && old.ignores === new.ignores && old.buffers === new.buffers &&
+                old.selfNick == new.selfNick
     }
 }
 

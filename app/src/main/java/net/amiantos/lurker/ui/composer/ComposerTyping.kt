@@ -5,6 +5,7 @@ package net.amiantos.lurker.ui.composer
 
 import net.amiantos.lurkerkit.model.OutgoingTyping
 import net.amiantos.lurkerkit.model.TypingSignal
+import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import java.time.Instant
 
 /**
@@ -28,22 +29,43 @@ internal class ComposerTyping(private val emit: (TypingSignal) -> Unit) {
     private val outgoing = OutgoingTyping()
 
     /**
-     * The draft changed — tell the network if it's news. Returns whether the idle timer should be
-     * (re-)armed for [draft]: only while we're claiming to type, since there's nothing to downgrade
-     * otherwise. Any change re-arms it, so the draft the timer captures is always the latest.
+     * The draft as of the last change this heard — what the CHANNEL was told about, so a re-measure
+     * or a restore back to the same words isn't news. Null after [ended]: once the claim is over, the
+     * next change is news whatever it says. ⚠ Without that reset, typing "hello", having a restore
+     * from another device set "hell", and typing the "o" again read as no change at all, and the
+     * channel never heard you'd resumed.
      */
-    fun draftChanged(draft: String, now: Instant): Boolean {
-        outgoing.draftChanged(draft, now)?.let(emit)
+    private var lastDraft: String? = null
+
+    /**
+     * The draft changed — tell the network if it's news. Returns whether the idle timer should be
+     * (re-)armed for [draft] — only while we're claiming to type, since there's nothing to downgrade
+     * otherwise; any change re-arms it, so the draft the timer captures is always the latest — or
+     * null when this is the draft already heard, which leaves the timer alone.
+     */
+    fun draftChanged(draft: String, now: Instant): Boolean? {
+        if (draft == lastDraft) return null
+        lastDraft = draft
+        outgoing.draftChanged(sendForm(draft), now)?.let(emit)
         return outgoing.isSignalling
     }
 
     /** The idle timer armed for [draft] fired with nothing changed since. */
     fun idled(draft: String, now: Instant) {
-        outgoing.idled(draft, now)?.let(emit)
+        outgoing.idled(sendForm(draft), now)?.let(emit)
     }
 
-    /** Stop claiming to type — on send, and on leaving the buffer. Silent when we weren't. */
+    /** Stop claiming to type — on send, on a restore, and on leaving. Silent when we weren't. */
     fun ended() {
+        lastDraft = null
         outgoing.ended()?.let(emit)
     }
+
+    /**
+     * The draft as the send button would send it (`ComposerModel.sendable`'s trim), which is what
+     * decides whether it's a command: " /whois bob" and "\n/join #x" run as commands, so they mustn't
+     * claim typing to the channel. iOS hands `OutgoingTyping` the raw text and so does announce them —
+     * a divergence on purpose, toward what the line actually does.
+     */
+    private fun sendForm(draft: String): String = draft.trimmingWhitespacesAndNewlines()
 }
