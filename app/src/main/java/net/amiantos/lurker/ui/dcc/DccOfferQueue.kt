@@ -40,7 +40,7 @@ data class DccOfferPrompt(val offer: DccChatOffer, val networkName: String?) {
  *
  * Asked = answered, here, where iOS marks it at presentation: the prompt is composition, which a
  * configuration change rebuilds, and an offer marked asked by a dialog that was then torn down would
- * never be put up again. One offer at a time, oldest first.
+ * never be put up again. One offer at a time, oldest (lowest id) first.
  *
  * ⚠⚠ An answer counts only once the prompt for THAT offer has been on screen for [SETTLE_MS]
  * ([shown], [answer]). With two offers queued, answering the first puts the second up in the same
@@ -93,7 +93,10 @@ class DccOfferQueue {
     }
 
     private fun recompute(): DccOfferPrompt? {
-        val offer = offers.firstOrNull { it.id !in asked }
+        // The LOWEST unanswered id, not the first in list order: ids are minted monotonically, so the
+        // lowest is the oldest — and a snapshot's reconciliation rebuilds the list by network and nick,
+        // which in list order could swap the dialog on screen for a newer offer before it's answered.
+        val offer = offers.filter { it.id !in asked }.minByOrNull { it.id }
         current = offer?.let { DccOfferPrompt(it, names[it.networkId]) }
         if (shownSince?.first != offer?.id) shownSince = null
         return current

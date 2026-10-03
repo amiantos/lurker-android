@@ -82,6 +82,19 @@ class DccOfferQueueTest {
     }
 
     @Test
+    fun `a list that reorders mid-prompt keeps the dialog on its offer`() {
+        val queue = DccOfferQueue()
+        queue.update(listOf(offer(3, "carol"), offer(4, "alice", networkId = 2)), names)
+        assertEquals(3, queue.current?.offer?.id)
+        queue.shown(3, 0)
+        // A snapshot rebuilds the offers by network and nick: alice's newer offer now comes first.
+        assertEquals(3, queue.update(listOf(offer(4, "alice", networkId = 2), offer(3, "carol")), names)?.offer?.id)
+        // Still the prompt that was read — its settle wasn't reset by the reorder.
+        assertTrue(queue.answer(3, settle))
+        assertEquals(4, queue.current?.offer?.id)
+    }
+
+    @Test
     fun `the question is over when its offer is`() {
         val queue = DccOfferQueue()
         queue.update(listOf(offer(1)), names)
