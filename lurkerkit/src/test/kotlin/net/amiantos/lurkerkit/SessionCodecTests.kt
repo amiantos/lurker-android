@@ -27,7 +27,7 @@ import kotlin.test.assertTrue
 /**
  * The persisted session's JSON codec, tested without touching secure storage.
  * A malformed / legacy blob must decode to null (→ treated as no session) rather than
- * crashing. Mirrors the Android client's SessionCodecTest.
+ * crashing. Replaces the July prototype's `SessionCodecTest`, which went with the prototype.
  */
 class SessionCodecTests {
 

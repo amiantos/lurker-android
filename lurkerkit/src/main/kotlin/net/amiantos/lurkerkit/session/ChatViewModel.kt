@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit.session
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -77,7 +78,6 @@ import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import java.io.File
-import java.io.IOException
 import java.time.Duration
 import java.time.Instant
 import kotlin.coroutines.resume
@@ -779,9 +779,10 @@ class ChatViewModel(
      * the readout should be naming. Platform-free by design: the picker and the video transcode
      * live in the app, so this module stays platform-light.
      *
-     * Port note: catches `UploadError` and `IOException` (what assembling the body throws), not
-     * every `Throwable` as LurkerKit's `catch` does, so a cancelled caller ends with its
-     * cancellation. `localizedDescription` is the exception's message.
+     * Port note: catches every `Exception` as LurkerKit's `catch` does — a `RuntimeException`
+     * out of the picked file or the request builder is an upload failure, not the caller's
+     * crash — bar `CancellationException`, so a cancelled caller ends with its cancellation.
+     * `localizedDescription` is the exception's message.
      */
     suspend fun upload(
         fileURL: File,
@@ -800,7 +801,9 @@ class ChatViewModel(
             Result.Success(response)
         } catch (error: UploadError) {
             Result.Failure(error)
-        } catch (error: IOException) {
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
             Result.Failure(UploadError.Transport(error.message ?: error.toString()))
         }
 
@@ -914,8 +917,9 @@ class ChatViewModel(
         // `endComposition` re-arms it. Until then the edit stays waiting, and protected.
         if (draftSync.defersFlush(id)) return
         draftFlushes[id] = scope.task {
+            // Port note: Swift's `try? await Task.sleep` swallows the cancellation, so a guard
+            // follows it; `delay` ends the body with a `CancellationException` instead.
             delay(Drafts.flushDelay.toKotlinDuration())
-            if (!isActive) return@task
             draftFlushes.remove(id)
             sendDraft(id)
         }
@@ -1843,6 +1847,14 @@ class ChatViewModel(
         // ⚠ `onFlush` waits for BOTH: it ends the app's background assertion, and the presence
         // frame is what turns push back on — suspended with it still queued, the server stays
         // quiet until it reaps the socket.
+        //
+        // Port note: a `Task` always runs, and its `guard let self else { onFlush?() }` keeps the
+        // promise above when the model is gone; a `launch` on a cancelled scope never does, so
+        // the promise is kept here instead.
+        if (!scope.isActive) {
+            onFlush?.invoke()
+            return
+        }
         scope.task {
             try {
                 val saved = async { client.flushDrafts(edits.map { LurkerClient.KeyedDraft(key = it.key, draft = it.draft) }) }
@@ -2313,8 +2325,8 @@ class ChatViewModel(
         val wait = backoff(reconnectAttempt)
         reconnectAttempt += 1
         reconnectTask = scope.task {
+            // `delay` ends the body on cancellation; see the draft flush's note.
             delay(wait.seconds)
-            if (!isActive) return@task
             reconnectTask = null
             doReconnect(force = false)
         }

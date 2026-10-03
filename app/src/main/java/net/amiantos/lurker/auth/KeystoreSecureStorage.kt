@@ -22,9 +22,11 @@ import javax.crypto.spec.GCMParameterSpec
  * supports it — and only ciphertext lands in SharedPreferences. Rolled directly on the Keystore
  * rather than the deprecated `security-crypto` library.
  *
- * The blob is a bearer credential, so losing the key (the user clears credentials or resets
- * biometrics, which invalidates Keystore keys) simply means we can't decrypt — [read] answers
- * null, the kit treats that as "no session", and the user signs in again.
+ * The blob is a bearer credential, so losing the key simply means we can't decrypt — [read]
+ * answers null, the kit treats that as "no session", and the user signs in again. The key asks
+ * for no user authentication, so a changed lock screen or biometric enrolment never invalidates
+ * it; what can is a Keystore reset or corruption (some OEMs, a factory-reset-then-restore), in
+ * which case the alias is dropped and a fresh key made, so the next save works again.
  *
  * What iOS asks of the Keychain (`AfterFirstUnlockThisDeviceOnly`) splits in two here: the key
  * needs no user authentication, so the blob is readable after the first unlock post-boot; and
@@ -41,7 +43,7 @@ class KeystoreSecureStorage(context: Context) : SecureStorage {
 
     override fun read(account: String): ByteString? {
         val stored = prefs.getString(account, null) ?: return null
-        val plain = runCatching { decrypt(stored) }.getOrNull()
+        val plain = runCatching { decrypt(stored) }.getOrElse { key = null; null }
         if (plain == null) {
             // Undecryptable (key invalidated or corrupted) — drop it and start clean.
             delete(account)
@@ -53,6 +55,9 @@ class KeystoreSecureStorage(context: Context) : SecureStorage {
     override fun write(account: String, data: ByteString) {
         runCatching {
             prefs.edit().putString(account, encrypt(data)).apply()
+        }.onFailure {
+            // A key the Keystore no longer honours: forget it, so the next call regenerates.
+            key = null
         }
     }
 
@@ -62,9 +67,23 @@ class KeystoreSecureStorage(context: Context) : SecureStorage {
 
     // --- Keystore AES-GCM --------------------------------------------------------
 
+    /**
+     * The key, fetched once: every Keystore call is a binder round-trip, and the first reads
+     * happen on the main thread during the view model's init.
+     */
+    private var key: SecretKey? = null
+
     private fun secretKey(): SecretKey {
+        key?.let { return it }
         val keystore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
-        (keystore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
+        val existing = runCatching { (keystore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey }
+            .getOrElse {
+                // An alias that exists but cannot be used (keystore reset or corruption): drop
+                // it, or every save would fail silently for the rest of the install.
+                runCatching { keystore.deleteEntry(KEY_ALIAS) }
+                null
+            }
+        existing?.let { key = it; return it }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
         generator.init(
             KeyGenParameterSpec.Builder(
@@ -76,7 +95,7 @@ class KeystoreSecureStorage(context: Context) : SecureStorage {
                 .setKeySize(256)
                 .build(),
         )
-        return generator.generateKey()
+        return generator.generateKey().also { key = it }
     }
 
     /** Returns `base64(iv):base64(ciphertext)` — GCM needs its per-encryption IV kept. */
