@@ -174,8 +174,11 @@ class FeedPagerTest {
         pager.appendPage(pager.loadMore()!!, null)
         assertEquals(listOf(2L), pager.items.map { it.message.id })
         assertNull(pager.placeholder)
-        // Not latched at the end: the next scroll re-arms it.
+        // The list ends in a retry row, since no row will come on screen to ask again…
+        assertTrue(pager.snapshot().pageInFailed)
+        // …and it isn't latched at the end: asking again works, and takes the retry row down.
         assertNotNull(pager.loadMore())
+        assertFalse(pager.snapshot().pageInFailed)
 
         val emptied = FeedPager(supersedes = false, visible = hidingSpam)
         val next = emptied.firstPage(emptied.reload()!!, HighlightsPage(listOf(item(2, "spammer")), nextBefore = 2))!!
@@ -195,5 +198,91 @@ class FeedPagerTest {
         pager.remove(2)
         // …but clearing the list by hand is the empty state, not "Couldn't load".
         assertEquals(FeedPlaceholder.Empty, pager.placeholder)
+    }
+
+    @Test
+    fun aNewQuestionClearsTheOldAnswerAndAFailureSaysSo() {
+        val pager = FeedPager(supersedes = true)
+        pager.firstPage(pager.reload()!!, page(5, 4, next = 4))
+        val next = pager.reload(newQuestion = true)!!
+        // The old query's rows never stand under the new one.
+        assertTrue(pager.items.isEmpty())
+        assertEquals(FeedPlaceholder.Loading, pager.placeholder)
+        pager.firstPage(next, null)
+        assertEquals(FeedPlaceholder.Error, pager.placeholder)
+        // And the old cursor is gone: no scroll can page it under the new question.
+        assertNull(pager.loadMore())
+    }
+
+    @Test
+    fun aPullOfTheSameQuestionKeepsItsRowsAndCursor() {
+        val pager = FeedPager(supersedes = true)
+        pager.firstPage(pager.reload()!!, page(5, 4, next = 4))
+        pager.firstPage(pager.reload(byPull = true)!!, null)
+        assertEquals(listOf(5L, 4L), pager.items.map { it.message.id })
+        assertNotNull(pager.loadMore())
+    }
+
+    @Test
+    fun aReloadRestoresTheHopBudget() {
+        val pager = FeedPager(supersedes = true, visible = hidingSpam)
+        var cursor = 1_000L
+        fun spamPage() = HighlightsPage(listOf(item(cursor, "spammer")), nextBefore = --cursor)
+        var next: FeedFetch.More? = pager.firstPage(pager.reload()!!, spamPage())
+        while (next != null) next = pager.appendPage(next, spamPage())
+        // Exhausted — and the next question can still page past an all-ignored first page.
+        assertNotNull(pager.firstPage(pager.reload(newQuestion = true)!!, spamPage()))
+    }
+
+    @Test
+    fun aPullSupersedesAPageInEvenOnAnIdempotentFeed() {
+        val pager = FeedPager(supersedes = false)
+        pager.firstPage(pager.reload()!!, page(5, 4, next = 4))
+        val more = pager.loadMore()!!
+        val pull = assertNotNullAndGet(pager.reload(byPull = true))
+        assertNull(pager.appendPage(more, page(3)))
+        pager.firstPage(pull, page(6, 5))
+        assertEquals(listOf(6L, 5L), pager.items.map { it.message.id })
+    }
+
+    @Test
+    fun aRemovalOutlivesAReloadAlreadyInFlight() {
+        val pager = FeedPager(supersedes = false)
+        pager.firstPage(pager.reload()!!, page(3, 2, 1))
+        val inFlight = pager.reload(byPull = true)!!
+        pager.remove(2)
+        // Answered from before the removal: the row is still in it, and stays gone.
+        pager.firstPage(inFlight, page(3, 2, 1))
+        assertEquals(listOf(3L, 1L), pager.items.map { it.message.id })
+        // A reload asked after the removal is the server's word: if it lists the row, it's there.
+        pager.firstPage(pager.reload(byPull = true)!!, page(3, 2, 1))
+        assertEquals(listOf(3L, 2L, 1L), pager.items.map { it.message.id })
+    }
+
+    @Test
+    fun aRemovalPagesOnlyWhenTheListRunsShort() {
+        val pager = FeedPager(supersedes = false)
+        pager.firstPage(pager.reload()!!, page(*(20L downTo 1L).toList().toLongArray(), next = 1))
+        // Plenty left: nothing fetched, nothing spent.
+        assertNull(pager.remove(20))
+        assertFalse(pager.isLoading)
+        val short = FeedPager(supersedes = false)
+        short.firstPage(short.reload()!!, page(3, 2, next = 2))
+        assertEquals(FeedCursor(beforeMessage = 2), short.remove(3)?.cursor)
+    }
+
+    @Test
+    fun eachLandedFirstPageIsANewEpoch() {
+        val pager = FeedPager(supersedes = false)
+        assertEquals(0, pager.snapshot().epoch)
+        pager.firstPage(pager.reload()!!, page(1))
+        assertEquals(1, pager.snapshot().epoch)
+        pager.firstPage(pager.reload(byPull = true)!!, null)
+        assertEquals(1, pager.snapshot().epoch)
+    }
+
+    private fun <T : Any> assertNotNullAndGet(value: T?): T {
+        assertNotNull(value)
+        return value!!
     }
 }

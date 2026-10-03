@@ -109,4 +109,39 @@ class FeedControllerTest {
         assertEquals(10, feed.snapshot.items.size)
         assertTrue(feed.snapshot.placeholder == null)
     }
+
+    @Test
+    fun aPullCancelsAPageInAndReloads() = runTest {
+        val server = Server()
+        val feed = controller(server, supersedes = false)
+        feed.reload()
+        runCurrent()
+        server.pending[0].complete(HighlightsPage((20L downTo 11L).map { item(it) }, nextBefore = 11))
+        runCurrent()
+        feed.scrolledTo(9)
+        runCurrent()
+        feed.reload(byPull = true)
+        runCurrent()
+        assertEquals(1, server.cancelled)
+        assertEquals(listOf(null, FeedCursor(beforeMessage = 11), null), server.asked)
+    }
+
+    @Test
+    fun theRetryRowAsksForTheFailedPageAgain() = runTest {
+        val server = Server()
+        val feed = controller(server, supersedes = false)
+        feed.reload()
+        runCurrent()
+        server.pending[0].complete(HighlightsPage((20L downTo 11L).map { item(it) }, nextBefore = 11))
+        runCurrent()
+        feed.scrolledTo(9)
+        runCurrent()
+        server.pending[1].complete(null)
+        runCurrent()
+        assertTrue(feed.snapshot.pageInFailed)
+        feed.retry()
+        runCurrent()
+        assertEquals(FeedCursor(beforeMessage = 11), server.asked.last())
+        assertTrue(!feed.snapshot.pageInFailed)
+    }
 }

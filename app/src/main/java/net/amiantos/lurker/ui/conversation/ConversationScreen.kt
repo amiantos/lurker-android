@@ -864,7 +864,7 @@ internal data class DayClock(val today: LocalDate, val zone: ZoneId) {
 }
 
 @Composable
-private fun rememberDayClock() = run {
+internal fun rememberDayClock() = run {
     val context = LocalContext.current.applicationContext
     produceState(initialValue = DayClock.now(), context) {
         val changed = Channel<Unit>(Channel.CONFLATED)

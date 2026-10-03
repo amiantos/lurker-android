@@ -51,9 +51,14 @@ private fun FeedPreview(dark: Boolean, kind: HistoryFeed, placeholder: FeedPlace
                 2 to Network(id = 2, name = "OFTC", position = 1, nick = "amiantos"),
             ),
         )
-        val sections = FeedModel.sections(items, state, style, now, ZoneOffset.UTC) { _, withYear ->
-            if (withYear) "Jun 20, 2025" else "Jul 23"
-        }
+        val sections = FeedModel.sections(
+            items,
+            state,
+            style,
+            now,
+            ZoneOffset.UTC,
+            date = { _, withYear -> if (withYear) "Jun 20, 2025" else "Jul 23" },
+        )
         DialogPage(title = kind.title, exit = PageExit.Close, onExit = {}) { padding ->
             FeedListContent(
                 sections = sections,

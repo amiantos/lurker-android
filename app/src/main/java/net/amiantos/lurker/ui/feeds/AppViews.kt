@@ -73,6 +73,19 @@ object ViewsLayout {
 }
 
 /**
+ * A view's menu row — its glyph and title, one definition for both menus that carry the views (the
+ * buffer list's ⋮ and the conversation's), so the two can't drift apart. iOS's `AppView.action`.
+ */
+@Composable
+fun AppViewMenuItem(view: AppView, onOpen: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(view.title) },
+        leadingIcon = { Icon(view.icon, contentDescription = null) },
+        onClick = onOpen,
+    )
+}
+
+/**
  * The conversation bar's views — buttons where the layout has room for them, then the ⋮ menu holding the
  * rest, trailing-most (lurker-ios's `overflowItem`). A ⋮ rather than iOS's "…": Android's overflow.
  * Nothing in it varies by buffer: every entry is app-scoped, so the menu is the same menu everywhere.
@@ -89,14 +102,10 @@ fun ConversationViewsActions(sideBySide: Boolean, onOpenView: (AppView) -> Unit)
         IconButton(onClick = { expanded = true }) { Icon(LurkerIcons.MoreVert, contentDescription = "More") }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             for (view in menu) {
-                DropdownMenuItem(
-                    text = { Text(view.title) },
-                    leadingIcon = { Icon(view.icon, contentDescription = null) },
-                    onClick = {
-                        expanded = false
-                        onOpenView(view)
-                    },
-                )
+                AppViewMenuItem(view) {
+                    expanded = false
+                    onOpenView(view)
+                }
             }
         }
     }
