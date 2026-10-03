@@ -15,6 +15,10 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
@@ -57,6 +61,7 @@ import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleStartEffect
@@ -78,6 +83,12 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import net.amiantos.lurker.prefs.UiPreferences
+import net.amiantos.lurker.ui.composer.ComposerBar
+import net.amiantos.lurker.ui.composer.ComposerModel
+import net.amiantos.lurker.ui.composer.SendScroll
+import net.amiantos.lurker.ui.composer.SuggestionsView
+import net.amiantos.lurker.ui.composer.rememberComposerState
 import net.amiantos.lurker.ui.message.MessageListContext
 import net.amiantos.lurker.ui.message.MessageListLayout
 import net.amiantos.lurker.ui.message.MessageListRow
@@ -134,7 +145,12 @@ import java.time.ZoneOffset
  *  3. **Layouts** (`snapshotFlow` over `layoutInfo`): the floating controls, the `dividerSeen` latch,
  *     and paging — from the measured layout, never a scroll callback that can describe a stale frame.
  *
- * U3: the composer. U6: long-press message actions and the reaction picker. U8: link previews.
+ * The composer rides the bottom edge (`ComposerBar`, lurker-android#11): it is the scaffold's bottom
+ * bar, so the list's reservation includes it, and it pads itself by the keyboard — the reverse layout
+ * keeps the newest row anchored as either grows. Its suggestions float over the list, above it.
+ *
+ * U6: long-press message actions and the reaction picker — Reply calls `ComposerState.startReply`.
+ * U8: link previews.
  *
  * @param jump the message to land on rather than the bottom (`BufferRoute.jump`) — a new request on
  *   the same buffer arrives here without rebuilding the screen.
@@ -150,6 +166,9 @@ import java.time.ZoneOffset
  *   chat count too.
  * @param onGone the buffer isn't open any more — see [BufferWatch].
  * @param onMoved the buffer was renamed under us — follow it to its new key.
+ * @param uiPreferences the device's own settings — the composer reads its capitalization.
+ * @param onOpenBuffer `/msg` or `/query` opened a DM and asks to switch to it.
+ * @param onShowProfile `/whois` asks for this person's profile. U5: the profile sheet.
  */
 @Composable
 fun ConversationScreen(
@@ -163,6 +182,9 @@ fun ConversationScreen(
     onVisit: () -> Unit,
     onGone: () -> Unit,
     onMoved: (BufferKey) -> Unit,
+    uiPreferences: UiPreferences,
+    onOpenBuffer: (BufferKey) -> Unit,
+    onShowProfile: (networkId: Int, nick: String) -> Unit = { _, _ -> },
 ) {
     val kind = remember(key) { BufferKind.of(networkId = key.networkId, target = key.target) }
 
@@ -381,6 +403,30 @@ fun ConversationScreen(
         land()
     }
 
+    // The pill's tap — and a send from a detached slice, which re-attaches through this same path
+    // (iOS's `send`), since the line just sent isn't in the slice and no scroll will reach it.
+    // The pill's path, and a send's from a detached slice (iOS's `send`): the line just sent isn't in
+    // the slice and no scroll will reach it.
+    fun jumpToLatest() {
+        val detached = model.state.buffers[key.id]?.hasMoreNewer == true
+        val choice = scroll.jumpToLatest(hasRows = current.rows.isNotEmpty(), detached = detached)
+        // Both branches can put a `/clear` back.
+        publishOptions()
+        when (choice) {
+            ConversationScroll.ToLatest.Reattach -> {
+                // A converging chain belongs to the jump this cancelled.
+                jobs.converging?.cancel()
+                if (jobs.lastFrame?.let { frame -> scroll.requestLatest(frame, key) } == true) model.loadLatest(key)
+            }
+            ConversationScroll.ToLatest.ScrollDown -> {
+                jobs.converging?.cancel()
+                scope.launch { listState.animateScrollToItem(0) }
+            }
+            ConversationScroll.ToLatest.Nothing -> Unit
+        }
+        revision++
+    }
+
     // A route's request that arrived after birth: a jump into the buffer already open.
     LaunchedEffect(jump?.nonce) {
         val request = jump ?: return@LaunchedEffect
@@ -562,6 +608,48 @@ fun ConversationScreen(
     // Server errors are `MainScaffold`'s (`ServerErrorDialog`): always composed, so one never waits
     // unseen behind the buffer list on a phone and surfaces later over an unrelated conversation.
 
+    // MARK: - Composer
+
+    // Whether the reader is parked at the newest row — what decides whether a send or the keyboard
+    // carries them down (`chat.keep_position_on_send`).
+    fun nearBottom() = ConversationModel.followsTail(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, followSlop)
+
+    val composer = rememberComposerState(
+        model = model,
+        key = key,
+        kind = kind,
+        messages = { current.visible },
+        onWillSend = {
+            val detached = model.state.buffers[key.id]?.hasMoreNewer == true
+            val keeps = ComposerModel.keepsPositionWhileReading(model.state.settings, nearBottom())
+            when (ComposerModel.sendScroll(detached = detached, keepsPosition = keeps)) {
+                SendScroll.Reattach -> jumpToLatest()
+                // The echo lands a moment later, over the socket; being at the tail when it does is
+                // what makes the build follow it rather than count it on the pill.
+                SendScroll.ToBottom -> if (current.rows.isNotEmpty() && !scroll.landingPending) listState.requestScrollToItem(0)
+                SendScroll.Stay -> Unit
+            }
+        },
+        onOpenBuffer = onOpenBuffer,
+        onShowProfile = onShowProfile,
+    )
+
+    // The keyboard arriving carries the reader down to the newest message — `keep_position_on_send`
+    // is written as a rule about sending, but on a phone raising the keyboard to reply is what takes
+    // a reader out of the history they were reading, well before they've typed anything (iOS's
+    // `keyboardWillChange`). A reader already at the tail needs nothing: the reverse layout keeps item
+    // 0 at the bottom edge as the keyboard pushes it up. On its ARRIVAL only — the keyboard leaving
+    // moves nobody.
+    val imeVisible = imeVisible()
+    val imeWas = remember { booleanArrayOf(imeVisible) }
+    LaunchedEffect(imeVisible) {
+        val arrived = imeVisible && !imeWas[0]
+        imeWas[0] = imeVisible
+        if (!arrived || current.rows.isEmpty() || scroll.landingPending) return@LaunchedEffect
+        if (ComposerModel.keepsPositionWhileReading(model.state.settings, nearBottom())) return@LaunchedEffect
+        listState.requestScrollToItem(0)
+    }
+
     val placeholder = ConversationModel.placeholder(hasRows = rows.isNotEmpty(), inputs = inputs, forceLoading = forceLoading)
     ConversationContent(
         title = title,
@@ -578,26 +666,16 @@ fun ConversationScreen(
         pills = pills,
         flash = flash,
         onJumpToUnread = { if (scroll.jumpToFirstUnread()) startJump() },
-        onJumpToLatest = {
-            // U3: sending from a detached slice re-attaches through this same path (iOS's `send`),
-            // since the line just sent isn't in the slice and no scroll will reach it.
-            val detached = model.state.buffers[key.id]?.hasMoreNewer == true
-            val choice = scroll.jumpToLatest(hasRows = rows.isNotEmpty(), detached = detached)
-            // Both branches can put a `/clear` back.
-            publishOptions()
-            when (choice) {
-                ConversationScroll.ToLatest.Reattach -> {
-                    // A converging chain belongs to the jump this cancelled.
-                    jobs.converging?.cancel()
-                    if (jobs.lastFrame?.let { frame -> scroll.requestLatest(frame, key) } == true) model.loadLatest(key)
-                }
-                ConversationScroll.ToLatest.ScrollDown -> {
-                    jobs.converging?.cancel()
-                    scope.launch { listState.animateScrollToItem(0) }
-                }
-                ConversationScroll.ToLatest.Nothing -> Unit
-            }
-            revision++
+        onJumpToLatest = ::jumpToLatest,
+        bottomBar = { ComposerBar(composer, uiPreferences.composerAutocapitalizes, clockKey = day) },
+        overlay = { bottom ->
+            // Centred over the field for reach (the jump pill owns the trailing corner), riding the
+            // composer up with the keyboard.
+            SuggestionsView(
+                composer.suggestions,
+                onPick = composer::pick,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = bottom + 8.dp),
+            )
         },
     )
 }
@@ -795,6 +873,10 @@ internal fun ConversationContent(
     onConnectionBannerShown: (Boolean) -> Unit = {},
     onJumpToUnread: () -> Unit = {},
     onJumpToLatest: () -> Unit = {},
+    /** The composer — the scaffold's bottom bar, so the list's reservation includes it. */
+    bottomBar: @Composable () -> Unit = {},
+    /** What floats over the list's bottom edge, given the reservation's height: the suggestions. */
+    overlay: @Composable BoxScope.(bottom: Dp) -> Unit = {},
 ) {
     val colors = LurkerTheme.colors
     Scaffold(
@@ -814,6 +896,7 @@ internal fun ConversationContent(
                 },
             )
         },
+        bottomBar = bottomBar,
     ) { padding ->
         val direction = LocalLayoutDirection.current
         // Links open in the browser through the platform's handler — which throws when nothing on the
@@ -844,7 +927,8 @@ internal fun ConversationContent(
                         state = listState,
                         // Newest at the bottom, and the list starts there: item 0 is the last row.
                         reverseLayout = true,
-                        // U3: the composer's height joins this reservation.
+                        // The composer's height (and the keyboard's, under it): the newest row sits just
+                        // above the bar, and the rows scroll on under it.
                         contentPadding = PaddingValues(bottom = bottom),
                         modifier = Modifier.fillMaxSize(),
                     ) {
@@ -890,6 +974,7 @@ internal fun ConversationContent(
                     onClick = onJumpToLatest,
                     modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = bottom + 12.dp),
                 )
+                overlay(bottom)
             }
         }
     }
@@ -963,3 +1048,8 @@ private fun EmptyPreviewLight() = ConversationPreview(dark = false, empty = true
 @Preview(name = "Empty — dark", widthDp = 360, heightDp = 640)
 @Composable
 private fun EmptyPreviewDark() = ConversationPreview(dark = true, empty = true)
+
+/** Whether the soft keyboard is up — `WindowInsets.isImeVisible`, behind its opt-in. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun imeVisible(): Boolean = WindowInsets.isImeVisible

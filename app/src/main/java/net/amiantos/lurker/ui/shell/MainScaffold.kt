@@ -417,6 +417,9 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
                             onVisit = { uiPreferences.recordLastOpenBuffer(bufferKey) },
                             onGone = { leave(bufferKey) },
                             onMoved = { to -> follow(bufferKey, to) },
+                            uiPreferences = uiPreferences,
+                            // `/msg` and `/query` — the same move as a pick.
+                            onOpenBuffer = { to -> open(to) },
                         )
                     }
                 }
