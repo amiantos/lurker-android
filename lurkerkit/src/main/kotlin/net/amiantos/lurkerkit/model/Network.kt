@@ -48,9 +48,14 @@ data class Network(
     /**
      * Your own away state, as this network last reported it (lurker-ios#68).
      *
-     * Held per network because that's how the server broadcasts it, though the state itself
-     * is user-scoped — every connected network carries the same value. Null means the server
-     * hasn't reported one, which is also what it sends for a user who has never been away.
+     * Network-scoped (lurker#994): `/away` sets the network it's typed on, or every network for
+     * `-all` or the `away.all_networks` setting, so one network can be away while another isn't —
+     * read this network's value as this network's alone, never as the account's. Null means the
+     * server hasn't reported one, which is also what it sends for a user who has never been away.
+     *
+     * Port note: LurkerKit's copy of this comment still says user-scoped, with every network
+     * carrying the same value — stale since lurker#994, which changed `Presence.swift`'s
+     * `AwayState` doc and not this one.
      */
     val away: AwayState? = null,
     /**
