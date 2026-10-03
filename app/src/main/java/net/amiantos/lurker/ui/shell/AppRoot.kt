@@ -11,6 +11,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.signin.SignInScreen
 import kotlinx.coroutines.flow.StateFlow
 import net.amiantos.lurkerkit.session.ChatViewModel
@@ -26,11 +27,13 @@ import net.amiantos.lurkerkit.session.ChatViewModel
  * with it, the way iOS dismisses whatever was presented before showing sign-in.
  *
  * [lastServerURL] is read when the sign-in screen is built, so a sign-out prefills the server
- * that was just in use.
+ * that was just in use. [uiPreferences] is handed down from `LurkerApp` rather than looked up from
+ * the Application inside composition, so what the app proper reads and writes is visible here.
  */
 @Composable
 fun AppRoot(
     model: ChatViewModel,
+    uiPreferences: UiPreferences,
     signInNotice: StateFlow<String?>,
     lastServerURL: () -> String,
     onSignIn: (server: String) -> Unit,
@@ -41,7 +44,7 @@ fun AppRoot(
         // Keyed on signed-in or not, so `LoggedOut` ↔ `LoggingIn` doesn't rebuild the form.
         Crossfade(targetState = session == ChatViewModel.SessionState.LoggedIn, label = "root") { signedIn ->
             if (signedIn) {
-                MainScaffold(model = model, onSignOut = model::logout)
+                MainScaffold(model = model, uiPreferences = uiPreferences, onSignOut = model::logout)
             } else {
                 SignInScreen(model = model, notice = signInNotice, initialServer = lastServerURL(), onSignIn = onSignIn)
             }
