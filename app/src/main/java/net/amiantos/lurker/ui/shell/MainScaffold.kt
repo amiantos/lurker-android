@@ -5,16 +5,10 @@ package net.amiantos.lurker.ui.shell
 
 import android.os.SystemClock
 import androidx.compose.foundation.layout.Box
-import net.amiantos.lurker.platform.AppEvents
-import net.amiantos.lurker.platform.AppEvent
-import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.adaptive.layout.AnimatedPane
@@ -22,11 +16,13 @@ import androidx.compose.material3.adaptive.layout.ListDetailPaneScaffoldRole
 import androidx.compose.material3.adaptive.layout.PaneAdaptedValue
 import androidx.compose.material3.adaptive.layout.PaneScaffoldDirective
 import androidx.compose.material3.adaptive.layout.calculatePaneScaffoldDirective
+import androidx.compose.material3.adaptive.navigation.BackNavigationBehavior
 import androidx.compose.material3.adaptive.navigation.NavigableListDetailPaneScaffold
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -35,18 +31,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.window.core.layout.WindowSizeClass
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import net.amiantos.lurker.platform.AppEvent
+import net.amiantos.lurker.platform.AppEvents
 import net.amiantos.lurker.prefs.UiPreferences
+import net.amiantos.lurker.ui.conversation.ConversationScreen
 import net.amiantos.lurker.ui.list.BufferListModel
 import net.amiantos.lurker.ui.list.BufferListScreen
 import net.amiantos.lurkerkit.model.Buffer
+import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.session.ChatViewModel
-import net.amiantos.lurkerkit.store.ChatState
 
 /**
  * The app proper: the buffer list and the conversation, side by side wherever there's room for
@@ -68,6 +66,15 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
     // navigator saves its history, so the conversation survives rotation and process death.
     val navigator = rememberListDetailPaneScaffoldNavigator<BufferRoute>(scaffoldDirective = lurkerPaneDirective())
     val scope = rememberCoroutineScope()
+
+    // One navigation at a time. Every move is a suspend call that animates, and two interleaved
+    // ones corrupt the history: a pop that finds nothing left to pop CLEARS it (the navigator's
+    // `navigateBack` with no previous destination), so a replace racing a leave could strand the
+    // scaffold with no destination at all.
+    val navigation = remember { Mutex() }
+    fun navigate(move: suspend () -> Unit) {
+        scope.launch { navigation.withLock { move() } }
+    }
 
     // Whether a settled list has been drawn this session — the buffer list's burst gate
     // (`BufferListModel.drawsList`). Here rather than in the list because on a phone the list pane
@@ -114,6 +121,46 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
         latchedIn = processToken
     }
 
+    // A rename the open conversation followed (lurker-ios's `followRename`): the history still holds
+    // the route it was opened under, and this says what that route is called now. Not a navigation —
+    // a replace on a phone would animate the conversation out and back in under a reader who did
+    // nothing, for a peer's nick change. Saved, so it survives rotation with the history it amends.
+    //
+    // Scoped to that one history entry: any navigation of ours clears it, because an alias left
+    // behind would redirect a later open of a NEW buffer that happens to reuse the old name.
+    var renamedFrom by rememberSaveable { mutableStateOf<BufferRoute?>(null) }
+    var renamedTo by rememberSaveable { mutableStateOf<BufferRoute?>(null) }
+    fun clearRename() {
+        renamedFrom = null
+        renamedTo = null
+    }
+
+    // A side-by-side pick in flight. The replace below passes through the list destination, and the
+    // detail pane would otherwise show the system buffer for the frame in between.
+    var replacing by remember { mutableStateOf<BufferRoute?>(null) }
+
+    // Read through functions rather than captured as values: the event collector below is started
+    // once and calls these for the life of the scaffold, and a value captured on its first
+    // composition would be the layout and the route of the first frame forever.
+
+    // Side by side — the list beside the conversation rather than instead of it. iOS's
+    // `marksOpenBuffer`: it gates the list's open mark and decides which pane carries the banner.
+    fun isSideBySide(): Boolean {
+        val value = navigator.scaffoldValue
+        return value[ListDetailPaneScaffoldRole.List] == PaneAdaptedValue.Expanded &&
+            value[ListDetailPaneScaffoldRole.Detail] == PaneAdaptedValue.Expanded
+    }
+
+    // The buffer the conversation pane shows — the destination's, as a rename has since named it.
+    fun currentRoute(): BufferRoute? {
+        replacing?.let { return it }
+        val destination = navigator.currentDestination?.contentKey ?: return null
+        return if (destination == renamedFrom) renamedTo else destination
+    }
+
+    val sideBySide = isSideBySide()
+    val openRoute = currentRoute()
+
     // Launch restore (lurker-ios#49): signing in lands on the list, with the buffer you were last
     // reading opened over it when there is one — so a returning user is back in their conversation
     // immediately, and back is right there when they aren't where they wanted to be, which is what
@@ -127,34 +174,110 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
     // The buffer is synthesized from the stored key: the store is empty at launch, and the
     // conversation hydrates it once its frames land. Probing for it first would be wrong — the
     // server reads an `open-buffer` for a `#channel` with no row as a request to JOIN it, so a
-    // probe would silently re-join a channel you left on purpose. U2: a buffer that gets no frame by
+    // probe would silently re-join a channel you left on purpose. A buffer that gets no frame by
     // the end of the burst (`ChatState.rosterSettled`) sends the reader back to the list instead of
-    // spinning — iOS's `handleBufferDisappeared`.
+    // spinning — the conversation's `BufferWatch`.
     var restored by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         if (restored) return@LaunchedEffect
         restored = true
         if (navigator.currentDestination?.contentKey != null) return@LaunchedEffect
         val key = uiPreferences.lastOpenBufferKey ?: return@LaunchedEffect
-        navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, BufferRoute.of(key))
+        navigation.withLock { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, BufferRoute.of(key)) }
     }
 
-    // Side by side — the list beside the conversation rather than instead of it. iOS's
-    // `marksOpenBuffer`: it gates the list's open mark and decides which pane carries the banner.
-    val value = navigator.scaffoldValue
-    val sideBySide = value[ListDetailPaneScaffoldRole.List] == PaneAdaptedValue.Expanded &&
-        value[ListDetailPaneScaffoldRole.Detail] == PaneAdaptedValue.Expanded
-    val openRoute = navigator.currentDestination?.contentKey
+    // Open a buffer in the conversation pane. Recording it as the relaunch target is the
+    // conversation's, on appearance (`ConversationScreen.onVisit`), so a launch restore, a join and a
+    // DCC chat count as surely as a pick.
+    //
+    // ⚠ Side by side, a pick REPLACES the conversation rather than stacking a history entry — iOS
+    // replaces the secondary column. The navigator has no replace, so it's a pop then a push in one
+    // locked move: side by side both panes are expanded at either destination, so the scaffold value
+    // never changes and nothing animates — the pane stays put and its content changes (`replacing`
+    // covers the frame between). Without it every pick would grow the saved history by one entry for
+    // the life of the session. On a phone the list is behind the conversation, so a pick there (a
+    // join landing, a DCC chat) pushes: a pop first WOULD change the scaffold value, sliding the
+    // conversation out and back in, and back skips the stacked entry anyway (the scaffold's
+    // `PopUntilScaffoldValueChange` pops to the list).
+    fun openKey(key: BufferKey) {
+        // "Open this buffer" while you're already in it is nothing to do.
+        if (currentRoute()?.key?.id == key.id) return
+        val route = BufferRoute.of(key)
+        clearRename()
+        if (isSideBySide()) replacing = route
+        navigate {
+            try {
+                if (isSideBySide() && navigator.currentDestination?.pane == ListDetailPaneScaffoldRole.Detail) {
+                    navigator.navigateBack(BackNavigationBehavior.PopLatest)
+                }
+                navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, route)
+            } finally {
+                if (replacing == route) replacing = null
+            }
+        }
+    }
 
-    // Opening is navigation plus the record of where a relaunch should land (lurker-ios#49).
-    // Recorded on the pick here; U2 moves this to the conversation's appearance (iOS's
-    // `recordVisit`), so a launch restore, a notification tap or a join counts too, and owns the
-    // other writer iOS has — forgetting it when you back out to the list (`viewDidDisappear`), so
-    // the list is where a relaunch lands after you left a conversation on purpose. Sign-out's
-    // forget is `LurkerApp`'s, a rename's is `LurkerApp`'s, and a close's is below.
-    fun open(buffer: Buffer) {
-        uiPreferences.recordLastOpenBuffer(buffer.key)
-        scope.launch { navigator.navigateTo(ListDetailPaneScaffoldRole.Detail, BufferRoute.of(buffer.key)) }
+    fun open(buffer: Buffer) = openKey(buffer.key)
+
+    // The bar's back arrow — the same move as the system back.
+    fun back() {
+        navigate { if (navigator.canNavigateBack()) navigator.navigateBack() }
+    }
+
+    // The buffer the conversation shows isn't open any more (iOS's `handleBufferDisappeared` →
+    // `showBufferList`): back to the list on a phone; side by side, the conversation pane drops to the
+    // system buffer and the row that just vanished stops being marked. Popped one entry at a time to
+    // the list destination, never by a behaviour that might find nothing to pop — see `navigation`.
+    //
+    // Forgotten as the relaunch target too, for the same reason a close is: restoring into a buffer
+    // that isn't there lands on a spinner.
+    fun leave(key: BufferKey) {
+        navigate {
+            // Already on the way out — a pop in flight, or the reader moved on — so don't stack a
+            // second one.
+            if (currentRoute()?.key?.id != key.id) return@navigate
+            uiPreferences.forgetLastOpenBuffer(ifMatching = key)
+            clearRename()
+            while (navigator.currentDestination?.pane == ListDetailPaneScaffoldRole.Detail &&
+                navigator.canNavigateBack(BackNavigationBehavior.PopLatest)
+            ) {
+                navigator.navigateBack(BackNavigationBehavior.PopLatest)
+            }
+        }
+    }
+
+    // A rename (`AppEvent.BufferRenamed`, or the conversation finding its row under a new key): if
+    // it's the buffer open in the conversation, the route follows — the conversation and the list's
+    // open mark both read it. The relaunch record follows in `LurkerApp` (`rewriteBuffer`).
+    fun follow(from: BufferKey, to: BufferKey) {
+        if (currentRoute()?.key?.id != from.id) return
+        val destination = navigator.currentDestination?.contentKey ?: return
+        val target = BufferRoute.of(to)
+        if (destination == target) {
+            clearRename()
+        } else {
+            renamedFrom = destination
+            renamedTo = target
+        }
+    }
+
+    // Backing out to the list on a phone means the *list* is where you were, not that buffer
+    // (lurker-ios's `viewDidDisappear`): without this the restore target could only ever be a
+    // conversation — leave one on purpose, relaunch, and you're shoved straight back into it, the one
+    // move a home screen is supposed to make unnecessary.
+    //
+    // Only a back-out: the destination going from a buffer to none while one pane is showing. Side by
+    // side, nothing is forgotten by navigation — a pick replaces through the list destination, and the
+    // column rests on the system buffer rather than closing. Not a configuration change either: the
+    // last destination is remembered, not saved, so a recreated scaffold starts from where it is.
+    val destinationRoute = navigator.currentDestination?.contentKey
+    val lastDestination = remember { LastDestination(destinationRoute) }
+    LaunchedEffect(destinationRoute) {
+        val previous = lastDestination.route
+        lastDestination.route = destinationRoute
+        if (previous != null && destinationRoute == null && !isSideBySide() && replacing == null) {
+            uiPreferences.forgetLastOpenBuffer()
+        }
     }
 
     // Leave a channel / close a DM. Shared by the swipe and the menu rather than written twice:
@@ -163,9 +286,8 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
     // buffer is gone; restoring into one that isn't there lands on a spinner, and the launch path
     // can't detect it — so tell it.
     //
-    // If it's the buffer open in the detail pane, it's left there: U2 owns "the buffer
-    // disappeared" (iOS's `handleBufferDisappeared`), which is a decision about the conversation,
-    // not the list.
+    // If it's the buffer open in the detail pane, the conversation notices its row go
+    // (`BufferWatch`) and leaves, as it does for a close on another device.
     fun close(buffer: Buffer) {
         model.closeBuffer(buffer.key)
         uiPreferences.forgetLastOpenBuffer(ifMatching = buffer.key)
@@ -179,11 +301,10 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
             when (event) {
                 // The same move as a pick: the buffer is synthesized when its row hasn't landed yet,
                 // and the conversation hydrates it.
-                is AppEvent.OpenBuffer -> open(model.state.buffer(event.key))
+                is AppEvent.OpenBuffer -> openKey(event.key)
                 // Launched, so a notice waiting out its duration doesn't hold up the queue behind it.
                 is AppEvent.Notice -> launch { snackbar.showSnackbar(event.message) }
-                // U2a: the navigator's route follows a rename (the open conversation, the list's mark).
-                is AppEvent.BufferRenamed -> Unit
+                is AppEvent.BufferRenamed -> follow(event.from, event.to)
             }
         }
     }
@@ -207,16 +328,38 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
             },
             detailPane = {
                 AnimatedPane {
-                    // U2: the conversation replaces this. iOS never shows an empty column — with
-                    // nothing picked it rests on the system buffer, the app's own log — and U2 should
-                    // do the same rather than keep a placeholder whose whole job is dead space.
-                    DetailPanePlaceholder(model = model, route = openRoute)
+                    // On a phone the pane slides away AFTER the destination has gone back to the
+                    // list, so the route it was showing is held for the exit — rather than the
+                    // conversation turning into the system buffer as it leaves.
+                    val held = remember { LastDestination(null) }
+                    if (openRoute != null) held.route = openRoute
+                    val route = openRoute ?: if (sideBySide) null else held.route
+                    // iOS never shows an empty column: side by side with nothing picked, the pane rests
+                    // on the system buffer, the app's own log — and doesn't record it as where you were.
+                    val bufferKey = route?.key ?: Buffer.system.key
+                    // A fresh screen per buffer — its scroll position, revealed spoilers and hydrate
+                    // bookkeeping belong to the buffer, as iOS builds a fresh screen per open.
+                    key(bufferKey.id) {
+                        ConversationScreen(
+                            model = model,
+                            key = bufferKey,
+                            resting = route == null,
+                            showsBack = !sideBySide,
+                            onBack = ::back,
+                            onVisit = { uiPreferences.recordLastOpenBuffer(bufferKey) },
+                            onGone = { leave(bufferKey) },
+                            onMoved = { to -> follow(bufferKey, to) },
+                        )
+                    }
                 }
             },
         )
         SnackbarHost(snackbar, modifier = Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
     }
 }
+
+/** A route remembered across compositions without being state — reading it must not recompose. */
+private class LastDestination(var route: BufferRoute?)
 
 /** Unique to this process — what tells saved state written before a process death from our own. */
 private val processToken: String = java.util.UUID.randomUUID().toString()
@@ -248,39 +391,5 @@ private fun lurkerPaneDirective(): PaneScaffoldDirective {
         )
     } else {
         material.copy(maxHorizontalPartitions = 1, horizontalPartitionSpacerSize = 0.dp)
-    }
-}
-
-/**
- * U2: replaced by the conversation. The open buffer's name, or "Pick a buffer." with nothing open —
- * and the connection banner, which this pane carries whenever it's shown: alone on a phone it is
- * the screen in front of you, and side by side the list yields its banner to it.
- */
-@Composable
-private fun DetailPanePlaceholder(model: ChatViewModel, route: BufferRoute?) {
-    // Mapped to the one string before it becomes state — never a raw `ChatState` (see
-    // `BufferListInputs`).
-    fun name(state: ChatState): String? {
-        val key = route?.key ?: return null
-        val networkName = key.networkId?.let { state.networks[it]?.displayName }
-        return state.buffer(key).displayName(networkName)
-    }
-    val nameFlow = remember(model, route) { model.statePublisher.map(::name).distinctUntilChanged() }
-    val initialName = remember(model, route) { name(model.state) }
-    val shownName by nameFlow.collectAsStateWithLifecycle(initialValue = initialName)
-    val banner = rememberConnectionBannerState(model)
-    Scaffold { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
-            Text(
-                shownName ?: "Pick a buffer.",
-                modifier = Modifier.align(Alignment.Center),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            ConnectionBanner(
-                state = banner,
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp, start = 16.dp, end = 16.dp),
-            )
-        }
     }
 }

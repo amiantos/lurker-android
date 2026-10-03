@@ -25,8 +25,9 @@ class UiPreferences(private val prefs: StringPrefs) {
 
     /**
      * The buffer that was on screen when the app was last used, so a relaunch lands where you
-     * left off (lurker-ios#49). Written by the buffer list and the conversation (U1/U2), read at
-     * launch by U1, and chased through renames by [rewriteBuffer].
+     * left off (lurker-ios#49). Written when a conversation appears and forgotten when the reader
+     * backs out of one to the list (`MainScaffold`), read at launch, and chased through renames by
+     * [rewriteBuffer].
      *
      * Stored as its parts rather than as a `BufferKey.id`, because `id` lower-cases the target and
      * this one is *reconstructed* into a buffer at launch — before any frame has arrived to correct
