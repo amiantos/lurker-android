@@ -3,16 +3,7 @@
 
 package net.amiantos.lurker.ui.networks
 
-import net.amiantos.lurker.platform.findActivity
-import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.Stable
@@ -22,8 +13,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.platform.LocalContext
-import androidx.lifecycle.viewmodel.compose.viewModel
 import net.amiantos.lurkerkit.session.ChatViewModel
 import java.util.UUID
 
@@ -106,67 +95,40 @@ fun NetworkSheetsHost(sheets: NetworkSheets, model: ChatViewModel, onJoin: (netw
         LaunchedEffect(current) { sheets.current = null }
         return
     }
-    val store: NetworksFlowStore = viewModel()
-    val flow = store.flow(current) { NetworksFlow(model, start) }
-    val activity = LocalContext.current.findActivity()
-    // ⚠ Dropped when the dialog closes, and when this host leaves composition for good (sign-out
-    // swaps the whole scaffold out) — but NOT across a configuration change, which is the one
-    // disposal the flow exists to survive.
-    DisposableEffect(current) {
-        onDispose {
-            if (sheets.current != current || activity?.isChangingConfigurations != true) store.discard(current)
-        }
-    }
+    val flow = rememberPagedFlow(current, isOpen = { sheets.current == current }) { NetworksFlow(model, start) }
     NetworksDialog(
         model = model,
         flow = flow,
         onDismiss = {
             sheets.current = null
-            store.discard(current)
+            // Cancelled now, not a composition later when the store drops it: nobody is left to tell.
+            flow.close()
         },
     )
 }
 
-/**
- * A networks dialog: its page stack, drawn top page only. Back pops a pushed page (predictive back
- * included), then dismisses. Inner navigation is the flow's own, not the app's navigator: it's a
- * detour inside one dialog, with nothing in it a deep link or the system's back stack should know.
- */
+/** A networks dialog: its page stack (a [PagedDialog]), and the add flow's finish. */
 @Composable
 private fun NetworksDialog(model: ChatViewModel, flow: NetworksFlow, onDismiss: () -> Unit) {
     val dismiss by rememberUpdatedState(onDismiss)
     LaunchedEffect(flow.finished) { if (flow.finished) dismiss() }
-    FullScreenDialog(onDismissRequest = onDismiss) {
-        BackHandler(enabled = flow.pages.size > 1) { flow.back() }
-        val depth = flow.pages.size
-        AnimatedContent(
-            targetState = depth to flow.pages.last(),
-            transitionSpec = {
-                // A push slides in from the end, a pop back from the start — the platform's own
-                // forward and back.
-                val forward = targetState.first >= initialState.first
-                (slideInHorizontally { width -> if (forward) width / 4 else -width / 4 } + fadeIn())
-                    .togetherWith(slideOutHorizontally { width -> if (forward) -width / 4 else width / 4 } + fadeOut())
-            },
-            label = "networks page",
-        ) { (pageDepth, page) ->
-            val isRoot = pageDepth == 1
-            when (page) {
-                is NetworksPage.List -> NetworksListPage(
-                    model = model,
-                    state = page.state,
-                    onClose = onDismiss,
-                    onAdd = flow::pushPicker,
-                    onEdit = flow::pushEdit,
-                )
-                is NetworksPage.Picker -> NetworkPickerPage(
-                    state = page.state,
-                    exit = if (isRoot) PageExit.Close else PageExit.Back,
-                    onExit = { if (!flow.back()) onDismiss() },
-                    onPicked = flow::pushAdd,
-                )
-                is NetworksPage.Form -> NetworkFormPage(state = page.state, onBack = { flow.back() })
-            }
+    PagedDialog(flow = flow, onDismiss = onDismiss, label = "networks page") { pageDepth, page ->
+        val isRoot = pageDepth == 1
+        when (page) {
+            is NetworksPage.List -> NetworksListPage(
+                model = model,
+                state = page.state,
+                onClose = onDismiss,
+                onAdd = flow::pushPicker,
+                onEdit = flow::pushEdit,
+            )
+            is NetworksPage.Picker -> NetworkPickerPage(
+                state = page.state,
+                exit = if (isRoot) PageExit.Close else PageExit.Back,
+                onExit = { if (!flow.back()) onDismiss() },
+                onPicked = flow::pushAdd,
+            )
+            is NetworksPage.Form -> NetworkFormPage(state = page.state, onBack = { flow.back() })
         }
     }
 }

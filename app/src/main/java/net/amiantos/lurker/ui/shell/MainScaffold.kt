@@ -7,6 +7,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.CompositionLocalProvider
 import net.amiantos.lurker.ui.settings.SettingsDialog
+import net.amiantos.lurker.ui.bufferinfo.BufferSheetsHost
+import net.amiantos.lurker.ui.bufferinfo.rememberBufferSheets
 import net.amiantos.lurker.ui.networks.rememberNetworkSheets
 import net.amiantos.lurker.ui.networks.NetworkSheetsHost
 import net.amiantos.lurker.platform.findActivity
@@ -39,7 +41,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowSizeClass
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withTimeoutOrNull
+import java.time.Instant
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -82,6 +89,12 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
     fun navigate(move: suspend () -> Unit) {
         scope.launch { navigation.withLock { move() } }
     }
+
+    // The conversation's members, info and profile dialogs (U5) — here for the networks dialogs' reason:
+    // the conversation is rebuilt under a new key when its buffer is renamed, and a dialog hosted inside
+    // it would close mid-edit. See `BufferSheets`.
+    val bufferSheets = rememberBufferSheets()
+    val pendingOpen = remember { PendingOpenJob() }
 
     // Whether a settled list has been drawn this session — the buffer list's burst gate
     // (`BufferListModel.drawsList`). Here rather than in the list because on a phone the list pane
@@ -230,6 +243,9 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
     // buffer that's already open reaches the conversation in place (`jumpedInPlace`), without
     // rebuilding it. The message id is the server's stored id (`Message.id`), never a row index.
     fun open(key: BufferKey, jumpTo: Long? = null) {
+        // Any navigation supersedes a DM still waiting for its row (`openWhenListed`).
+        pendingOpen.job?.cancel()
+        pendingOpen.job = null
         val current = currentRoute()
         if (current?.key?.id == key.id) {
             // "Open this buffer" while you're already in it is nothing to do — unless it's a jump.
@@ -254,6 +270,25 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
 
     fun openBuffer(buffer: Buffer) = open(buffer.key)
 
+    // A DM just asked for with `open-buffer` — a profile's Send Message, `/msg`, `/query`: opened once
+    // its row is listed, never before (`PendingOpen`). Already listed, it opens at once. Not saved: a
+    // rotation inside the sub-second wait drops the navigation, never the DM.
+    fun openWhenListed(key: BufferKey) {
+        if (model.state.buffers[key.id] != null) {
+            open(key)
+            return
+        }
+        pendingOpen.job?.cancel()
+        val pending = PendingOpen.of(key)
+        pendingOpen.job = scope.launch {
+            val outcome = withTimeoutOrNull(PendingOpen.patience.toMillis() + 1_000) {
+                model.statePublisher.map { pending.settle(it.buffers, Instant.now()) }.first { it !is PendingOpen.Outcome.Waiting }
+            }
+            pendingOpen.job = null
+            if (outcome is PendingOpen.Outcome.Open) open(outcome.key)
+        }
+    }
+
     // The bar's back arrow — the same move as the system back.
     fun back() {
         navigate { if (navigator.canNavigateBack()) navigator.navigateBack() }
@@ -267,6 +302,8 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
     // Forgotten as the relaunch target too, for the same reason a close is: restoring into a buffer
     // that isn't there lands on a spinner.
     fun leave(key: BufferKey) {
+        // A members or info dialog about it has nothing left to describe (U5).
+        bufferSheets.dismissIfAbout(key)
         navigate {
             // Already on the way out — a pop in flight, or the reader moved on — so don't stack a
             // second one.
@@ -286,6 +323,8 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
     // it's the buffer open in the conversation, the route follows — the conversation and the list's
     // open mark both read it. The relaunch record follows in `LurkerApp` (`rewriteBuffer`).
     fun follow(from: BufferKey, to: BufferKey) {
+        // An open members/info/profile dialog follows too, whichever buffer it's about (U5).
+        bufferSheets.follow(from, to)
         if (currentRoute()?.key?.id != from.id) return
         val destination = navigator.currentDestination?.contentKey ?: return
         val target = BufferRoute.of(to)
@@ -361,6 +400,7 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
                 // conversation hydrates it.
                 is AppEvent.OpenBuffer -> {
                     sheets.dismiss()
+                    bufferSheets.dismiss()
                     showingSettings = false
                     open(event.key, jumpTo = event.jumpTo)
                 }
@@ -418,8 +458,11 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
                             onGone = { leave(bufferKey) },
                             onMoved = { to -> follow(bufferKey, to) },
                             uiPreferences = uiPreferences,
-                            // `/msg` and `/query` — the same move as a pick.
-                            onOpenBuffer = { to -> open(to) },
+                            // `/msg` and `/query` — a pick, once the DM they asked for is listed.
+                            onOpenBuffer = { to -> openWhenListed(to) },
+                            onShowMembers = { bufferSheets.showMembers(bufferKey) },
+                            onShowInfo = { bufferSheets.showInfo(bufferKey) },
+                            onShowProfile = { networkId, nick -> bufferSheets.showProfile(networkId, nick) },
                         )
                     }
                 }
@@ -445,6 +488,8 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
                 },
             )
         }
+        // Over the conversation it's about: Send Message closes it and opens the DM, as iOS's `leaveSheet`.
+        BufferSheetsHost(sheets = bufferSheets, model = model, onOpenBuffer = { key -> openWhenListed(key) })
         // After Settings, so a networks list opened from it is the window on top.
         NetworkSheetsHost(sheets = sheets, model = model) { networkId, channel ->
             model.requestJoin(networkId = networkId, channel = channel, opens = true)
@@ -455,6 +500,9 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
 
 /** Saves the consumed jump requests with the navigator's history. */
 private val JumpLedgerSaver = Saver<JumpLedger, LongArray>(save = { it.saved() }, restore = { JumpLedger(it.toList()) })
+
+/** The DM open waiting for its row, if any — not state: nothing draws it. */
+private class PendingOpenJob(var job: Job? = null)
 
 /** A route remembered across compositions without being state — reading it must not recompose. */
 private class LastDestination(var route: BufferRoute?)
