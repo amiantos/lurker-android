@@ -26,6 +26,9 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import net.amiantos.lurker.ui.media.MediaSource
+import net.amiantos.lurker.ui.media.MediaViewerHost
+import net.amiantos.lurker.ui.media.rememberMediaViewer
 import net.amiantos.lurker.ui.networks.PagedDialog
 import net.amiantos.lurker.ui.networks.PagedFlow
 import net.amiantos.lurker.ui.networks.rememberPagedFlow
@@ -196,7 +199,13 @@ class UploadsBrowserState(private val model: ChatViewModel, private val scope: C
         grid = next
         val wanted = !revert.original.favorite
         scope.launch {
-            val refusal = withContext(NonCancellable) { model.setUploadFavorite(id = item.id, favorite = wanted) } ?: return@launch
+            val refusal = withContext(NonCancellable) { model.setUploadFavorite(id = item.id, favorite = wanted) }
+            if (refusal == null) {
+                grid = grid.starred(revert)
+                return@launch
+            }
+            // Put back only if this toggle is still the row's latest and the row still exists
+            // (`UploadsGrid.revert`); the refusal is said either way — the server didn't change.
             grid = grid.revert(revert)
             alert = UploadsAlert(if (wanted) "Couldn't Star" else "Couldn't Unstar", refusal)
         }
@@ -305,6 +314,16 @@ internal class UploadsFlow(model: ChatViewModel) : PagedFlow<UploadsBrowserState
 fun UploadsSheetsHost(sheets: UploadsSheets, model: ChatViewModel, onAddToMessage: (BufferKey, String) -> Unit) {
     val open = sheets.current ?: return
     val flow = rememberPagedFlow(open.token, isOpen = { sheets.current?.token == open.token }) { UploadsFlow(model) }
+    // The app's media viewer (U8a's), over this dialog: View opens a gallery of the grid's viewable rows.
+    // Its own state and source rather than the scaffold's, for two reasons. The source: the scaffold's
+    // (`MediaSource.of`) answers nothing while the instance has link previews off — right for previews,
+    // whose bytes come through the preview proxy, and wrong here, where a picture is the account's own
+    // upload fetched from its own address. And the window: hosted inside this dialog, the viewer is drawn
+    // over it, and closing it comes back to the grid.
+    val viewer = rememberMediaViewer()
+    val media = remember(model) {
+        MediaSource(fetch = { path -> model.proxiedMedia(path) }, playable = { path, mime -> model.playableMediaURL(path, mime) })
+    }
     PagedDialog(flow = flow, onDismiss = sheets::dismiss, label = "uploads page") { _, state ->
         val target = open.insertInto
         UploadsPage(
@@ -316,6 +335,8 @@ fun UploadsSheetsHost(sheets: UploadsSheets, model: ChatViewModel, onAddToMessag
                     onAddToMessage(key, url)
                 }
             },
+            onView = viewer::show,
         )
+        MediaViewerHost(viewer, media)
     }
 }

@@ -90,6 +90,7 @@ import net.amiantos.lurker.ui.networks.PageExit
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
+import net.amiantos.lurkerkit.model.LinkPreview
 import net.amiantos.lurkerkit.model.UploadItem
 import net.amiantos.lurkerkit.model.UploadKind
 import net.amiantos.lurkerkit.model.UploadsFilter
@@ -117,7 +118,13 @@ import java.time.Instant
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun UploadsPage(state: UploadsBrowserState, onClose: () -> Unit, onAddToMessage: ((String) -> Unit)?) {
+internal fun UploadsPage(
+    state: UploadsBrowserState,
+    onClose: () -> Unit,
+    onAddToMessage: ((String) -> Unit)?,
+    /** Open the media viewer on a gallery of the grid's viewable rows, at the picked one. */
+    onView: (List<LinkPreview>, Int) -> Unit = { _, _ -> },
+) {
     val context = LocalContext.current
     val grid = state.grid
     val keyboard = LocalSoftwareKeyboardController.current
@@ -132,7 +139,14 @@ internal fun UploadsPage(state: UploadsBrowserState, onClose: () -> Unit, onAddT
     }
     val perform: (UploadItem, UploadAction) -> Unit = { item, action ->
         when (action) {
-            UploadAction.View, UploadAction.OpenInBrowser -> if (item.removed) state.reportTombstone() else openInBrowser(context, item.url)
+            UploadAction.View -> when {
+                item.removed -> state.reportTombstone()
+                // A gallery over every viewable row in the grid, positioned on this one; nothing to
+                // present after all, and the browser can have it.
+                else -> UploadTiles.gallery(grid.items, item)?.let { (previews, start) -> onView(previews, start) }
+                    ?: openInBrowser(context, item.url)
+            }
+            UploadAction.OpenInBrowser -> if (item.removed) state.reportTombstone() else openInBrowser(context, item.url)
             UploadAction.AddToMessage -> onAddToMessage?.invoke(item.url)
             UploadAction.Star, UploadAction.Unstar -> state.toggleStar(item)
             UploadAction.CopyLink -> if (item.removed) state.reportTombstone() else copyLink(context, item.url)
@@ -559,8 +573,7 @@ private fun share(context: Context, url: String) {
 }
 
 /**
- * Hand the file to the browser. U8: the media viewer (U8a) takes images and video here once it can be
- * given an upload — iOS opens a gallery over every viewable row in the grid.
+ * Hand the file to the browser — text, and whatever the media viewer can't present (`UploadTiles.preview`).
  */
 private fun openInBrowser(context: Context, url: String) {
     try {

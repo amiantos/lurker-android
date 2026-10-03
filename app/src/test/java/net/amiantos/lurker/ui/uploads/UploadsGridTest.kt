@@ -160,6 +160,42 @@ class UploadsGridTest {
     }
 
     @Test
+    fun aRefusalLandingAfterTheDeleteNeverBringsTheRowBack() {
+        val starred = UploadsFilter(favoritesOnly = true)
+        val (loading, request) = UploadsGrid().reload(starred)
+        val grid = loading.firstPage(request, UploadsPage(listOf(item(3, true), item(2, true)))).first
+        // Unstar in the starred view takes the row out; then it's deleted; then the unstar is refused.
+        val (unstarred, revert) = grid.star(grid.items[1])!!
+        val deleted = unstarred.deleted(2)
+        assertEquals(listOf(3), deleted.revert(revert).items.map { it.id })
+        // And a plain row deleted while its star was out stays gone too.
+        val (flipped, again) = deleted.star(deleted.items[0])!!
+        assertEquals(emptyList<Int>(), flipped.deleted(3).revert(again).items.map { it.id })
+    }
+
+    @Test
+    fun anOlderRefusalNeverUndoesANewerToggle() {
+        val grid = loaded(3, 2, 1)
+        val (starred, first) = grid.star(grid.items[0])!!
+        val (unstarred, second) = starred.star(starred.items[0])!!
+        assertFalse(unstarred.items[0].favorite)
+        // The first toggle's refusal lands last-but-one: the row stays as the newer toggle left it.
+        val afterFirst = unstarred.revert(first)
+        assertFalse(afterFirst.items[0].favorite)
+        // The newer toggle's own refusal still puts back what it changed.
+        assertTrue(afterFirst.revert(second).items[0].favorite)
+    }
+
+    @Test
+    fun aStarTheServerTookHasNothingLeftToRevert() {
+        val grid = loaded(3, 2, 1)
+        val (starred, revert) = grid.star(grid.items[0])!!
+        val settled = starred.starred(revert)
+        assertTrue(settled.pendingStars.isEmpty())
+        assertEquals(settled, settled.revert(revert))
+    }
+
+    @Test
     fun aDeleteRemovesTheRowAndMovesTheCursor() {
         val grid = loaded(3, 2, 1).deleted(1)
         assertEquals(listOf(3, 2), grid.items.map { it.id })
@@ -198,11 +234,40 @@ class UploadsGridTest {
     fun addToMessageOnlyWhereThereIsAComposer() {
         val file = item(1, canDelete = true)
         assertEquals(
-            listOf(UploadAction.OpenInBrowser, UploadAction.AddToMessage, UploadAction.Star, UploadAction.CopyLink, UploadAction.Share, UploadAction.Delete),
+            listOf(UploadAction.View, UploadAction.AddToMessage, UploadAction.Star, UploadAction.CopyLink, UploadAction.Share, UploadAction.Delete),
             UploadTiles.actions(file, canInsert = true),
         )
         assertFalse(UploadAction.AddToMessage in UploadTiles.actions(file, canInsert = false))
-        assertEquals(UploadAction.View, UploadTiles.actions(file, canInsert = false, viewable = true).first())
+    }
+
+    @Test
+    fun viewIsOfferedForWhatTheViewerCanShowAndTheBrowserForTheRest() {
+        assertEquals(UploadAction.View, UploadTiles.actions(item(1, mime = "image/png"), canInsert = false).first())
+        assertEquals(UploadAction.View, UploadTiles.actions(item(1, mime = "video/mp4"), canInsert = false).first())
+        assertEquals(UploadAction.OpenInBrowser, UploadTiles.actions(item(1, mime = "text/plain"), canInsert = false).first())
+        assertEquals(UploadAction.OpenInBrowser, UploadTiles.actions(item(1, mime = "application/pdf"), canInsert = false).first())
+        // A clip over cleartext to a public host can't be loaded — the browser, not a failing player.
+        val cleartext = UploadItem(id = 2, url = "http://example.com/a.mp4", mime = "video/mp4")
+        assertEquals(UploadAction.OpenInBrowser, UploadTiles.actions(cleartext, canInsert = false).first())
+    }
+
+    @Test
+    fun anImagePreviewIsTheUploadsOwnAddressAndAClipStreamsFromItsOrigin() {
+        val image = UploadTiles.preview(item(1, mime = "image/png"))!!
+        assertEquals("https://u/1", image.src)
+        val clip = UploadTiles.preview(UploadItem(id = 2, url = "https://u/2", mime = "video/mp4", thumbnailPath = "/api/uploads/2/thumb"))!!
+        assertNull(clip.src)
+        assertEquals("/api/uploads/2/thumb", clip.thumb)
+        assertNull(UploadTiles.preview(item(3, removed = true)))
+    }
+
+    @Test
+    fun theGalleryIsEveryViewableRowAtThePickedOne() {
+        val rows = listOf(item(3), item(2, mime = "text/plain"), item(1, mime = "video/mp4"))
+        val (previews, start) = UploadTiles.gallery(rows, rows[2])!!
+        assertEquals(listOf("https://u/3", "https://u/1"), previews.map { it.url })
+        assertEquals(1, start)
+        assertNull(UploadTiles.gallery(rows, rows[1]))
     }
 
     @Test

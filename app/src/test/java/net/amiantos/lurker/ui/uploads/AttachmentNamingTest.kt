@@ -97,4 +97,12 @@ class AttachmentNamingTest {
         assertEquals("upload.png", name(null, "image/png").filename)
         assertEquals("upload.png", name("", "image/png").filename)
     }
+
+    @Test
+    fun theLaunchCleanupKnowsTheKitsUploadBodiesAndNothingElse() {
+        assertTrue(isUploadBody("lurker-upload-F37F1953-12FF-4D1A-A6FE-9882DFCE3C73.multipart"))
+        assertFalse(isUploadBody("lurker-upload-notes.txt"))
+        assertFalse(isUploadBody("preview-media"))
+        assertFalse(isUploadBody("some-other.multipart"))
+    }
 }
