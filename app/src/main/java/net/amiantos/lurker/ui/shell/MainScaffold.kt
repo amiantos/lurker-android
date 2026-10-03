@@ -3,12 +3,17 @@
 
 package net.amiantos.lurker.ui.shell
 
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.CompositionLocalProvider
+import net.amiantos.lurker.ui.networks.rememberNetworkSheets
+import net.amiantos.lurker.ui.networks.NetworkSheetsHost
+import net.amiantos.lurker.platform.findActivity
+import net.amiantos.lurker.platform.LocalAppEvents
 import android.os.SystemClock
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.adaptive.ExperimentalMaterial3AdaptiveApi
 import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
 import androidx.compose.material3.adaptive.layout.AnimatedPane
@@ -293,22 +298,37 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
         uiPreferences.forgetLastOpenBuffer(ifMatching = buffer.key)
     }
 
-    // The kit's asks of the screen (`AppEvents`), drained for as long as this scaffold is composed.
-    // Queued in between, so a rotation loses none of them.
-    val snackbar = remember { SnackbarHostState() }
+    // Join Channel, Add Network and the networks list — full-screen dialogs. Here, not in the list
+    // pane: on a phone the list leaves composition whenever a conversation is shown, and a dialog
+    // hosted there would close (and drop a half-typed form) the moment a join navigated.
+    val sheets = rememberNetworkSheets()
+
+    // The kit's asks of the screen (`AppEvents`), taken for as long as this scaffold is composed.
+    // Attached across a configuration change — that gap is what the queue bridges — and detached
+    // when the screen goes for good, so nothing waits for a launch hours later.
+    val activity = LocalContext.current.findActivity()
+    DisposableEffect(events) {
+        events.attach()
+        onDispose { if (activity?.isChangingConfigurations != true) events.detach() }
+    }
     LaunchedEffect(events) {
         events.events.collect { event ->
             when (event) {
-                // The same move as a pick: the buffer is synthesized when its row hasn't landed yet,
-                // and the conversation hydrates it.
-                is AppEvent.OpenBuffer -> openKey(event.key)
-                // Launched, so a notice waiting out its duration doesn't hold up the queue behind it.
-                is AppEvent.Notice -> launch { snackbar.showSnackbar(event.message) }
+                // iOS's `land(on:)`: anything presented comes down, then the buffer opens — the same
+                // move as a pick; the buffer is synthesized when its row hasn't landed yet, and the
+                // conversation hydrates it.
+                is AppEvent.OpenBuffer -> {
+                    sheets.dismiss()
+                    openKey(event.key)
+                }
                 is AppEvent.BufferRenamed -> follow(event.from, event.to)
+                // Shown by `NoticeHost`, never sent down this channel.
+                is AppEvent.Notice -> Unit
             }
         }
     }
 
+    CompositionLocalProvider(LocalAppEvents provides events) {
     Box(Modifier.fillMaxSize()) {
         NavigableListDetailPaneScaffold(
             navigator = navigator,
@@ -323,6 +343,7 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
                         onOpen = ::open,
                         onClose = ::close,
                         onSignOut = onSignOut,
+                        sheets = sheets,
                     )
                 }
             },
@@ -354,8 +375,17 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
                 }
             },
         )
-        SnackbarHost(snackbar, modifier = Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
+        NoticeHost(events, Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
         ServerErrorDialog(model)
+        // Joining is also switching: you asked for a channel, so land in it — once the server says
+        // you're in (lurker-ios#57). Nothing navigates before then: a join can be refused, and a
+        // screen for a channel you never got into has nothing to show. `requestJoin` opens the
+        // channel when `channel-joined` lands (`AppEvent.OpenBuffer`), and says why when it doesn't
+        // (`AppEvent.Notice`).
+        NetworkSheetsHost(sheets = sheets, model = model) { networkId, channel ->
+            model.requestJoin(networkId = networkId, channel = channel, opens = true)
+        }
+    }
     }
 }
 
