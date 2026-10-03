@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.channel
 
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -17,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.input.KeyboardCapitalization
@@ -38,7 +40,7 @@ import net.amiantos.lurker.ui.networks.FormSectionHeader
 import net.amiantos.lurker.ui.networks.FormSwitchRow
 import net.amiantos.lurker.ui.networks.FormTextField
 import net.amiantos.lurker.ui.networks.PageExit
-import net.amiantos.lurker.ui.shell.AnnouncedSlot
+import net.amiantos.lurker.ui.shell.Announcer
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.BufferKey
@@ -281,35 +283,34 @@ private fun ChannelSettingsContent(
         confirmEnabled = screen.saveEnabled,
         onConfirm = onSave,
     ) { padding ->
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
-            // Save's refusal lands in the last section's footer (`ChannelSettingsModel.withErrors`).
-            val refusalSection = screen.sections.lastOrNull()?.id
-            for (section in screen.sections) {
-                section.header?.let { header -> item(key = "header:${section.id}") { FormSectionHeader(header) } }
-                // Keyed by the row's identity, so a field keeps its focus and caret while the rows
-                // around it come and go — a value row appearing under a switch, an error under Save.
-                for (row in section.items) {
-                    item(key = row.id) {
-                        SettingsItemView(row, keyRevealed, onTopic, onToggle, onValue, onToggleReveal)
+        // Save's refusal lands in the last section's footer (`ChannelSettingsModel.withErrors`), often far
+        // below the reader — so it's announced by an `Announcer` outside the lazy list, always in the
+        // viewport, and drawn in the list without a live region of its own.
+        val refusal = screen.sections.lastOrNull()?.footer?.takeIf { it.isError }?.text
+        Box(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
+                for (section in screen.sections) {
+                    section.header?.let { header -> item(key = "header:${section.id}") { FormSectionHeader(header) } }
+                    // Keyed by the row's identity, so a field keeps its focus and caret while the rows
+                    // around it come and go — a value row appearing under a switch, an error under Save.
+                    for (row in section.items) {
+                        item(key = row.id) {
+                            SettingsItemView(row, keyRevealed, onTopic, onToggle, onValue, onToggleReveal)
+                        }
                     }
-                }
-                // The section a refusal can land in keeps its footer slot with or without one, and draws the
-                // standing note and the refusal through the same node — so a save refused while the page is
-                // open is a change TalkBack reads out (`AnnouncedSlot`), and only the refusal announces.
-                val footer = section.footer
-                if (footer != null || section.id == refusalSection) {
-                    item(key = "footer:${section.id}") {
-                        AnnouncedSlot(words = footer?.text, modifier = Modifier.fillMaxWidth(), live = footer?.isError == true) {
+                    section.footer?.let { footer ->
+                        item(key = "footer:${section.id}") {
                             Text(
-                                footer?.text.orEmpty(),
+                                footer.text,
                                 modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 4.dp),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (footer?.isError == true) LurkerTheme.colors.badText else MaterialTheme.colorScheme.onSurfaceVariant,
+                                color = if (footer.isError) LurkerTheme.colors.badText else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
                     }
                 }
             }
+            Announcer(words = refusal, modifier = Modifier.padding(padding).align(Alignment.TopStart))
         }
     }
 }

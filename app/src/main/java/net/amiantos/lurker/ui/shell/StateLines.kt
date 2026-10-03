@@ -64,6 +64,23 @@ fun AnnouncedSlot(
 }
 
 /**
+ * An [AnnouncedSlot] with nothing drawn: 1dp, invisible, there only to announce [words] when they
+ * change. For a message that lives in a LAZY list — a refusal footer, a profile's lookup line: an
+ * item scrolled off screen isn't composed at all, so a slot inside the list couldn't announce a
+ * refusal landing far below the reader. The caller hosts this outside the list, in the page's own
+ * box where it is always in the viewport, and draws the visible message in the list with no live
+ * region of its own, so it's said once.
+ *
+ * ⚠ It carries the words, so TalkBack's swipe order meets them here as well as at the visible
+ * message — the price of an announcement that a lazy list can't make, and the reason [live] words
+ * are the only ones to give it.
+ */
+@Composable
+fun Announcer(words: String?, modifier: Modifier = Modifier, live: Boolean = words != null) {
+    AnnouncedSlot(words = words, modifier = modifier, live = live) {}
+}
+
+/**
  * "Couldn't load more." and the button that asks again, at the foot of a paged list (the feeds,
  * Search, the uploads grid). Paging fires as rows come on screen, and at the bottom none ever will
  * again — so the way to ask again is said, and tapped, here.

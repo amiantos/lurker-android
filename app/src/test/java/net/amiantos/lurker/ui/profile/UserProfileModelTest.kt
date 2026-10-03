@@ -112,6 +112,20 @@ class UserProfileModelTest {
         )
         // Still waiting on the reply (nothing to draw yet), whatever MONITOR says: no outcome to announce.
         assertNull(UserProfileModel.lookupOutcome(inputs(presence = FriendPresence.Online), "alice"))
+    }
+
+    /**
+     * A refresh (or a reopen) over a cached reply: the details stay on screen with no status line, but
+     * the outcome goes quiet until the new reply lands — so the same answer is read out again, as a change.
+     */
+    @Test
+    fun aRefreshOverCachedDetailsGoesQuietUntilItLands() {
+        val cached = WhoisResult(nick = "alice", realName = "A")
+        val refreshing = inputs(whois = cached, looking = true, presence = FriendPresence.Online)
+        assertNull(UserProfileModel.lookupOutcome(refreshing, "alice"))
+        // The cached details still draw meanwhile.
+        assertTrue(rows(refreshing).contains(ProfileRow.Detail("Real name", "A")))
+        assertEquals("alice, Online", UserProfileModel.lookupOutcome(refreshing.copy(isLookingUp = false), "alice"))
         assertEquals(
             "alice, Away — lunch",
             UserProfileModel.lookupOutcome(inputs(whois = WhoisResult(nick = "alice", realName = "A", away = "lunch")), "alice"),
