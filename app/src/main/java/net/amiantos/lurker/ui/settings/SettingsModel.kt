@@ -190,14 +190,14 @@ object SettingsModel {
      * honored by the time it ships.
      */
     val chatSettings: List<Pair<String, String>> = listOf(
-        // U3: the composer's typing signal reads this (the kit's `setTyping` already gates on it).
+        // The composer's typing signal honors it — the gate is the kit's `setTyping`.
         "chat.send_typing_notifications" to "Send typing notifications",
-        // U2b/U3: the message list's scroll rule on send (iOS `keepsPositionWhileReading`) reads this.
+        // The composer's send and the keyboard's arrival read it (`ComposerModel.keepsPositionWhileReading`).
         "chat.keep_position_on_send" to "Stay put when you send",
         // Composing rather than reading, which is the one row here that isn't about what the app does
         // with a message that ARRIVES. It sits under Chat anyway: one row is not a section, and an
         // "Input" header over a single pull-down would be filing for its own sake.
-        // U3: the @ picker and Reply read it (`NickCompletion.addressPunctuation`).
+        // The composer's @ completion and Reply read it (`NickCompletion.addressPunctuation`).
         "input.completion.nick_suffix" to "Address nicks with",
         // What a bare /away or /back, and the away strip's Back, reach: off, the network you're on;
         // on, every network (lurker#994). Composing again, so it sits beside the suffix. The server

@@ -155,8 +155,10 @@ class LurkerApp : Application() {
         // (lurker#270). U6: the offer prompt (iOS `DccOfferPrompt`).
         model.onDccChatOpened = { key -> events.send(AppEvent.OpenBuffer(key)) }
 
-        // U3: the server refused a line — the composer for that buffer refills from `takeUnsent`.
-        model.onSendRefused = { _ -> }
+        // The server refused a line (lurker-ios#128): the composer showing that buffer refills from
+        // `takeUnsent`. A nudge only — the line waits in the kit, and a composer that isn't on screen
+        // drains it the next time it is (`ComposerState.restoreRefused`).
+        model.onSendRefused = { key -> events.sendRefused(key) }
 
         // None here: iOS hangs its one-shot migration of a device-local favorites list off this.
         // Android never had a local favorites list, so there is nothing to migrate.

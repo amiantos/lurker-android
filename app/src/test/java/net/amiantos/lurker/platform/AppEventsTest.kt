@@ -3,6 +3,8 @@
 
 package net.amiantos.lurker.platform
 
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
@@ -88,5 +90,16 @@ class AppEventsTest {
         events.detach()
         events.send(AppEvent.Notice("late"))
         assertTrue(events.notices.value.isEmpty())
+    }
+
+    @Test
+    fun aRefusalNudgesEveryComposerListeningAndNeverQueues() = runBlocking {
+        val events = AppEvents()
+        // Nobody listening: dropped, not replayed later — the line waits in the kit's hold instead.
+        events.sendRefused(a)
+        val heard = async(start = CoroutineStart.UNDISPATCHED) { events.refusals.take(2).toList() }
+        events.sendRefused(b)
+        events.sendRefused(a)
+        assertEquals(listOf(b, a), heard.await())
     }
 }

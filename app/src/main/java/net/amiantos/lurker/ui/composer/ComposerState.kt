@@ -1,0 +1,520 @@
+// Copyright (c) 2026 Brad Root
+// SPDX-License-Identifier: MPL-2.0
+
+package net.amiantos.lurker.ui.composer
+
+import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.SoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
+import androidx.lifecycle.compose.LifecycleStartEffect
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.conflate
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import net.amiantos.lurker.platform.AppEvent
+import net.amiantos.lurker.platform.LocalAppEvents
+import net.amiantos.lurkerkit.model.BufferKey
+import net.amiantos.lurkerkit.model.BufferKind
+import net.amiantos.lurkerkit.model.ComposerDraft
+import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.NickCompletion
+import net.amiantos.lurkerkit.model.OutgoingTyping
+import net.amiantos.lurkerkit.model.PendingReply
+import net.amiantos.lurkerkit.model.Replies
+import net.amiantos.lurkerkit.session.ChatViewModel
+import net.amiantos.lurkerkit.store.SocketStatus
+import java.time.Instant
+
+/**
+ * One buffer's composer: the field, the pending reply, the suggestions and the chrome, and every
+ * conversation the composer has with the kit — send, the refused-line restore, the synced draft,
+ * the typing signal, `/back`. lurker-ios's `ComposerBar` state plus the composer half of
+ * `ChatViewController` (MARKs "Typing (#61)", "Replies (iOS #184)", "Draft (iOS #188)", `send`,
+ * `restoreRefusedSend`, `viewWillDisappear`'s flush). The decisions are [ComposerModel]'s; this
+ * keeps the bookkeeping that tells one kind of change from another.
+ *
+ * **Three kinds of change, three hooks**, as iOS keeps them apart:
+ *  - *the text changed* → the typing signal (`onDraftChange`): for the user's edits and the
+ *    composer's own (a completion, a send's clear) — they change what's being composed too — but
+ *    ⚠⚠ never a [restore]: telling the CHANNEL you resumed typing because the server handed your
+ *    own line back would be a lie;
+ *  - *the user changed the field* → the synced draft (`onEdit`): its text, or whether an IME is
+ *    composing in it. Again never a restore — the composer put that text there and knows what it
+ *    is — and not deduped against what the channel was told, which a restore leaves behind;
+ *  - *the caret moved* → the completion under it.
+ *
+ * The field is observed (`snapshotFlow`), which arrives a frame late and can't say who changed it,
+ * so every programmatic edit runs [fieldChanged] itself, synchronously, and leaves the trackers
+ * agreeing with the field — the late observation then finds nothing new. A restore sets the
+ * trackers WITHOUT running the hooks, which is the whole of what makes it silent.
+ *
+ * IME: a `TextFieldState` handles composition natively (no `v-model` freeze, the web's lurker bug),
+ * and the composer never acts on Enter at all — Return inserts a newline and sending is the
+ * button's job, as on iOS — so nothing here can commit or cut a word the IME still holds.
+ */
+@Stable
+internal class ComposerState(
+    private val model: ChatViewModel,
+    val key: BufferKey,
+    val kind: BufferKind,
+    private val scope: CoroutineScope,
+) {
+    // MARK: - What the screen hands in (set every composition — see `rememberComposerState`)
+
+    /** The lines this buffer renders, newest last — what nick completion ranks recency by. */
+    internal var messages: () -> List<Message> = { emptyList() }
+
+    /** About to send: put the list where the send should leave it (`ComposerModel.sendScroll`). */
+    internal var onWillSend: () -> Unit = {}
+
+    /** `/msg` / `/query` opened a DM and asks to switch to it. */
+    internal var onOpenBuffer: (BufferKey) -> Unit = {}
+
+    /** `/whois` — open the profile rather than leaving the numerics as the only answer. */
+    internal var onShowProfile: (networkId: Int, nick: String) -> Unit = { _, _ -> }
+
+    internal var keyboard: SoftwareKeyboardController? = null
+
+    /** A passing notice — the app's snackbar (`AppEvent.Notice`). */
+    internal var notice: (String) -> Unit = {}
+
+    // MARK: - What the bar draws
+
+    private val initialDraft: ComposerDraft? = model.draft(key)
+
+    /** The field. Opened on the buffer's draft — this device's unflushed edit, else the server's. */
+    val field = TextFieldState(initialText = initialDraft?.body ?: "")
+
+    val focusRequester = FocusRequester()
+
+    /**
+     * The reply this composer is writing, shown above the field. The next plain line or `/me` goes
+     * out as it. Part of the draft (lurker-ios#188), so it syncs and comes back with the text.
+     */
+    var reply: PendingReply? by mutableStateOf(initialDraft?.reply)
+        private set
+
+    /** The pills over the field, best first. */
+    var suggestions: List<Suggestion> by mutableStateOf(emptyList())
+        private set
+
+    /** Who you speak as, and whether you're away — from state, not typing. */
+    var chrome: ComposerChrome by mutableStateOf(ComposerChrome.of(ComposerChrome.Inputs.of(model.state, key, kind)))
+        internal set
+
+    /** Whether an IME is mid-composition — marked text the keyboard hasn't committed yet. */
+    val isComposing: Boolean get() = this.field.composition != null // `this.`: bare `field` is the backing field
+
+    // MARK: - Bookkeeping
+
+    /** The field as the trackers last saw it — what tells a text change from a caret move. */
+    private var lastSeenText: String = field.text.toString()
+
+    /**
+     * The draft as of the last typing hook — what the CHANNEL was told. ⚠ Not advanced by a
+     * restore: the channel was told nothing, so deleting a restored line back to empty still emits
+     * nothing, and typing one character still emits. The draft the field opened on is a restore too.
+     */
+    private var lastEmittedDraft: String = ""
+
+    /** The field as the draft hook last saw it, so a caret move isn't an edit. */
+    private var lastEdit: Pair<String, Boolean> = lastSeenText to false
+
+    /**
+     * The completion last computed — in a holder, so "not computed yet" differs from "none". Seeded
+     * from the draft the field opened on, as a restore seeds it: a half-typed `/join #li` coming back
+     * when the buffer opens is not someone in the middle of typing it, and mustn't pop the pills.
+     */
+    private var lastCompletion: Array<Completion?>? = arrayOf(ComposerModel.completion(lastSeenText, lastSeenText.length, lastSeenText.length))
+
+    /** The completion the pills were built for — what a pick inserts into. */
+    private var activeCompletion: Completion? = null
+
+    /** Set while the composer puts a draft in itself, so the reply that comes with it isn't saved back. */
+    private var isShowingDraft = false
+
+    /** The stored draft as this composer last saw it, so only a change to it repaints the field. */
+    private var lastSeenDraft: ComposerDraft? = model.state.drafts[key.id]
+
+    private val typing = ComposerTyping { signal -> model.setTyping(key, signal) }
+
+    /** Fires once the draft has sat untouched long enough to downgrade `active` → `paused`. */
+    private var typingIdle: Job? = null
+
+    /** The resolved `input.completion.nick_suffix`, read off the store at the moment it's used. */
+    private val punctuation: String get() = NickCompletion.addressPunctuation(model.state.settings)
+
+    // MARK: - The field changed
+
+    /** A snapshot of the field, as the trackers compare it. */
+    internal data class Snapshot(val text: String, val selection: TextRange, val composing: Boolean)
+
+    internal fun snapshot() = Snapshot(field.text.toString(), field.selection, field.composition != null)
+
+    /** The field changed — by the user (observed) or by the composer itself (called directly). */
+    internal fun fieldChanged(now: Snapshot) {
+        val textChanged = now.text != lastSeenText
+        lastSeenText = now.text
+        if (textChanged && now.text != lastEmittedDraft) {
+            lastEmittedDraft = now.text
+            draftChanged(now.text)
+        }
+        emitCompletion(now)
+        reportEdit(now)
+    }
+
+    /** Recompute the completion under the caret, and the pills, only when it changed. */
+    private fun emitCompletion(now: Snapshot) {
+        val computed = ComposerModel.completion(now.text, now.selection.min, now.selection.max)
+        val last = lastCompletion
+        if (last != null && last[0] == computed) return
+        lastCompletion = arrayOf(computed)
+        activeCompletion = computed
+        suggestions = ComposerModel.suggestions(
+            computed,
+            channels = { query -> ComposerModel.channelCandidates(model.state.buffers.values, key.networkId, query) },
+            nicks = { query ->
+                val state = model.state
+                NickCompletion.candidates(
+                    messages = messages(),
+                    members = state.visibleMembers(key),
+                    selfNick = key.networkId?.let { state.networks[it]?.nick },
+                    query = query,
+                    isChannel = kind == BufferKind.Channel,
+                    ignores = state.ignores,
+                    networkId = key.networkId,
+                    channel = key.target,
+                )
+            },
+        )
+    }
+
+    /** Tell the draft the field changed, if it did. */
+    private fun reportEdit(now: Snapshot) {
+        val edit = now.text to now.composing
+        if (edit == lastEdit) return
+        lastEdit = edit
+        saveDraft()
+    }
+
+    /** Swap the field's text for [edit] and run the hooks — every programmatic edit but a restore. */
+    private fun apply(edit: FieldEdit) {
+        field.edit {
+            replace(0, length, edit.text)
+            selection = TextRange(edit.caret)
+        }
+        fieldChanged(snapshot())
+    }
+
+    /**
+     * Put a refused line back, as typed (lurker-ios#128) — or a draft, which may be empty: another
+     * device emptied it (lurker-ios#188). Caret at the end, so carrying on writing needs no tap.
+     *
+     * ⚠⚠ Silently: no typing signal (the channel would hear you resumed typing because the server
+     * handed your own message back), no draft write (the caller decides), and no pills (they'd pop
+     * over a restored `/msg bob hi` nobody is in the middle of writing).
+     *
+     * ⚠⚠ And it does NOT raise the keyboard. Nothing the user did asked for this — shoving the
+     * keyboard up over a conversation they may have gone back to reading is the app talking over
+     * them. The text appearing in the field is the whole message.
+     */
+    private fun restore(text: String) {
+        field.edit {
+            replace(0, length, text)
+            selection = TextRange(text.length)
+        }
+        lastSeenText = text
+        lastEdit = text to false
+        lastCompletion = arrayOf(ComposerModel.completion(text, text.length, text.length))
+        activeCompletion = null
+        suggestions = emptyList()
+    }
+
+    // MARK: - Typing (lurker-ios#61)
+
+    /** The draft changed — tell the network, and re-arm the idle downgrade. */
+    private fun draftChanged(draft: String) {
+        val arm = typing.draftChanged(draft, Instant.now())
+        typingIdle?.cancel()
+        typingIdle = null
+        if (!arm) return
+        typingIdle = scope.launch {
+            delay(OutgoingTyping.idle.toMillis())
+            typingIdle = null
+            // The draft captured here is the latest one: any change re-arms this timer.
+            typing.idled(draft, Instant.now())
+        }
+    }
+
+    /** Stop claiming to type — on send, and on leaving. Silent when we weren't. */
+    private fun endTyping() {
+        typingIdle?.cancel()
+        typingIdle = null
+        typing.ended()
+    }
+
+    // MARK: - Draft (lurker-ios#188)
+
+    /** The composer changed — save it as this buffer's draft. */
+    private fun saveDraft() {
+        if (isShowingDraft) return
+        model.editDraft(key, ComposerDraft(body = field.text.toString(), reply = reply), composing = isComposing)
+    }
+
+    private fun changeReply(next: PendingReply?) {
+        if (next == reply) return
+        reply = next
+        saveDraft()
+    }
+
+    /** Fill the composer with a draft: its text and its reply. Null empties both. */
+    private fun showDraft(draft: ComposerDraft?) {
+        isShowingDraft = true
+        try {
+            val shown = draft ?: ComposerDraft()
+            if (field.text.toString() != shown.body) restore(shown.body)
+            changeReply(shown.reply)
+        } finally {
+            isShowingDraft = false
+        }
+    }
+
+    /**
+     * The stored draft changed — another device's write, a snapshot, or this composer's own flush
+     * coming back (which matches the field, and changes nothing). Asks the view model whether a write
+     * is being held off rather than trusting the store's copy, which the hold never touched.
+     */
+    internal fun storedDraftChanged(stored: ComposerDraft?) {
+        val repaint = ComposerModel.repaintsDraft(stored, lastSeenDraft, protected = model.isDraftProtected(key))
+        lastSeenDraft = stored
+        if (repaint) showDraft(stored)
+    }
+
+    /**
+     * The composer is going away, or the app is — iOS's `viewWillDisappear`. The channel stops
+     * hearing you're mid-sentence now rather than in 30 seconds, and what was typed goes to the server
+     * now rather than half a second after you've gone.
+     *
+     * ⚠ Not mid-composition: flushing would close the marker on a word the IME still holds. The IME
+     * commits it as the field goes, and that edit arrives the ordinary way — or, when the app is
+     * backgrounding, the kit's `enterBackground` takes the composing draft too.
+     */
+    internal fun leave() {
+        endTyping()
+        if (!isComposing) model.flushDraft(key)
+    }
+
+    /** Leaving the field is the end of an edit, as leaving the buffer is: the web's blur. */
+    internal fun focusLost() {
+        model.flushDraft(key)
+    }
+
+    // MARK: - Send
+
+    /**
+     * The send button — iOS's `send(_:)`. The field isn't cleared until the line is handed over,
+     * and every outcome clears it: a command's answer (an error included) prints in the buffer as
+     * a local line, which is where the kit puts it.
+     */
+    fun send() {
+        val text = ComposerModel.sendable(field.text.toString()) ?: return
+        // Before the send, not after: the line itself is the end of composing, and a `done` trailing
+        // it would be a second, redundant tag. The clear below re-enters `draftChanged` with an empty
+        // field, a no-op once this has run.
+        endTyping()
+        onWillSend()
+        val outcome = model.send(key, text, reply)
+        // Spent if the line went out as it — a plain line or a `/me`. Any other command leaves it
+        // pending, as the web does. A refusal brings it back with the line (`restoreRefused`).
+        if (Replies.consumes(text)) changeReply(null)
+        apply(FieldEdit("", 0))
+        // Emptied on the server now, not on the debounce: a quick close or a switch to another
+        // device would otherwise find the line just sent still waiting there.
+        model.flushDraft(key)
+        // The field is free again, so anything still waiting can come back. Without this a second
+        // refused line sat in the hold until the composer next appeared, which for someone staying
+        // in one conversation is never.
+        restoreRefused()
+        when (outcome) {
+            is ChatViewModel.SendOutcome.Activate -> onOpenBuffer(outcome.key)
+            is ChatViewModel.SendOutcome.ShowProfile -> {
+                // The keyboard is ALWAYS up here — the command was just typed — and a sheet would land
+                // behind it.
+                keyboard?.hide()
+                onShowProfile(outcome.networkId, outcome.nick)
+            }
+            ChatViewModel.SendOutcome.None -> Unit
+        }
+    }
+
+    /**
+     * Put a refused line back in the composer, if one is waiting for this buffer and the field is
+     * free for it (`ComposerModel.canRestoreRefused`) — otherwise it stays held for a later moment.
+     * With the reply it went out as, and straight to the server as the draft: a restore isn't an
+     * edit the field reports, and leaving it on the debounce could lose what just came back.
+     *
+     * Says nothing: the text appearing in the field is the whole message.
+     */
+    internal fun restoreRefused() {
+        if (!ComposerModel.canRestoreRefused(field.text.toString(), reply)) return
+        val line = model.takeUnsent(key) ?: return
+        restore(line.text)
+        changeReply(line.reply)
+        saveDraft()
+        model.flushDraft(key)
+    }
+
+    // MARK: - Suggestions
+
+    /** A pill was tapped: insert it the way its context says, and keep the keyboard where it was. */
+    fun pick(suggestion: Suggestion) {
+        val selection = field.selection
+        val edit = ComposerModel.pick(
+            field.text.toString(), selection.min, selection.max, activeCompletion, suggestion.value, punctuation,
+        ) ?: return
+        apply(edit)
+    }
+
+    // MARK: - Replies (lurker-ios#184)
+
+    /**
+     * Reply to [message] — the seam U6's message actions call (lurker-ios#60). Pass the line as the
+     * list SHOWS it (a relayed line as the person inside it), since that's whom the Reply addresses
+     * and a cancel un-addresses. See `ComposerModel.replyPlan` for the rules.
+     */
+    fun startReply(message: Message) {
+        val plan = ComposerModel.replyPlan(message, key.target, model.state.canReact(networkId = key.networkId), reply) ?: return
+        if (plan.cancelFirst) cancelReply()
+        plan.start?.let(::changeReply)
+        val nick = plan.address
+        if (nick != null) {
+            val (edit, inserted) = ComposerModel.address(field.text.toString(), nick, punctuation) ?: return
+            apply(edit)
+            // The tap that got here was a request to write something.
+            focus()
+            if (inserted && plan.marksAddressed) reply?.let { changeReply(it.copy(addressed = true)) }
+        } else if (plan.start != null) {
+            focus()
+        }
+    }
+
+    /**
+     * The strip's ✕ (or Escape): drop the pending reply, and take back the `nick: ` its Reply put in
+     * the draft — only if the Reply put it there; one the user typed stays.
+     */
+    fun cancelReply() {
+        val cancelled = reply ?: return
+        changeReply(null)
+        if (cancelled.addressed) {
+            ComposerModel.removeAddress(field.text.toString(), cancelled.nick, punctuation)?.let(::apply)
+        }
+    }
+
+    private fun focus() {
+        focusRequester.requestFocus()
+        keyboard?.show()
+    }
+
+    // MARK: - Away (lurker-ios#135)
+
+    /**
+     * The away strip's Back: `/back` on this network, scoped as a typed `/back` is (lurker#994). No
+     * local change — the strip comes down when the server's `away-state` echo folds in, on every
+     * device at once.
+     *
+     * ⚠ Asked of the connection, not of the send: a dropped socket stays assigned until the
+     * reconnect replaces it, so a write onto it "succeeds" and goes nowhere. And of BOTH signals:
+     * airplane mode flips `reachable` while the socket still reads connected, for as long as it takes
+     * to notice. Nothing retries a Back, so say so, or the strip staying put reads as a Back that
+     * ignored you.
+     */
+    fun back() {
+        val state = model.state
+        if (state.reachable && state.connection == SocketStatus.Connected) {
+            model.setBack(key.networkId)
+        } else {
+            notice("Not connected — try again when you're back online")
+        }
+    }
+}
+
+/**
+ * The composer for [key], kept for the life of the conversation screen, with the effects that keep
+ * it current: the field's own changes, the stored draft, the chrome, the refused-line nudge, and
+ * the flush on leaving.
+ *
+ * @param messages the lines the list renders, newest last — read when a nick completion is asked for.
+ * @param onWillSend put the list where a send should leave it, before the line goes.
+ */
+@Composable
+internal fun rememberComposerState(
+    model: ChatViewModel,
+    key: BufferKey,
+    kind: BufferKind,
+    messages: () -> List<Message>,
+    onWillSend: () -> Unit,
+    onOpenBuffer: (BufferKey) -> Unit,
+    onShowProfile: (networkId: Int, nick: String) -> Unit,
+): ComposerState {
+    val scope = rememberCoroutineScope()
+    val state = remember(model, key) { ComposerState(model, key, kind, scope) }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val events = LocalAppEvents.current
+    SideEffect {
+        state.messages = messages
+        state.onWillSend = onWillSend
+        state.onOpenBuffer = onOpenBuffer
+        state.onShowProfile = onShowProfile
+        state.keyboard = keyboard
+        state.notice = { text -> events?.send(AppEvent.Notice(text)) }
+    }
+
+    // The user's edits, caret moves and compositions. The composer's own edits have already been
+    // seen by the time these arrive, and dedupe away.
+    LaunchedEffect(state) {
+        snapshotFlow { state.snapshot() }.collect(state::fieldChanged)
+    }
+    // The draft another device wrote (lurker-ios#188). Its own stream: it moves the composer and
+    // nothing else.
+    LaunchedEffect(state) {
+        model.statePublisher.map { it.drafts[key.id] }.distinctUntilChanged().conflate().collect(state::storedDraftChanged)
+    }
+    // The prompt and the away strip (lurker-ios#135). Two dedupes: the raw inputs first, which costs
+    // next to nothing when they haven't moved, and only what gets past that searches the nicklist —
+    // someone else's away-notify flip moves the list, not our modes.
+    LaunchedEffect(state) {
+        model.statePublisher
+            .conflate()
+            .map { ComposerChrome.Inputs.of(it, key, kind) }
+            .distinctUntilChanged(ComposerChrome.Inputs::same)
+            .map(ComposerChrome::of)
+            .distinctUntilChanged()
+            .collect { state.chrome = it }
+    }
+    // A line the server refused, for this buffer, while the composer is here.
+    LaunchedEffect(state, events) {
+        events?.refusals?.collect { refused -> if (refused.id == key.id) state.restoreRefused() }
+    }
+    // Coming into view drains a refusal that landed while this composer didn't exist or wasn't
+    // looked at (iOS's `viewDidAppear`); leaving — the buffer, or the app — ends typing and flushes.
+    LifecycleStartEffect(state) {
+        state.restoreRefused()
+        onStopOrDispose { state.leave() }
+    }
+    return state
+}
