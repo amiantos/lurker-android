@@ -15,6 +15,7 @@ import net.amiantos.lurker.platform.AppEvents
 import net.amiantos.lurker.ui.dcc.DccOffers
 import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.signin.SignInScreen
+import net.amiantos.lurker.ui.uploads.UploadServices
 import kotlinx.coroutines.flow.StateFlow
 import net.amiantos.lurkerkit.session.ChatViewModel
 
@@ -38,6 +39,7 @@ fun AppRoot(
     uiPreferences: UiPreferences,
     events: AppEvents,
     dccOffers: DccOffers,
+    uploads: UploadServices,
     signInNotice: StateFlow<String?>,
     lastServerURL: () -> String,
     onSignIn: (server: String) -> Unit,
@@ -48,7 +50,14 @@ fun AppRoot(
         // Keyed on signed-in or not, so `LoggedOut` ↔ `LoggingIn` doesn't rebuild the form.
         Crossfade(targetState = session == ChatViewModel.SessionState.LoggedIn, label = "root") { signedIn ->
             if (signedIn) {
-                MainScaffold(model = model, uiPreferences = uiPreferences, events = events, dccOffers = dccOffers, onSignOut = model::logout)
+                MainScaffold(
+                    model = model,
+                    uiPreferences = uiPreferences,
+                    events = events,
+                    dccOffers = dccOffers,
+                    uploads = uploads,
+                    onSignOut = model::logout,
+                )
             } else {
                 SignInScreen(model = model, notice = signInNotice, initialServer = lastServerURL(), onSignIn = onSignIn)
             }

@@ -9,6 +9,15 @@ import androidx.compose.runtime.CompositionLocalProvider
 import net.amiantos.lurker.ui.settings.SettingsDialog
 import net.amiantos.lurker.ui.bufferinfo.BufferSheetsHost
 import net.amiantos.lurker.ui.feeds.FeedSheetsHost
+import net.amiantos.lurker.ui.feeds.AppView
+import net.amiantos.lurker.ui.uploads.AttachmentSource
+import net.amiantos.lurker.ui.uploads.LocalUploadServices
+import net.amiantos.lurker.ui.uploads.SharePickerDialog
+import net.amiantos.lurker.ui.uploads.UploadReportDialog
+import net.amiantos.lurker.ui.uploads.UploadServices
+import net.amiantos.lurker.ui.uploads.UploadsSheetsHost
+import net.amiantos.lurker.ui.uploads.rememberUploadsSheets
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import net.amiantos.lurker.ui.feeds.rememberFeedSheets
 import net.amiantos.lurker.ui.bufferinfo.rememberBufferSheets
 import net.amiantos.lurker.ui.networks.rememberNetworkSheets
@@ -87,6 +96,7 @@ fun MainScaffold(
     uiPreferences: UiPreferences,
     events: AppEvents,
     dccOffers: DccOffers,
+    uploads: UploadServices,
     onSignOut: () -> Unit,
 ) {
     // The content key is the buffer the detail pane shows, in parts a Bundle can hold — the
@@ -406,6 +416,35 @@ fun MainScaffold(
     val mediaViewer = rememberMediaViewer()
     val media = remember(model) { MediaSource.of(model) }
 
+    // The uploads browser (U8) — here for the feeds' reason. Opened from a conversation it can Add to
+    // Message into that conversation's composer; from the list it can't, there being no composer there.
+    val uploadsSheets = rememberUploadsSheets()
+
+    // A view from a menu: the uploads browser, or one of the feeds. [from] is the conversation that asked,
+    // if one did — the one place Add to Message has somewhere to go.
+    fun openView(view: AppView, from: BufferKey? = null) {
+        if (view == AppView.Uploads) uploadsSheets.show(insertInto = from) else feedSheets.show(view)
+    }
+
+    // A share from another app (lurker-android#15), once the reader has said which conversation: open it
+    // — the same move as a pick — and put the text in its composer; the files go through the same run as
+    // the paperclip, their links landing in that composer as it comes on screen. A run already under
+    // way keeps the files out, and says so: two runs at once would interleave their links.
+    fun sendShare(key: BufferKey) {
+        val share = uploads.shares.take() ?: return
+        sheets.dismiss()
+        bufferSheets.dismiss()
+        feedSheets.dismiss()
+        uploadsSheets.dismiss()
+        mediaViewer.dismiss()
+        showingSettings = false
+        open(key)
+        share.text?.let { text -> uploads.inserts.insert(key, text) }
+        if (share.streams.isNotEmpty() && !uploads.runner.start(share.streams.map { AttachmentSource.Content(it) })) {
+            events.send(AppEvent.Notice("An upload is already in progress — share again once it's done"))
+        }
+    }
+
     // The kit's asks of the screen (`AppEvents`), taken for as long as this scaffold is composed.
     // Attached across a configuration change — that gap is what the queue bridges — and detached
     // when the screen goes for good, so nothing waits for a launch hours later.
@@ -425,6 +464,7 @@ fun MainScaffold(
                     bufferSheets.dismiss()
                     feedSheets.dismiss()
                     mediaViewer.dismiss()
+                    uploadsSheets.dismiss()
                     showingSettings = false
                     open(event.key, jumpTo = event.jumpTo)
                 }
@@ -435,7 +475,7 @@ fun MainScaffold(
         }
     }
 
-    CompositionLocalProvider(LocalAppEvents provides events) {
+    CompositionLocalProvider(LocalAppEvents provides events, LocalUploadServices provides uploads) {
     Box(Modifier.fillMaxSize()) {
         NavigableListDetailPaneScaffold(
             navigator = navigator,
@@ -451,7 +491,7 @@ fun MainScaffold(
                         onClose = ::close,
                         onOpenSettings = { showingSettings = true },
                         sheets = sheets,
-                        onOpenView = { view -> feedSheets.show(view) },
+                        onOpenView = { view -> openView(view) },
                     )
                 }
             },
@@ -489,7 +529,7 @@ fun MainScaffold(
                             onShowInfo = { bufferSheets.showInfo(bufferKey) },
                             onShowProfile = { networkId, nick -> bufferSheets.showProfile(networkId, nick) },
                             sideBySide = sideBySide,
-                            onOpenView = { view -> feedSheets.show(view) },
+                            onOpenView = { view -> openView(view, from = bufferKey) },
                             onOpenMedia = mediaViewer::show,
                             media = media,
                         )
@@ -523,6 +563,14 @@ fun MainScaffold(
         // Over the conversation it's about: Send Message closes it and opens the DM, as iOS's `leaveSheet`.
         BufferSheetsHost(sheets = bufferSheets, model = model, onOpenBuffer = { key -> openWhenListed(key) }, onSearch = feedSheets::showSearch)
         FeedSheetsHost(sheets = feedSheets, model = model, onJump = { key, messageId -> open(key, jumpTo = messageId) })
+        // Add to Message: the file's address into the composer of the conversation that opened the browser
+        // — on screen behind it now, or as soon as it is again.
+        UploadsSheetsHost(sheets = uploadsSheets, model = model) { key, url -> uploads.inserts.insert(key, url) }
+        // A finished run's one dialog, over whatever is up (the run outlives the buffer it started in).
+        UploadReportDialog(uploads.runner)
+        // A share waiting for its conversation — asked as soon as the signed-in app is up.
+        val share by uploads.shares.share.collectAsStateWithLifecycle()
+        if (share != null) SharePickerDialog(model = model, onPick = ::sendShare, onDismiss = { uploads.shares.take() })
         // After Settings, so a networks list opened from it is the window on top.
         NetworkSheetsHost(sheets = sheets, model = model) { networkId, channel ->
             model.requestJoin(networkId = networkId, channel = channel, opens = true)

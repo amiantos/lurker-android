@@ -212,6 +212,8 @@ internal class FeedFlow(model: ChatViewModel, request: FeedRequest) : PagedFlow<
                 AppView.Search -> FeedPage.Search(SearchState(model, request.seed, scope))
                 AppView.Activity -> FeedPage.History(HistoryFeedState(model, HistoryFeed.Activity, scope))
                 AppView.Bookmarks -> FeedPage.History(HistoryFeedState(model, HistoryFeed.Bookmarks, scope))
+                // Never opened here: `MainScaffold` routes Uploads to the uploads browser (`UploadsSheets`).
+                AppView.Uploads -> error("Uploads is the uploads browser's, not a feed")
             },
         )
     }

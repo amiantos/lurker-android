@@ -516,6 +516,25 @@ internal class ComposerState(
         restoreRefused()
     }
 
+    // MARK: - Insert (lurker-ios#14)
+
+    /**
+     * Drop [text] in from outside the field — a finished upload's link, the uploads browser's Add to
+     * Message, a share's text (`ComposerInserts`). See [ComposerInsert] for where it goes and when the
+     * keyboard comes up. An edit like any other the composer makes: the draft hears it, and so does the
+     * typing signal — the field genuinely holds a line being composed now.
+     */
+    fun insert(text: String, atCaret: Boolean) {
+        val current = field.selection
+        val result = ComposerInsert.insert(field.text.toString(), current.min, current.max, text, atCaret)
+        field.edit {
+            replace(0, length, result.text)
+            selection = TextRange(result.selectionStart, result.selectionEnd)
+        }
+        fieldChanged(snapshot())
+        if (result.focuses) focus()
+    }
+
     private fun focus() {
         focusRequester.requestFocus()
         keyboard?.show()
