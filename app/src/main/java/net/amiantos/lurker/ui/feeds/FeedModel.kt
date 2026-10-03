@@ -8,10 +8,13 @@ import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.ParagraphStyle
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.sp
+import net.amiantos.lurker.ui.actions.SpoilerSafeText
 import net.amiantos.lurker.ui.message.CompactHeader
 import net.amiantos.lurker.ui.message.MessageText
 import net.amiantos.lurker.ui.message.MessageTextStyle
@@ -89,7 +92,12 @@ class FeedRowCache(private val render: (HighlightItem) -> FeedRow) {
 }
 
 /** A reply's quote line — the answered line, or null for "unavailable". */
-data class FeedReply(val quote: ReplyQuote?)
+data class FeedReply(
+    /** The quote as drawn: the list's quote line, its text spoiler-safe ([FeedModel.replyQuote]). */
+    val shown: AnnotatedString,
+    /** What TalkBack says for it, every spoiler box still "hidden spoiler". */
+    val spoken: String,
+)
 
 /**
  * The decisions behind a feed's rows and headers — lurker-ios's `HistoryFeedViewController` table
@@ -214,6 +222,7 @@ object FeedModel {
             line
         }
         val rendered = if (reaction != null) reactionBody(reaction, style) else MessageText.renderCompactBody(shown, style)
+        val indentsBody = shown.type != EventType.Action
         val header = if (name == null && time == null) {
             null
         } else {
@@ -228,9 +237,9 @@ object FeedModel {
             item = item,
             header = header,
             body = inert(rendered),
-            spokenBody = MessageText.spoken(rendered),
-            reply = if (shown.replyTo == null) null else FeedReply(shown.replyQuote),
-            indentsBody = shown.type != EventType.Action,
+            spokenBody = if (reaction != null) reactionSpoken(reaction) else MessageText.spoken(unrevealable(rendered)),
+            reply = if (shown.replyTo == null) null else replyQuote(shown.replyQuote, indentsBody, style),
+            indentsBody = indentsBody,
         )
     }
 
@@ -241,10 +250,74 @@ object FeedModel {
     fun reactionBody(reaction: FeedReaction, style: MessageTextStyle): AnnotatedString =
         buildAnnotatedString {
             withStyle(SpanStyle(color = style.colors.fg)) { append(reaction.value) }
-            val line = reaction.lineText?.let(IRCFormatting::strip) ?: ""
+            // ⚠⚠ Spoiler-safe, not stripped: stripping keeps a hidden box's text, and the colour IS
+            // the hiding — "on “he was a ghost”" would print the secret of your own line.
+            val line = reaction.lineText?.let { SpoilerSafeText.of(it).shown } ?: ""
             withStyle(SpanStyle(color = style.colors.fgMuted)) { append(" on “$line”") }
             val indent = style.indentSp.sp
             addStyle(ParagraphStyle(textIndent = TextIndent(firstLine = indent, restLine = indent)), 0, length)
+        }
+
+    /** [reactionBody] as TalkBack hears it: a hidden box in your line is "hidden spoiler". */
+    fun reactionSpoken(reaction: FeedReaction): String {
+        val line = reaction.lineText?.let { SpoilerSafeText.of(it).spoken } ?: ""
+        return "${reaction.value} on “$line”"
+    }
+
+    /**
+     * A reply's quote line — the list's (`MessageText.renderReplyQuote`: the arm, `<nick> text` in
+     * italics, the nick in its colour), with the quoted text made spoiler-safe ([SpoilerSafeText]).
+     *
+     * ⚠⚠ Not the list's own renderer, which excerpts through `IRCFormatting.strip`: that keeps a hidden
+     * box's text, so a quoted spoiler would be printed above the reply — and read to TalkBack — in a
+     * feed whose rows offer no way to have opened it.
+     */
+    fun replyQuote(quote: ReplyQuote?, indented: Boolean, style: MessageTextStyle): FeedReply {
+        if (quote == null) return FeedReply(MessageText.renderReplyQuote(null, indented, style), MessageText.spokenReplyQuote(null))
+        val safe = SpoilerSafeText.of(quote.text)
+        val shown = buildAnnotatedString {
+            val fg = style.colors.fg
+            withStyle(SpanStyle(color = fg, baselineShift = BaselineShift(REPLY_ARM_LIFT))) { append("╭─ ") }
+            val (open, close) = when (quote.type) {
+                EventType.Action -> "* " to ""
+                EventType.Notice -> "-" to "-"
+                else -> "<" to ">"
+            }
+            withStyle(SpanStyle(color = fg, fontStyle = FontStyle.Italic)) {
+                append(open)
+                withStyle(SpanStyle(color = MessageText.nickColor(quote.nick, quote.isSelf, style))) { append(quote.nick) }
+                append("$close ")
+                val source = quote.relaySource
+                if (!source.isNullOrEmpty()) append("[$source] ")
+                append(Replies.excerpt(safe.shown))
+            }
+            if (indented) {
+                val indent = style.indentSp.sp
+                addStyle(ParagraphStyle(textIndent = TextIndent(firstLine = indent, restLine = indent)), 0, length)
+            }
+        }
+        return FeedReply(shown, "In reply to ${quote.nick}: ${Replies.excerpt(safe.spoken)}")
+    }
+
+    /** The list's lift on the quote's arm (`MessageText`'s, 18% of the size). */
+    private const val REPLY_ARM_LIFT = 0.18f
+
+    /**
+     * [rendered] with every hidden spoiler announced as plain "hidden spoiler" — for the spoken label.
+     * The list marks an id-bearing box "double tap to reveal", but a feed row's double tap is its jump:
+     * no box opens here, so offering to open one would send the reader into a conversation instead.
+     * Only the text and what `MessageText.spokenAnnotated` reads are carried: the links and the boxes.
+     */
+    fun unrevealable(rendered: AnnotatedString): AnnotatedString =
+        buildAnnotatedString {
+            append(rendered.text)
+            for (link in rendered.getLinkAnnotations(0, rendered.length)) {
+                val url = link.item as? LinkAnnotation.Url ?: continue
+                addLink(url, link.start, link.end)
+            }
+            for (box in rendered.getStringAnnotations(MessageText.HIDDEN_TAG, 0, rendered.length)) {
+                addStringAnnotation(MessageText.HIDDEN_TAG, MessageText.HIDDEN_SPOILER, box.start, box.end)
+            }
         }
 
     /**

@@ -18,6 +18,11 @@ import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.store.ChatState
+import net.amiantos.lurker.ui.message.MessageText
+import net.amiantos.lurkerkit.model.Replies
+import net.amiantos.lurkerkit.model.ReplyContext
+import net.amiantos.lurkerkit.model.ReplyParent
+import net.amiantos.lurkerkit.model.RelayBotSet
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -156,6 +161,9 @@ class FeedModelTest {
         val row = FeedModel.row(item(1, text = "it was \u000301,01the butler\u0003 all along"), state, style, zone)
         assertTrue(row.body.text.contains("the butler"))
         assertFalse(row.spokenBody.contains("the butler"))
+        // The row's double tap is its jump, so the box isn't offered as something to open.
+        assertTrue(row.spokenBody, row.spokenBody.contains(MessageText.HIDDEN_SPOILER))
+        assertFalse(row.spokenBody, row.spokenBody.contains("double tap"))
     }
 
     @Test
@@ -183,5 +191,32 @@ class FeedModelTest {
         FeedModel.sections(first, state, style, now, zone, date, render = cache::row)
         FeedModel.sections(first + item(1), state, style, now, zone, date, render = cache::row)
         assertEquals(3, cache.renders)
+    }
+
+    @Test
+    fun aQuotedSpoilerStaysHiddenOnScreenAndToTalkBack() {
+        val quote = Replies.shown(
+            ReplyContext("m1", ReplyParent(id = 3, nick = "alice", type = EventType.Message, text = "it was \u000301,01the butler\u0003")),
+            line = Message(id = 4, type = EventType.Message, nick = "bob", text = "no way", msgid = "m4"),
+            networkId = 1,
+            target = "#lurker",
+            ignores = IgnoreSet.empty,
+            relayBots = RelayBotSet.empty,
+            ownNick = "me",
+        ).quote
+        val reply = FeedModel.replyQuote(quote, indented = true, style)
+        assertFalse(reply.shown.text, reply.shown.text.contains("butler"))
+        assertTrue(reply.shown.text, reply.shown.text.startsWith("╭─ <alice> it was █"))
+        assertEquals("In reply to alice: it was ${MessageText.HIDDEN_SPOILER}", reply.spoken)
+        assertEquals(MessageText.spokenReplyQuote(null), FeedModel.replyQuote(null, indented = false, style).spoken)
+    }
+
+    @Test
+    fun aReactionNeverPrintsTheSpoilerInYourLine() {
+        val reaction = FeedReaction(reactionId = 9, value = "😮", lineText = "the ending: \u000301,01he was a ghost\u0003")
+        val row = FeedModel.row(item(1, nick = "bob", text = "😮", reaction = reaction), state, style, zone)
+        assertFalse(row.body.text, row.body.text.contains("ghost"))
+        assertFalse(row.spokenBody, row.spokenBody.contains("ghost"))
+        assertEquals("😮 on \u201Cthe ending: ${MessageText.HIDDEN_SPOILER}\u201D", row.spokenBody)
     }
 }
