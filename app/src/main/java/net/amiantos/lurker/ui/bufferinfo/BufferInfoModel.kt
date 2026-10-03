@@ -198,7 +198,22 @@ sealed interface InfoRow {
     }
 }
 
-data class InfoSection(val header: String? = null, val footer: String? = null, val rows: List<InfoRow>)
+/**
+ * A section of the page.
+ *
+ * [holdsRefusals] marks a section whose verbs can be refused while the page is open (Connect, Start
+ * New Chat): its footer is drawn in a place that's there with or without words, so a refusal landing
+ * in it is read out rather than leaving a verb that visibly did nothing (#20). [announcesFooter] is
+ * whether the footer IS that refusal right now — a standing note there (the blocked explanation) is
+ * read on focus, not announced, and nor are the other sections' notes (the topic's setter, the date).
+ */
+data class InfoSection(
+    val header: String? = null,
+    val footer: String? = null,
+    val rows: List<InfoRow>,
+    val holdsRefusals: Boolean = false,
+    val announcesFooter: Boolean = false,
+)
 
 /**
  * What a buffer *is*, rather than what's been said in it — lurker-ios's `BufferInfoViewController`,
@@ -281,7 +296,13 @@ object BufferInfoModel {
                 }
                 val verb = live?.let { InfoRow.DccVerb(if (it) DccChatAction.End else DccChatAction.Start) }
                 listOf(
-                    InfoSection(header = "DCC Chat", footer = actionError, rows = listOfNotNull(status, verb)),
+                    InfoSection(
+                        header = "DCC Chat",
+                        footer = actionError,
+                        rows = listOfNotNull(status, verb),
+                        holdsRefusals = true,
+                        announcesFooter = actionError != null,
+                    ),
                     // The Whois row is the peer's — the profile peels the `=` off.
                     InfoSection(rows = listOf(InfoRow.Whois) + searchRows(inputs)),
                     notifications,
@@ -315,6 +336,8 @@ object BufferInfoModel {
             header = "Connection",
             footer = footer,
             rows = listOf(InfoRow.Connection(row.connection.label, row.light)) + row.connectionActions.map { InfoRow.NetworkVerb(it) },
+            holdsRefusals = true,
+            announcesFooter = actionError != null,
         )
     }
 

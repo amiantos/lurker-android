@@ -174,7 +174,7 @@ private fun FormRowContent(row: FormRow, state: NetworkFormState, onImport: () -
     val draft = state.draft
     val existing = state.existing
     when (row) {
-        FormRow.Error -> state.error?.let { FormErrorRow(it) }
+        FormRow.Error -> FormErrorRow(state.error)
         FormRow.Name -> FormTextField(
             label = "Name",
             value = draft.name,
@@ -235,7 +235,7 @@ private fun FormRowContent(row: FormRow, state: NetworkFormState, onImport: () -
         )
         FormRow.ClearServerPassword -> ClearRow(draft.password, "Server Password") { e -> state.edit { it.copy(password = e) } }
         FormRow.CertificateStatus -> CertificateStatusRow(state)
-        FormRow.CertificateError -> state.certificateError?.let { FormErrorRow(it) }
+        FormRow.CertificateError -> FormErrorRow(state.certificateError)
         FormRow.GenerateCertificate -> FormActionRow(
             "Generate Certificate",
             enabled = state.canAddCertificate,

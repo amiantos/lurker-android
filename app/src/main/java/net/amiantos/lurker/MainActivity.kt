@@ -4,12 +4,14 @@
 package net.amiantos.lurker
 
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import net.amiantos.lurker.ui.shell.AppRoot
 import net.amiantos.lurker.ui.theme.LurkerTheme
+import net.amiantos.lurker.ui.uploads.SharePayload
 
 /**
  * The app's one activity. Everything that must outlive it lives in [LurkerApp]; this hosts the
@@ -31,7 +33,14 @@ class MainActivity : ComponentActivity() {
         // relaunch from recents replays the launching intent (flagged); a recreation replays
         // whatever `setIntent` left, which is why a redirect is consumed below once it is read.
         val fromHistory = (intent.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
-        if (!fromHistory) consumeRedirect(intent)
+        if (!fromHistory) {
+            consumeRedirect(intent)
+            // A share only on a FRESH start. A relaunch from recents replays the share that once
+            // launched the app, and so does the system recreating this activity after a process death
+            // — from the ORIGINAL intent, whatever `setIntent` left, with saved state — which would
+            // upload the files a second time. A share to the running task arrives in `onNewIntent`.
+            if (savedInstanceState == null) consumeShare(intent)
+        }
         setContent {
             LurkerTheme {
                 AppRoot(
@@ -39,6 +48,7 @@ class MainActivity : ComponentActivity() {
                     uiPreferences = app.uiPreferences,
                     events = app.events,
                     dccOffers = app.dccOffers,
+                    uploads = app.uploads,
                     signInNotice = app.browserSignIn.notice,
                     lastServerURL = { app.uiPreferences.lastServerURL },
                     onSignIn = app::signIn,
@@ -52,6 +62,28 @@ class MainActivity : ComponentActivity() {
         // Always before the `onResume` that follows it — which is what lets that resume read "no
         // redirect" as "the tab was closed" (see `RedirectWaiter`).
         consumeRedirect(intent)
+        consumeShare(intent)
+    }
+
+    /**
+     * Something shared to Lurker from another app's share sheet (`ACTION_SEND`, `ACTION_SEND_MULTIPLE`):
+     * handed to the share inbox, which the signed-in scaffold asks about — which conversation it goes to
+     * — as soon as it's up. Then stripped from the intent the activity keeps, as a redirect is.
+     *
+     * The files' read grants came with this intent and last as long as this task, which is why the run
+     * copies each one into the cache at its turn rather than reading the provider at upload time.
+     */
+    private fun consumeShare(intent: Intent) {
+        val action = intent.action
+        if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return
+        val streams = if (action == Intent.ACTION_SEND) {
+            listOfNotNull(intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java))
+        } else {
+            intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
+        }
+        val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
+        app.uploads.shares.receive(SharePayload.of(streams.map(Uri::toString), text))
+        setIntent(Intent(this, MainActivity::class.java).setAction(Intent.ACTION_MAIN))
     }
 
     /**

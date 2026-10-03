@@ -64,7 +64,7 @@ class NetworkFormModelTest {
             sections.map { it.id },
         )
         assertEquals(listOf("Connection", "You", "Authentication", "Client Certificate", "Channels", "Proxy", "Advanced"), sections.map { it.header })
-        assertEquals(listOf(FormRow.Name, FormRow.Host, FormRow.Port, FormRow.Tls), sections.section(FormSectionId.Connection).rows)
+        assertEquals(listOf(FormRow.Error, FormRow.Name, FormRow.Host, FormRow.Port, FormRow.Tls), sections.section(FormSectionId.Connection).rows)
         assertEquals(listOf(FormRow.Nick, FormRow.Realname), sections.section(FormSectionId.You).rows)
         assertEquals(
             listOf(FormRow.ConnectCommands, FormRow.Autoconnect, FormRow.VerifyCertificate),
@@ -125,7 +125,7 @@ class NetworkFormModelTest {
     @Test
     fun noCertificateOffersGenerateAndImport() {
         val section = sections().section(FormSectionId.Certificate)
-        assertEquals(listOf(FormRow.GenerateCertificate, FormRow.ImportCertificate), section.rows)
+        assertEquals(listOf(FormRow.CertificateError, FormRow.GenerateCertificate, FormRow.ImportCertificate), section.rows)
         assertNull(section.footer)
     }
 
@@ -146,12 +146,12 @@ class NetworkFormModelTest {
     fun aUsableCertificateCanBeExportedOrRemovedAndAnUnreadableOneOnlyRemoved() {
         val usable = config(certificate = ClientCertificate.Usable(expires = null))
         assertEquals(
-            listOf(FormRow.CertificateStatus, FormRow.ExportCertificate, FormRow.RemoveCertificate),
+            listOf(FormRow.CertificateError, FormRow.CertificateStatus, FormRow.ExportCertificate, FormRow.RemoveCertificate),
             sections(existing = usable).section(FormSectionId.Certificate).rows,
         )
         val unusable = config(certificate = ClientCertificate.Unusable)
         assertEquals(
-            listOf(FormRow.CertificateStatus, FormRow.RemoveCertificate),
+            listOf(FormRow.CertificateError, FormRow.CertificateStatus, FormRow.RemoveCertificate),
             sections(existing = unusable).section(FormSectionId.Certificate).rows,
         )
         assertEquals(
@@ -163,7 +163,7 @@ class NetworkFormModelTest {
     @Test
     fun aStagedCertificateCanBeUndone() {
         val section = sections(draft = NetworkDraft(certificate = CertificateSource.Generate)).section(FormSectionId.Certificate)
-        assertEquals(listOf(FormRow.CertificateStatus, FormRow.UndoCertificate), section.rows)
+        assertEquals(listOf(FormRow.CertificateError, FormRow.CertificateStatus, FormRow.UndoCertificate), section.rows)
     }
 
     @Test

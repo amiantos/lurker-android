@@ -34,6 +34,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -55,6 +56,8 @@ import kotlinx.coroutines.withContext
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormInset
 import net.amiantos.lurker.ui.networks.PageExit
+import net.amiantos.lurker.ui.shell.Announcer
+import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
@@ -215,6 +218,7 @@ internal fun ModeListPage(state: ModeListState, dateTime: (Instant) -> String, o
         meta = { ModeListModel.meta(it, dateTime) },
         onBack = onBack,
         onRefresh = { state.load(byPull = true) },
+        onReload = { state.load() },
         onAdd = { state.adding = "" },
         onCopy = { mask -> scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(state.name, mask))) } },
         onRemove = { mask -> state.change('-', mask) },
@@ -251,6 +255,8 @@ private fun ModeListContent(
     onAdd: () -> Unit,
     onCopy: (String) -> Unit,
     onRemove: (String) -> Unit,
+    /** The list again, without a pull — the failed state's TalkBack "Try Again" (see `StateView`). */
+    onReload: () -> Unit = {},
 ) {
     DialogPage(
         title = title,
@@ -264,7 +270,8 @@ private fun ModeListContent(
     ) { padding ->
         PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(Modifier.fillMaxSize()) {
-                // The refusal leads, where it's seen whether the list is long or empty.
+                // The refusal leads, where it's seen whether the list is long or empty. Not announced from
+                // here — an item scrolled away isn't composed — but by the `Announcer` below.
                 if (footer != null) {
                     item(key = "footer") {
                         Text(
@@ -282,12 +289,21 @@ private fun ModeListContent(
                 }
             }
             // Loading, the fetch's refusal, or an empty list — said in place of rows. A pull shows its
-            // own spinner, so the page's stays away while one is out.
-            when (status) {
-                ModeListStatus.Loading -> if (!refreshing) StateView(title = "Loading…", isLoading = true)
-                is ModeListStatus.Failed -> StateView(title = status.message)
-                is ModeListStatus.Ready -> if (entries.isEmpty()) StateView(title = ModeListModel.EMPTY)
+            // own spinner, so the page's stays away while one is out. One `StateView` for all three, so a
+            // load that fails while the reader waits is a change TalkBack reads out (see `StateView`).
+            val placeholder = when (status) {
+                ModeListStatus.Loading -> if (refreshing) null else StateModel("Loading…", isLoading = true)
+                is ModeListStatus.Failed -> StateModel(status.message)
+                is ModeListStatus.Ready -> if (entries.isEmpty()) StateModel(ModeListModel.EMPTY) else null
             }
+            // The failure's way out is the pull, which TalkBack can't make — offered as an action too, as an
+            // ordinary load, so this view goes to Loading and back rather than hiding behind the pull's spinner.
+            if (placeholder != null) {
+                StateView(placeholder, onRetry = if (status is ModeListStatus.Failed) onReload else null)
+            }
+            // A change refused while the list is open, read out wherever the list is scrolled: outside
+            // the lazy list, always in the viewport (`Announcer`).
+            Announcer(words = footer, modifier = Modifier.align(Alignment.TopStart))
         }
     }
 }

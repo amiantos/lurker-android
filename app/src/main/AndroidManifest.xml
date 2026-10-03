@@ -51,6 +51,31 @@
 
                 <data android:scheme="chat.lurker" />
             </intent-filter>
+            <!--
+                The system share sheet (lurker-android#15): files to upload into a conversation, and text
+                for its composer. The types are the document picker's (UploadContentTypes.forOpening) —
+                what the server stores — plus text, which a share can carry as words rather than a file.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="application/json" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+
+                <data android:mimeType="image/*" />
+                <data android:mimeType="video/*" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="application/json" />
+            </intent-filter>
         </activity>
     </application>
 

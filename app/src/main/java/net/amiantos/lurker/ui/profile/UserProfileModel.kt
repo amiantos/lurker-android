@@ -135,6 +135,34 @@ object UserProfileModel {
         return built
     }
 
+    /**
+     * The lookup's outcome, in words — what the page's one status place announces when a lookup lands
+     * while the reader waits (#20): "alice isn't on this network.", or the Status row's own value
+     * under the nick ("alice, Away — lunch"). Null while a lookup is out (a wait isn't news — the
+     * line says "Looking up alice…" on focus, quietly) and when nothing is known to say.
+     *
+     * ⚠ Null for ANY lookup in flight, not just the status line's `Waiting`: with a cached reply on
+     * screen `ProfileStatus.resolve` drops the line while a refresh is out (the details speak for
+     * themselves), and reading that as "settled" would hold the old outcome through a reopen or a
+     * Refresh — so a refresh answering the same thing would never be read out again. Going null for
+     * the wait is what makes every answer a change. The cached details still draw.
+     */
+    fun lookupOutcome(inputs: ProfileInputs, nick: String): String? {
+        if (inputs.isLookingUp) return null
+        val status = status(inputs, nick)
+        return when (status.statusLine) {
+            ProfileStatus.StatusLine.Waiting -> null
+            ProfileStatus.StatusLine.NotFound -> statusText(ProfileStatus.StatusLine.NotFound, nick)
+            null -> if (status.presence == FriendPresence.Unknown) null else "$nick, ${statusValue(status)}"
+        }
+    }
+
+    /** The Status row's value: the presence, and the away reason beside an away dot — "Away — lunch". */
+    fun statusValue(status: ProfileStatus): String {
+        val title = presenceTitle(status.presence)
+        return status.awayMessage?.let { "$title — $it" } ?: title
+    }
+
     fun statusText(line: ProfileStatus.StatusLine, nick: String): String =
         when (line) {
             ProfileStatus.StatusLine.NotFound -> "$nick isn't on this network."
@@ -155,10 +183,7 @@ object UserProfileModel {
         // ⚠ Omitted rather than shown as "Unknown" while we're still asking. The status LINE above
         // already says "Looking up alice…", and a row asserting we don't know, under a line saying
         // we're finding out, is the same fact told twice.
-        if (status.presence != FriendPresence.Unknown) {
-            val title = presenceTitle(status.presence)
-            add("Status", status.awayMessage?.let { "$title — $it" } ?: title)
-        }
+        if (status.presence != FriendPresence.Unknown) add("Status", statusValue(status))
         if (whois == null) return rows
         add("Real name", whois.realName)
         add("Hostmask", whois.hostmask, copyable = true)

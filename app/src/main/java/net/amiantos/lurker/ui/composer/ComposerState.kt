@@ -516,6 +516,35 @@ internal class ComposerState(
         restoreRefused()
     }
 
+    // MARK: - Insert (lurker-ios#14)
+
+    /**
+     * Drop [text] in from outside the field — a finished upload's link, the uploads browser's Add to
+     * Message, a share's text (`ComposerInserts`). See [ComposerInsert] for where it goes and when the
+     * keyboard comes up. An edit like any other the composer makes: the draft hears it, and so does the
+     * typing signal — the field genuinely holds a line being composed now.
+     */
+    fun insert(text: String, atCaret: Boolean) {
+        val before = field.text.toString()
+        val current = field.selection
+        val result = ComposerInsert.insert(before, current.min, current.max, text, atCaret)
+        val composing = field.composition != null
+        field.edit {
+            if (atCaret) {
+                replace(0, length, result.text)
+                selection = TextRange(result.selectionStart, result.selectionEnd)
+            } else {
+                // ⚠ Appended, never the whole field rewritten: a later link of a run lands while the
+                // user may be mid-word in the caption, and a replace would drop the IME's composition
+                // under them. Nor is the caret moved while they're composing — the word stays theirs.
+                append(result.text.substring(before.length))
+                if (!composing) selection = TextRange(result.selectionStart, result.selectionEnd)
+            }
+        }
+        fieldChanged(snapshot())
+        if (result.focuses) focus()
+    }
+
     private fun focus() {
         focusRequester.requestFocus()
         keyboard?.show()

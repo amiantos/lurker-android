@@ -35,6 +35,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import net.amiantos.lurker.ui.shell.AnnouncedSlot
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 
@@ -76,6 +77,19 @@ internal fun FormSectionFooter(text: String) {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+}
+
+/**
+ * The footer of a section a refusal can land in — a standing note, the refusal, or nothing — drawn
+ * as a [FormSectionFooter] through one node that's there whether or not it has words, so a refusal
+ * arriving while the page is open is read out (`AnnouncedSlot`). [announces]: whether the words are
+ * the refusal; a standing note is read on focus, not announced.
+ */
+@Composable
+internal fun FormRefusalFooter(text: String?, announces: Boolean) {
+    AnnouncedSlot(words = text, modifier = Modifier.fillMaxWidth(), live = announces && text != null) {
+        FormSectionFooter(text.orEmpty())
+    }
 }
 
 /**
@@ -202,16 +216,25 @@ internal fun FormActionRow(title: String, onClick: () -> Unit, destructive: Bool
     )
 }
 
-/** A refusal: the warning glyph and the reason, in the refusal colour. */
+/**
+ * A refusal: the warning glyph and the reason, in the refusal colour — or, with no [message], the
+ * empty place one will land.
+ *
+ * ⚠ Composed whether or not there is a refusal: a save or a write refused while the reader is on the
+ * form is read out where it lands (#20), and only a node that was already there can announce a
+ * change (`AnnouncedSlot`). A caller passes its refusal, null included — never `refusal?.let`.
+ */
 @Composable
-internal fun FormErrorRow(message: String) {
-    Row(
-        Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 10.dp).semantics(mergeDescendants = true) {},
-        verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        Icon(LurkerIcons.Warning, contentDescription = "Error", tint = LurkerTheme.colors.badText, modifier = Modifier.size(20.dp))
-        Text(message, style = MaterialTheme.typography.bodyLarge, color = LurkerTheme.colors.badText)
+internal fun FormErrorRow(message: String?) {
+    AnnouncedSlot(words = message?.let { "Error, $it" }, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 10.dp),
+            verticalAlignment = Alignment.Top,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Icon(LurkerIcons.Warning, contentDescription = null, tint = LurkerTheme.colors.badText, modifier = Modifier.size(20.dp))
+            Text(message.orEmpty(), style = MaterialTheme.typography.bodyLarge, color = LurkerTheme.colors.badText)
+        }
     }
 }
 

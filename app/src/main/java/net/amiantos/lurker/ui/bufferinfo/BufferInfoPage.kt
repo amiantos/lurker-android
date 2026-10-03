@@ -48,6 +48,7 @@ import kotlinx.coroutines.withContext
 import net.amiantos.lurker.platform.MomentText
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormInset
+import net.amiantos.lurker.ui.networks.FormRefusalFooter
 import net.amiantos.lurker.ui.networks.FormSectionFooter
 import net.amiantos.lurker.ui.networks.FormSectionHeader
 import net.amiantos.lurker.ui.networks.PageExit
@@ -223,7 +224,11 @@ private fun BufferInfoContent(
                     Column {
                         section.header?.let { FormSectionHeader(it) }
                         section.rows.forEach { row -> InfoRowView(row, actions) }
-                        section.footer?.let { FormSectionFooter(it) }
+                        if (section.holdsRefusals) {
+                            FormRefusalFooter(section.footer, announces = section.announcesFooter)
+                        } else {
+                            section.footer?.let { FormSectionFooter(it) }
+                        }
                     }
                 }
             }

@@ -3,6 +3,8 @@
 
 package net.amiantos.lurker.ui.conversation
 
+import net.amiantos.lurker.ui.shell.StateModel
+import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
@@ -252,12 +254,12 @@ class ConversationModelTest {
 
     @Test
     fun `the empty state invites per kind`() {
-        assertEquals(EmptyState("No messages yet", "Messages in #lurker will show up here."), ConversationModel.emptyState(BufferKind.Channel, "#lurker"))
-        assertEquals(EmptyState("No messages yet", "Say hello to alice."), ConversationModel.emptyState(BufferKind.Dm, "alice"))
-        assertEquals(EmptyState("No messages yet", "A direct chat with bob."), ConversationModel.emptyState(BufferKind.Dcc, "=bob"))
-        assertEquals(EmptyState("Nothing from the server yet"), ConversationModel.emptyState(BufferKind.Server, ":server:1"))
+        assertEquals(StateModel("No messages yet", StateSymbol.Conversation, "Messages in #lurker will show up here."), ConversationModel.emptyState(BufferKind.Channel, "#lurker"))
+        assertEquals(StateModel("No messages yet", StateSymbol.Conversation, "Say hello to alice."), ConversationModel.emptyState(BufferKind.Dm, "alice"))
+        assertEquals(StateModel("No messages yet", StateSymbol.Conversation, "A direct chat with bob."), ConversationModel.emptyState(BufferKind.Dcc, "=bob"))
+        assertEquals(StateModel("Nothing from the server yet", StateSymbol.Server), ConversationModel.emptyState(BufferKind.Server, ":server:1"))
         assertEquals(
-            EmptyState("Welcome to Lurker", "Run /commands to see what you can do."),
+            StateModel("Welcome to Lurker", StateSymbol.Welcome, "Run /commands to see what you can do."),
             ConversationModel.emptyState(BufferKind.System, ":system:"),
         )
     }

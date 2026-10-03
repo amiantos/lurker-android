@@ -21,7 +21,9 @@ import androidx.compose.ui.unit.dp
  * `chat_bubble_outline`, `tune`, `list`, `help_outline`, `more_horiz`, `check_circle_outline`,
  * `security`, `memory`, `wifi_tethering`, `reply`, `sentiment_satisfied`, `bookmark_border`, `bookmark`,
  * `open_in_new`, `share`, `block`, `alternate_email`, `bookmark_remove`, `play_circle_filled`,
- * `graphic_eq`, `image` — Apache-2.0), so a
+ * `graphic_eq`, `image`, `attach_file`, `photo_library`, `star`, `star_border`, `movie`, `audiotrack`,
+ * `description`, `insert_drive_file`, `delete`, `filter_list`, `link`, `error_outline`, `dns`,
+ * `auto_awesome`, `forum`, `public_off` — Apache-2.0), so a
  * glyph here is the one every Android user already reads. Tinted by the `Icon` that draws it.
  */
 object LurkerIcons {
@@ -414,6 +416,134 @@ object LurkerIcons {
             "Image",
             "M21,19V5c0,-1.1 -0.9,-2 -2,-2H5c-1.1,0 -2,0.9 -2,2v14c0,1.1 0.9,2 2,2h14c1.1,0 2,-0.9 2,-2z" +
                 "M8.5,13.5l2.5,3.01L14.5,12l4.5,6H5l3.5,-4.5z",
+        )
+    }
+
+    // MARK: - Uploads (U8)
+
+    /** The composer's paperclip — iOS's `paperclip`. */
+    val AttachFile: ImageVector by lazy {
+        icon(
+            "AttachFile",
+            "M16.5,6v11.5c0,2.21 -1.79,4 -4,4s-4,-1.79 -4,-4V5c0,-1.38 1.12,-2.5 2.5,-2.5s2.5,1.12 2.5,2.5v10.5" +
+                "c0,0.55 -0.45,1 -1,1s-1,-0.45 -1,-1V6H10v9.5c0,1.38 1.12,2.5 2.5,2.5s2.5,-1.12 2.5,-2.5V5" +
+                "c0,-2.21 -1.79,-4 -4,-4S7,2.79 7,5v12.5c0,3.04 2.46,5.5 5.5,5.5s5.5,-2.46 5.5,-5.5V6h-1.5z",
+        )
+    }
+
+    /** The Uploads view — iOS's `photo.on.rectangle`. */
+    val PhotoLibrary: ImageVector by lazy {
+        icon(
+            "PhotoLibrary",
+            "M22,16V4c0,-1.1 -0.9,-2 -2,-2H8c-1.1,0 -2,0.9 -2,2v12c0,1.1 0.9,2 2,2h12c1.1,0 2,-0.9 2,-2z" +
+                "M11,12l2.03,2.71L16,11l4,5H8l3,-4zM2,6v14c0,1.1 0.9,2 2,2h14v-2H4V6H2z",
+        )
+    }
+
+    /** A starred upload's badge, and Unstar. */
+    val Star: ImageVector by lazy {
+        icon("Star", "M12,17.27L18.18,21l-1.64,-7.03L22,9.24l-7.19,-0.61L12,2 9.19,8.63 2,9.24l5.46,4.73L5.82,21z")
+    }
+
+    /** Star, and the Starred Only filter while it's off. */
+    val StarBorder: ImageVector by lazy {
+        icon(
+            "StarBorder",
+            "M22,9.24l-7.19,-0.62L12,2 9.19,8.63 2,9.24l5.46,4.73L5.82,21 12,17.27 18.18,21l-1.63,-7.03L22,9.24z" +
+                "M12,15.4l-3.76,2.27 1,-4.28 -3.32,-2.88 4.38,-0.38L12,6.1l1.71,4.04 4.38,0.38 -3.32,2.88 1,4.28L12,15.4z",
+        )
+    }
+
+
+    /** A video tile — iOS's `film`. */
+    val Movie: ImageVector by lazy {
+        icon("Movie", "M18,4l2,4h-3l-2,-4h-2l2,4h-3l-2,-4H8l2,4H7L5,4H4c-1.1,0 -1.99,0.9 -1.99,2L2,18c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V4h-4z")
+    }
+
+    /** An audio tile — iOS's `waveform`. */
+    val Audiotrack: ImageVector by lazy {
+        icon("Audiotrack", "M12,3v9.28c-0.47,-0.17 -0.97,-0.28 -1.5,-0.28C8.01,12 6,14.01 6,16.5S8.01,21 10.5,21c2.31,0 4.2,-1.75 4.45,-4H15V6h4V3h-7z")
+    }
+
+    /** A text tile — iOS's `doc.text`. */
+    val Description: ImageVector by lazy {
+        icon(
+            "Description",
+            "M14,2H6c-1.1,0 -1.99,0.9 -1.99,2L4,20c0,1.1 0.89,2 1.99,2H18c1.1,0 2,-0.9 2,-2V8l-6,-6z" +
+                "M16,18H8v-2h8v2zM16,14H8v-2h8v2zM13,9V3.5L18.5,9H13z",
+        )
+    }
+
+    /** A file no kind covers — iOS's `doc`. */
+    val InsertDriveFile: ImageVector by lazy {
+        icon("InsertDriveFile", "M6,2c-1.1,0 -1.99,0.9 -1.99,2L4,20c0,1.1 0.89,2 1.99,2H18c1.1,0 2,-0.9 2,-2V8l-6,-6H6zM13,9V3.5L18.5,9H13z")
+    }
+
+    /** Delete — iOS's `trash`. */
+    val Delete: ImageVector by lazy {
+        icon("Delete", "M6,19c0,1.1 0.9,2 2,2h8c1.1,0 2,-0.9 2,-2V7H6v12zM19,4h-3.5l-1,-1h-5l-1,1H5v2h14V4z")
+    }
+
+    /** The uploads browser's filter menu — iOS's `line.3.horizontal.decrease.circle`. */
+    val FilterList: ImageVector by lazy { icon("FilterList", "M10,18h4v-2h-4v2zM3,6v2h18V6H3zM6,13h12v-2H6v2z") }
+
+    /** Copy Link — iOS's `link`. */
+    val Link: ImageVector by lazy {
+        icon(
+            "Link",
+            "M3.9,12c0,-1.71 1.39,-3.1 3.1,-3.1h4V7H7c-2.76,0 -5,2.24 -5,5s2.24,5 5,5h4v-1.9H7c-1.71,0 -3.1,-1.39 -3.1,-3.1z" +
+                "M8,13h8v-2H8v2zM17,7h-4v1.9h4c1.71,0 3.1,1.39 3.1,3.1s-1.39,3.1 -3.1,3.1h-4V17h4c2.76,0 5,-2.24 5,-5s-2.24,-5 -5,-5z",
+        )
+    }
+
+    /** A notice that something went wrong — iOS's `exclamationmark.circle` (`error_outline`). */
+    val ErrorOutline: ImageVector by lazy {
+        icon(
+            "ErrorOutline",
+            "M11,15h2v2h-2zM11,7h2v6h-2zM11.99,2C6.47,2 2,6.48 2,12s4.47,10 9.99,10C17.52,22 22,17.52 22,12S17.52,2 11.99,2z" +
+                "M12,20c-4.42,0 -8,-3.58 -8,-8s3.58,-8 8,-8 8,3.58 8,8 -3.58,8 -8,8z",
+        )
+    }
+
+    /** An empty server log — iOS's `server.rack` (`dns`). */
+    val Dns: ImageVector by lazy {
+        icon(
+            "Dns",
+            "M20,13H4c-0.55,0 -1,0.45 -1,1v6c0,0.55 0.45,1 1,1h16c0.55,0 1,-0.45 1,-1v-6c0,-0.55 -0.45,-1 -1,-1z" +
+                "M7,19c-1.1,0 -2,-0.9 -2,-2s0.9,-2 2,-2 2,0.9 2,2 -0.9,2 -2,2z" +
+                "M20,3H4c-0.55,0 -1,0.45 -1,1v6c0,0.55 0.45,1 1,1h16c0.55,0 1,-0.45 1,-1V4c0,-0.55 -0.45,-1 -1,-1z" +
+                "M7,9c-1.1,0 -2,-0.9 -2,-2s0.9,-2 2,-2 2,0.9 2,2 -0.9,2 -2,2z",
+        )
+    }
+
+    /** The system buffer's welcome — iOS's `sparkles` (`auto_awesome`). */
+    val AutoAwesome: ImageVector by lazy {
+        icon(
+            "AutoAwesome",
+            "M19,9l1.25,-2.75L23,5l-2.75,-1.25L19,1l-1.25,2.75L15,5l2.75,1.25L19,9z" +
+                "M11.5,9.5L9,4 6.5,9.5 1,12l5.5,2.5L9,20l2.5,-5.5L17,12l-5.5,-2.5z" +
+                "M19,15l-1.25,2.75L15,19l2.75,1.25L19,23l1.25,-2.75L23,19l-2.75,-1.25L19,15z",
+        )
+    }
+
+    /** An empty buffer list — iOS's `bubble.left.and.bubble.right` (`forum`). */
+    val Forum: ImageVector by lazy {
+        icon(
+            "Forum",
+            "M21,6h-2v9H6v2c0,0.55 0.45,1 1,1h11l4,4V7c0,-0.55 -0.45,-1 -1,-1z" +
+                "M17,12V3c0,-0.55 -0.45,-1 -1,-1H3c-0.55,0 -1,0.45 -1,1v14l4,-4h10c0.55,0 1,-0.45 1,-1z",
+        )
+    }
+
+    /** No networks on offer in the picker — iOS's `network.slash` (`public_off`). */
+    val PublicOff: ImageVector by lazy {
+        icon(
+            "PublicOff",
+            "M11,8.17L6.49,3.66C8.07,2.61 9.96,2 12,2c5.52,0 10,4.48 10,10c0,2.04 -0.61,3.93 -1.66,5.51l-1.46,-1.46" +
+                "C19.59,14.87 20,13.48 20,12c0,-3.35 -2.07,-6.22 -5,-7.41V5c0,1.1 -0.9,2 -2,2h-2V8.17z" +
+                "M21.19,21.19l-1.41,1.41l-2.27,-2.27C15.93,21.39 14.04,22 12,22C6.48,22 2,17.52 2,12" +
+                "c0,-2.04 0.61,-3.93 1.66,-5.51L1.39,4.22l1.41,-1.41L21.19,21.19z" +
+                "M11,18c-1.1,0 -2,-0.9 -2,-2v-1l-4.79,-4.79C4.08,10.79 4,11.38 4,12c0,4.08 3.05,7.44 7,7.93V18z",
         )
     }
 

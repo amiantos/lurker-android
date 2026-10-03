@@ -5,6 +5,7 @@ package net.amiantos.lurkerkit.session
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -12,6 +13,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import net.amiantos.lurkerkit.client.HistoryMode
 import net.amiantos.lurkerkit.client.Incompatibility
@@ -300,6 +302,8 @@ class ChatViewModel(
     ): Boolean {
         sessionSubject.value = SessionState.LoggingIn
         statusSubject.value = null
+        // The previous session's media purge finishes before this one can cache or stage anything.
+        awaitMediaPurge()
         val server = ServerAddress.normalize(server)
         // The transport policy runs before any request, so its verdict is sign-in copy rather
         // than a failed connect (lurker-ios#29).
@@ -363,6 +367,38 @@ class ChatViewModel(
     }
 
     /**
+     * The sign-out purge of the media cache and the staged clips, in flight — what the next
+     * session's first media work waits behind ([awaitMediaPurge]).
+     */
+    private var mediaPurge: Job? = null
+
+    /**
+     * Delete the departing account's preview bytes and staged clips: the on-disk HTTP cache and the
+     * staged-media directory.
+     *
+     * Port note: LurkerKit does this on the main actor, under its own thread model; Android moves
+     * the disk work off main, onto `Dispatchers.IO` in this model's scope. Not fire-and-forget,
+     * though: the job is held, and `signIn` and `playableMediaURL` (the one path that stages
+     * media) join it first, so a quick sign-in again never has its fresh files deleted behind it.
+     * A process that dies before the purge finishes is covered at the next launch — a restore that
+     * finds no session runs it again (`restoreSession`); it costs an empty directory and an empty
+     * cache when there was nothing left.
+     */
+    private fun purgeMedia() {
+        val previous = mediaPurge
+        mediaPurge = scope.launch(Dispatchers.IO) {
+            previous?.join()
+            client.clearMediaCache()
+            client.clearStagedMedia()
+        }
+    }
+
+    /** Wait out a sign-out's media purge, if one is still running. */
+    private suspend fun awaitMediaPurge() {
+        mediaPurge?.join()
+    }
+
+    /**
      * The deliberate sign-out. Local teardown is immediate — the client revokes
      * server-side in the background — so the bounce to sign-in never waits on the network.
      *
@@ -397,8 +433,10 @@ class ChatViewModel(
         // ⚠ And the BYTES, which are the part that actually identifies a reading history. The
         // decoded-image cache goes via the closure above (it's the platform's, this module isn't);
         // this drops the on-disk HTTP cache the images were served from.
-        client.clearMediaCache()
-        client.clearStagedMedia()
+        //
+        // Port note: LurkerKit purges these on the main actor, under its own thread model; Android
+        // moves the disk work off main — see `purgeMedia`, started at the same point in the teardown.
+        purgeMedia()
         features = InstanceFeatures()
         lastPreviewToggles = null
         store.reset()
@@ -670,8 +708,11 @@ class ChatViewModel(
      * Port note: the address as text, as the client hands it back (an absolute address as
      * `HttpUrl` writes it, or a staged file's `file:` URI).
      */
-    suspend fun playableMediaURL(path: String, mime: String?): String? =
-        client.playableMediaURL(path = path, mime = mime)
+    suspend fun playableMediaURL(path: String, mime: String?): String? {
+        // It stages a file a sign-out's purge would otherwise delete under it (`purgeMedia`).
+        awaitMediaPurge()
+        return client.playableMediaURL(path = path, mime = mime)
+    }
 
     /**
      * Fetch a page of bookmarks. Same cursor contract as `fetchHighlights`, and the
@@ -1931,6 +1972,8 @@ class ChatViewModel(
         val saved = sessions.load()
         if (saved == null) {
             sessionSubject.value = SessionState.LoggedOut
+            // A process that died right after a sign-out never finished its purge (`purgeMedia`).
+            purgeMedia()
             return
         }
         // A session persisted before the transport policy (lurker-ios#29) can name a server the
@@ -2394,8 +2437,10 @@ class ChatViewModel(
         // preview caches but left `features` asserting the departing instance's answer, so a
         // 401-bounce followed by signing in elsewhere primed against a flag nobody had checked.
         // The two teardowns lead to the same screen and must leave the same state behind.
-        client.clearMediaCache()
-        client.clearStagedMedia()
+        //
+        // Port note: as in `logout()` — LurkerKit purges on the main actor; Android moves the disk
+        // work off main (`purgeMedia`).
+        purgeMedia()
         features = InstanceFeatures()
         lastPreviewToggles = null
         store.reset()

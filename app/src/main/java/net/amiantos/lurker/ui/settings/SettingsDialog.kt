@@ -320,6 +320,8 @@ private fun NetworksRow(onClick: () -> Unit) {
 @Composable
 private fun UnavailableRow(loaded: Boolean) {
     ListItem(
+        // One stop for the title and its explanation, as a state view is (#20).
+        modifier = Modifier.semantics(mergeDescendants = true) {},
         colors = ListItemDefaults.colors(containerColor = Color.Transparent),
         headlineContent = {
             Text(SettingsModel.unavailableTitle(loaded), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -365,7 +367,8 @@ private fun SettingRowView(row: SettingRowState, actions: SettingsActions) {
             )
         }
         // The network forms' refusal row — one look, and one "Error" for TalkBack, for every refusal.
-        if (row.error != null) FormErrorRow(row.error)
+        // There with or without one, so a write refused while Settings is open is read out.
+        FormErrorRow(row.error)
     }
 }
 

@@ -14,6 +14,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import net.amiantos.lurker.ui.networks.PagedDialog
+import net.amiantos.lurker.ui.shell.StateModel
+import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurker.ui.networks.PagedFlow
 import net.amiantos.lurker.ui.networks.rememberPagedFlow
 import net.amiantos.lurker.ui.search.SearchPage
@@ -101,7 +103,7 @@ interface FeedPageState {
  * Activity or Bookmarks: one page source and its words. The two are the same screen — the server builds
  * both from one query, so the row shape, the cursor contract and the grouping are identical.
  */
-enum class HistoryFeed(val title: String, val loading: StateWords, val empty: StateWords, val error: StateWords) {
+enum class HistoryFeed(val title: String, val loading: StateModel, val empty: StateModel, val error: StateModel) {
     /**
      * Every line a highlight rule matched — a reply to one of your lines counts — and everyone's
      * reactions to your lines, newest first, across every buffer (lurker-ios#183). A read surface, not
@@ -109,9 +111,13 @@ enum class HistoryFeed(val title: String, val loading: StateWords, val empty: St
      */
     Activity(
         title = "Activity",
-        loading = StateWords("Loading activity…"),
-        empty = StateWords("No recent activity", "Mentions, replies to you and reactions to your messages show up here."),
-        error = StateWords("Couldn't load activity", "Pull to try again."),
+        loading = StateModel("Loading activity…", isLoading = true),
+        empty = StateModel(
+            "No recent activity",
+            StateSymbol.Mention,
+            "Mentions, replies to you and reactions to your messages show up here.",
+        ),
+        error = StateModel("Couldn't load activity", StateSymbol.Warning, "Pull to try again."),
     ),
 
     /**
@@ -122,15 +128,15 @@ enum class HistoryFeed(val title: String, val loading: StateWords, val empty: St
      */
     Bookmarks(
         title = "Bookmarks",
-        loading = StateWords("Loading bookmarks…"),
+        loading = StateModel("Loading bookmarks…", isLoading = true),
         // Names the action exactly as the message's actions do, since that's what the reader has to go
         // and find.
-        empty = StateWords("No bookmarks", "Press and hold a message, then Save Message, to keep it here."),
-        error = StateWords("Couldn't load bookmarks", "Pull to try again."),
+        empty = StateModel("No bookmarks", StateSymbol.Bookmark, "Press and hold a message, then Save Message, to keep it here."),
+        error = StateModel("Couldn't load bookmarks", StateSymbol.Warning, "Pull to try again."),
     ),
     ;
 
-    fun words(placeholder: FeedPlaceholder): StateWords =
+    fun words(placeholder: FeedPlaceholder): StateModel =
         when (placeholder) {
             FeedPlaceholder.Loading -> loading
             FeedPlaceholder.Empty -> empty
@@ -212,6 +218,8 @@ internal class FeedFlow(model: ChatViewModel, request: FeedRequest) : PagedFlow<
                 AppView.Search -> FeedPage.Search(SearchState(model, request.seed, scope))
                 AppView.Activity -> FeedPage.History(HistoryFeedState(model, HistoryFeed.Activity, scope))
                 AppView.Bookmarks -> FeedPage.History(HistoryFeedState(model, HistoryFeed.Bookmarks, scope))
+                // Never opened here: `MainScaffold` routes Uploads to the uploads browser (`UploadsSheets`).
+                AppView.Uploads -> error("Uploads is the uploads browser's, not a feed")
             },
         )
     }

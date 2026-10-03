@@ -5,8 +5,10 @@ package net.amiantos.lurker.ui.profile
 
 import android.content.ClipData
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -17,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -39,6 +42,7 @@ import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormSectionFooter
 import net.amiantos.lurker.ui.networks.FormSectionHeader
 import net.amiantos.lurker.ui.networks.PageExit
+import net.amiantos.lurker.ui.shell.Announcer
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.FriendPresence
@@ -110,6 +114,7 @@ internal fun UserProfilePage(
     UserProfileContent(
         title = state.nick,
         sections = sections,
+        outcome = UserProfileModel.lookupOutcome(inputs, state.nick),
         exit = exit,
         onExit = onExit,
         onRow = { row ->
@@ -135,21 +140,29 @@ internal fun UserProfilePage(
 private fun UserProfileContent(
     title: String,
     sections: List<ProfileSection>,
+    outcome: String?,
     exit: PageExit,
     onExit: () -> Unit,
     onRow: (ProfileRow) -> Unit,
 ) {
     DialogPage(title = title, exit = exit, onExit = onExit) { padding ->
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
-            sections.forEachIndexed { index, section ->
-                item(key = "section$index") {
-                    Column {
-                        section.header?.let { FormSectionHeader(it) }
-                        section.rows.forEach { row -> ProfileRowView(row, onRow) }
-                        section.footer?.let { FormSectionFooter(it) }
+        Box(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
+                sections.forEachIndexed { index, section ->
+                    item(key = "section$index") {
+                        Column {
+                            section.header?.let { FormSectionHeader(it) }
+                            section.rows.forEach { row -> ProfileRowView(row, onRow) }
+                            section.footer?.let { FormSectionFooter(it) }
+                        }
                     }
                 }
             }
+            // A lookup lands while the reader waits: its [outcome] — the miss, or a hit as the Status row's
+            // value ("alice, Online") — is read out from here, outside the lazy list where it's always in
+            // the viewport (`Announcer`), not from the status line, which comes and goes and can be
+            // scrolled away. Quiet while the lookup is out.
+            Announcer(words = outcome, modifier = Modifier.padding(padding).align(Alignment.TopStart))
         }
     }
 }
@@ -160,13 +173,7 @@ private fun ProfileRowView(row: ProfileRow, onRow: (ProfileRow) -> Unit) {
     val tint = MaterialTheme.colorScheme.primary
     val clear = ListItemDefaults.colors(containerColor = Color.Transparent)
     when (row) {
-        is ProfileRow.Status -> ListItem(
-            colors = clear,
-            leadingContent = {
-                Icon(if (row.line == ProfileStatus.StatusLine.NotFound) LurkerIcons.HelpOutline else LurkerIcons.MoreHoriz, null, tint = muted)
-            },
-            headlineContent = { Text(row.text, color = muted) },
-        )
+        is ProfileRow.Status -> StatusLineRow(row)
         // Label above, value below — on every row, not just the long ones: a hostmask always needs the
         // room, and one row in a different shape reads as something gone wrong. The LABEL is the quiet
         // caption; the value is what you came to read.
@@ -198,6 +205,19 @@ private fun ProfileRowView(row: ProfileRow, onRow: (ProfileRow) -> Unit) {
         ProfileRow.SendMessage -> ActionRow(LurkerIcons.ChatBubble, "Send Message", tint) { onRow(row) }
         ProfileRow.Refresh -> ActionRow(LurkerIcons.Refresh, "Refresh", tint) { onRow(row) }
     }
+}
+
+/** The lookup's status line, as iOS draws it: the glyph and the words, muted. Announced by `UserProfileContent`'s `Announcer`. */
+@Composable
+private fun StatusLineRow(row: ProfileRow.Status) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    ListItem(
+        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
+        leadingContent = {
+            Icon(if (row.line == ProfileStatus.StatusLine.NotFound) LurkerIcons.HelpOutline else LurkerIcons.MoreHoriz, null, tint = muted)
+        },
+        headlineContent = { Text(row.text, color = muted) },
+    )
 }
 
 /** A tinted row that does something — the grouped form's button row, with iOS's glyph. */
@@ -243,6 +263,7 @@ private fun ProfilePreview(dark: Boolean, inputs: ProfileInputs) {
         UserProfileContent(
             title = "alice",
             sections = UserProfileModel.sections(inputs, "alice", canOpenBuffers = true, dateTime = { "Sep 21, 2026, 10:00" }),
+            outcome = UserProfileModel.lookupOutcome(inputs, "alice"),
             exit = PageExit.Back,
             onExit = {},
             onRow = {},

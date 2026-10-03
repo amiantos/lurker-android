@@ -68,6 +68,13 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.StateFlow
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
+import net.amiantos.lurker.ui.uploads.AttachButton
+import net.amiantos.lurker.ui.uploads.Attachments
+import net.amiantos.lurker.ui.uploads.UploadBatchPosition
+import net.amiantos.lurker.ui.uploads.UploadPhase
+import net.amiantos.lurker.ui.uploads.UploadReadout
+import net.amiantos.lurker.ui.uploads.UploadStatusView
+import net.amiantos.lurker.ui.uploads.receivesPastedImages
 import net.amiantos.lurkerkit.model.AwayState
 import net.amiantos.lurkerkit.model.AwayStrip
 import java.time.Instant
@@ -90,8 +97,10 @@ import java.util.Locale
  * on top of whichever is taller, and the list above — laid out in reverse, item 0 at the bottom —
  * keeps its newest row anchored as the bar and the keyboard grow.
  *
- * U8: the paperclip (iOS's `onAttach`) and pasting an image (`onPasteImage`) — dropped here until
- * uploads exist, and in the system buffer for good, which has nothing to attach.
+ * The paperclip (iOS's `onAttach`) leads the row and an image pasted into the field uploads
+ * (`onPasteImage`) — both from [attachments], which is null in the system buffer (nothing to attach)
+ * and drops the paperclip there. While a run is under way its readout sits above everything else in
+ * the bar (`UploadStatusView`).
  */
 @Composable
 internal fun ComposerBar(
@@ -100,6 +109,7 @@ internal fun ComposerBar(
     /** Changes when the day or the zone does — "Away since 2:32 PM" stops being true at midnight. */
     clockKey: Any?,
     modifier: Modifier = Modifier,
+    attachments: Attachments? = null,
 ) {
     val capitalizes by autocapitalizes.collectAsStateWithLifecycle()
     val away = rememberAwayStrip(state.chrome.away, clockKey)
@@ -118,6 +128,9 @@ internal fun ComposerBar(
         },
         isComposing = { state.isComposing },
         modifier = modifier,
+        leading = if (attachments != null) { size -> AttachButton(attachments, size) } else null,
+        above = { UploadStatusView(attachments?.readout, onCancel = { attachments?.cancel() }) },
+        fieldModifier = Modifier.receivesPastedImages(attachments),
     )
 }
 
@@ -136,6 +149,12 @@ internal fun ComposerBarContent(
     onFocusChange: (Boolean) -> Unit,
     isComposing: () -> Boolean,
     modifier: Modifier = Modifier,
+    /** Leads the row, sized to the collapsed field: the paperclip. */
+    leading: (@Composable (size: Dp) -> Unit)? = null,
+    /** Above the strip: an upload's readout. */
+    above: @Composable () -> Unit = {},
+    /** The field's extra behaviour: taking a pasted image as an upload. */
+    fieldModifier: Modifier = Modifier,
 ) {
     val colors = LurkerTheme.colors
     val collapsed = collapsedHeight()
@@ -149,6 +168,7 @@ internal fun ComposerBarContent(
             .padding(horizontal = 16.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
+        above()
         when (strip) {
             Strip.None -> Unit
             is Strip.Reply -> ReplyStrip(strip, onCancelReply)
@@ -159,7 +179,8 @@ internal fun ComposerBarContent(
             // The button sits at the BOTTOM, beside the last line as the field grows upward.
             verticalAlignment = Alignment.Bottom,
         ) {
-            Field(field, placeholder, capitalizes, collapsed, focusRequester, onFocusChange, onCancelReply, isComposing, strip is Strip.Reply)
+            leading?.invoke(collapsed)
+            Field(field, placeholder, capitalizes, collapsed, focusRequester, onFocusChange, onCancelReply, isComposing, strip is Strip.Reply, fieldModifier)
             // Derived, so the bar recomposes when the answer flips rather than on every keystroke.
             val canSend by remember(field) { derivedStateOf { ComposerModel.sendable(field.text.toString()) != null } }
             SendButton(enabled = canSend, size = collapsed, onClick = onSend)
@@ -192,6 +213,7 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
     onCancelReply: () -> Unit,
     isComposing: () -> Boolean,
     replyPending: Boolean,
+    modifier: Modifier,
 ) {
     val colors = LurkerTheme.colors
     val text = MaterialTheme.typography.bodyLarge
@@ -200,6 +222,7 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
         state = field,
         modifier = Modifier
             .weight(1f)
+            .then(modifier)
             .heightIn(min = collapsed)
             // A fixed radius, not a capsule: half the one-line height, so it's a capsule when short
             // and a rounded rectangle when tall, rather than arcs that clip the text as it grows.
@@ -399,7 +422,14 @@ private fun formatSince(locale: Locale, is24: Boolean, instant: Instant, since: 
 // MARK: - Previews
 
 @Composable
-private fun ComposerPreview(dark: Boolean, text: String, strip: Strip, placeholder: String = "@amiantos") {
+private fun ComposerPreview(
+    dark: Boolean,
+    text: String,
+    strip: Strip,
+    placeholder: String = "@amiantos",
+    attaches: Boolean = false,
+    readout: UploadReadout? = null,
+) {
     LurkerTheme(darkTheme = dark) {
         Box(Modifier.background(LurkerTheme.colors.bg)) {
             ComposerBarContent(
@@ -413,8 +443,18 @@ private fun ComposerPreview(dark: Boolean, text: String, strip: Strip, placehold
                 onBack = {},
                 onFocusChange = {},
                 isComposing = { false },
+                leading = if (attaches) { size -> PreviewPaperclip(size) } else null,
+                above = { UploadStatusView(readout, onCancel = {}) },
             )
         }
+    }
+}
+
+/** The paperclip as drawn, without the run behind it. */
+@Composable
+private fun PreviewPaperclip(size: Dp) {
+    Box(Modifier.size(size).background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape), contentAlignment = Alignment.Center) {
+        Icon(LurkerIcons.AttachFile, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
     }
 }
 
@@ -468,3 +508,13 @@ private fun ConsoleLight() = ComposerPreview(dark = false, text = "", strip = St
 @Preview(name = "Composer, system buffer — dark", widthDp = 360)
 @Composable
 private fun ConsoleDark() = ComposerPreview(dark = true, text = "", strip = Strip.None, placeholder = "Type a command…")
+
+private val previewReadout = UploadReadout(UploadPhase.Uploading(0.42), UploadBatchPosition(2, 4))
+
+@Preview(name = "Composer, uploading — light", widthDp = 360)
+@Composable
+private fun UploadingLight() = ComposerPreview(dark = false, text = "", strip = Strip.None, attaches = true, readout = previewReadout)
+
+@Preview(name = "Composer, uploading — dark", widthDp = 360)
+@Composable
+private fun UploadingDark() = ComposerPreview(dark = true, text = "", strip = Strip.None, attaches = true, readout = previewReadout)

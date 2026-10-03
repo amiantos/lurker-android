@@ -97,6 +97,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.launch
+import net.amiantos.lurker.ui.shell.AnnouncedSlot
 import net.amiantos.lurker.ui.shell.SafeUriHandler
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
@@ -348,14 +349,21 @@ private fun ImagePage(preview: LinkPreview, media: MediaSource, onTap: () -> Uni
         value = FullPicture.Loading
         value = path?.let { PreviewImageLoader.loadFull(it, media) }?.let(FullPicture::Loaded) ?: FullPicture.Failed
     }
+    val failed = full == FullPicture.Failed && still == null
+    Box(Modifier.fillMaxSize()) {
+        if (!failed) ZoomableImage(preview, still, full, onTap, onZoomChange)
+        // Over the picture whether or not it failed, so a failure is read out where it lands (see
+        // `ViewerFallback`).
+        ViewerFallback(if (failed) MediaViewerModel.PlayerFailure.Unreachable.message else null, preview.url, onClose = onTap)
+    }
+}
+
+/** The picture itself, once there's something to draw (or a decode on its way): [ImagePage]'s zoom and pan. */
+@Composable
+private fun ZoomableImage(preview: LinkPreview, still: PreviewImageLoader.Still?, full: FullPicture, onTap: () -> Unit, onZoomChange: (Boolean) -> Unit) {
     // Remembered against the drawable, so it starts and stops with the page — frames released as the
     // page leaves, rather than a gallery accumulating every animation paged past.
     val painter = remember(full) { (full as? FullPicture.Loaded)?.drawable?.let(::DrawablePainter) }
-    if (full == FullPicture.Failed && still == null) {
-        ViewerFallback(MediaViewerModel.PlayerFailure.Unreachable.message, preview.url, onClose = onTap)
-        return
-    }
-
     var scale by remember { mutableFloatStateOf(1f) }
     var offsetX by remember { mutableFloatStateOf(0f) }
     var offsetY by remember { mutableFloatStateOf(0f) }
@@ -498,12 +506,18 @@ private fun PlayerPage(preview: LinkPreview, media: MediaSource, active: Boolean
         val url = media.playable(preview.url, preview.mime)
         phase = if (url == null) PlayerPhase.Failed(MediaViewerModel.PlayerFailure.Nothing) else PlayerPhase.Ready(url)
     }
-    when (val current = phase) {
-        PlayerPhase.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = Color.White)
+    val current = phase
+    Box(Modifier.fillMaxSize()) {
+        when (current) {
+            PlayerPhase.Loading -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = Color.White)
+            }
+            is PlayerPhase.Ready -> ClipPlayer(current.url) { code -> phase = PlayerPhase.Failed(MediaViewerModel.failure(code)) }
+            is PlayerPhase.Failed -> Unit
         }
-        is PlayerPhase.Ready -> ClipPlayer(current.url) { code -> phase = PlayerPhase.Failed(MediaViewerModel.failure(code)) }
-        is PlayerPhase.Failed -> ViewerFallback(current.failure.message, preview.url, onClose)
+        // There through every phase, so a clip that fails while the reader waits is read out (see
+        // `ViewerFallback`).
+        ViewerFallback((current as? PlayerPhase.Failed)?.failure?.message, preview.url, onClose)
     }
 }
 
@@ -585,9 +599,14 @@ private fun ClipPlayer(url: String, onError: (Int) -> Unit) {
  * A page with nothing to show: a sentence, the origin in the browser (when its address parses), and
  * the way out — one column, so nothing can draw over anything else whichever of them is showing.
  * Opened through the viewer's `SafeUriHandler`, so a device with nothing to take the address shrugs.
+ *
+ * ⚠ Composed over the page before anything has failed, with a null [message]: then it's an empty,
+ * unannounced 1dp place and nothing else (no buttons, nothing that takes a touch from the picture or
+ * the player under it). A load that fails while the reader is on the page is read out where it
+ * lands, and only a node that was already there can announce it (`AnnouncedSlot`).
  */
 @Composable
-private fun ViewerFallback(message: String, url: String, onClose: () -> Unit) {
+private fun ViewerFallback(message: String?, url: String, onClose: () -> Unit) {
     val uriHandler = LocalUriHandler.current
     // The viewer's black is the same in both themes, so its buttons are too.
     val onBlack = ButtonDefaults.textButtonColors(contentColor = Color.White)
@@ -596,7 +615,10 @@ private fun ViewerFallback(message: String, url: String, onClose: () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(message, color = Color.White, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+        AnnouncedSlot(words = message) {
+            Text(message.orEmpty(), color = Color.White, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+        }
+        if (message == null) return@Column
         if (url.toHttpUrlOrNull() != null) {
             TextButton(
                 onClick = {

@@ -3,6 +3,8 @@
 
 package net.amiantos.lurker.ui.feeds
 
+import net.amiantos.lurker.ui.shell.RetryRow
+import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import android.content.Context
 import android.text.format.DateUtils
@@ -42,11 +44,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
@@ -119,11 +123,12 @@ internal fun HistoryFeedPage(model: ChatViewModel, state: HistoryFeedState, onCl
 internal fun FeedList(
     model: ChatViewModel,
     state: FeedPageState,
-    words: (FeedPlaceholder) -> StateWords,
+    words: (FeedPlaceholder) -> StateModel,
     onSelect: (HighlightItem) -> Unit,
     modifier: Modifier = Modifier,
     onRemove: ((HighlightItem) -> Boolean)? = null,
     listState: LazyListState = rememberLazyListState(),
+    announcesStates: Boolean = true,
 ) {
     val snapshot = state.feed.snapshot
     val style = rememberMessageTextStyle()
@@ -156,6 +161,8 @@ internal fun FeedList(
         onRefresh = { state.feed.reload(byPull = true) },
         onShown = state.feed::scrolledTo,
         onRetry = state.feed::retry,
+        onReload = { state.feed.reload() },
+        announcesStates = announcesStates,
         onRemove = onRemove,
         listState = listState,
         modifier = modifier,
@@ -179,7 +186,7 @@ internal fun FeedList(
 internal fun FeedListContent(
     sections: List<FeedSection>,
     snapshot: FeedSnapshot,
-    words: (FeedPlaceholder) -> StateWords,
+    words: (FeedPlaceholder) -> StateModel,
     onSelect: (HighlightItem) -> Unit,
     onRefresh: () -> Unit,
     onShown: (Int) -> Unit,
@@ -187,6 +194,10 @@ internal fun FeedListContent(
     listState: LazyListState,
     modifier: Modifier = Modifier,
     onRetry: () -> Unit = {},
+    /** The first page again, without a pull — the placeholder's "Try Again". */
+    onReload: () -> Unit = {},
+    /** Whether a settled placeholder is read out when it lands — not for Search (see `StateView`). */
+    announcesStates: Boolean = true,
 ) {
     val colors = LurkerTheme.colors
     PullToRefreshBox(
@@ -214,9 +225,17 @@ internal fun FeedListContent(
                 }
             }
             // A failed page-in under rows already shown. Paging fires as rows come on screen, and at the
-            // bottom none ever will again — so the way to ask again is said, and tapped, here.
-            if (snapshot.pageInFailed && snapshot.items.isNotEmpty()) {
-                item(key = "retry", contentType = "retry") { RetryRow(onRetry) }
+            // bottom none ever will again — so the way to ask again is said, and tapped, here. There under
+            // any rows, failed or not, so a failure is a change TalkBack reads out (`RetryRow`).
+            if (snapshot.items.isNotEmpty()) {
+                item(key = "retry", contentType = "retry") {
+                    val failed = snapshot.pageInFailed
+                    RetryRow(
+                        failed = failed,
+                        onRetry = onRetry,
+                        modifier = Modifier.padding(horizontal = CompactMetrics.side, vertical = if (failed) 8.dp else 0.dp),
+                    )
+                }
             }
         }
         // Loading, the fetch's failure, or an empty answer — said in place of rows. A pull shows its own
@@ -224,28 +243,15 @@ internal fun FeedListContent(
         val placeholder = snapshot.placeholder
         if (placeholder != null && !(placeholder == FeedPlaceholder.Loading && snapshot.refreshing)) {
             val said = words(placeholder)
-            StateView(title = said.title, subtitle = said.subtitle, isLoading = placeholder == FeedPlaceholder.Loading)
+            StateView(
+                said,
+                // "Pull to try again." — a pull TalkBack can't make, so offered as an action too, as an
+                // ordinary reload: this view goes to Loading and back, rather than hiding behind the
+                // pull's spinner (see `StateView`).
+                onRetry = if (placeholder == FeedPlaceholder.Error) onReload else null,
+                announces = announcesStates,
+            )
         }
-    }
-}
-
-/** "Couldn't load more" and the button that asks again, at the foot of the list. */
-@Composable
-private fun RetryRow(onRetry: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .padding(horizontal = CompactMetrics.side, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Text(
-            "Couldn't load more.",
-            modifier = Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyMedium,
-            color = LurkerTheme.colors.fgMuted,
-        )
-        TextButton(onClick = onRetry) { Text("Try Again", style = MaterialTheme.typography.bodyMedium) }
     }
 }
 

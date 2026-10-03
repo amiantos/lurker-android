@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.feeds
 
+import net.amiantos.lurker.ui.shell.StateSymbol
 import androidx.compose.runtime.saveable.SaverScope
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -18,10 +19,13 @@ class FeedSheetsTest {
     fun onOnePaneBothScreensCarryEveryView() {
         // The list: search in its bar, the rest in its menu.
         assertTrue(ViewsLayout.listSearch(sideBySide = false))
-        assertEquals(listOf(AppView.Activity, AppView.Bookmarks), ViewsLayout.listMenu(sideBySide = false))
-        // The conversation: all three behind its ⋮, in iOS's order.
+        assertEquals(listOf(AppView.Activity, AppView.Bookmarks, AppView.Uploads), ViewsLayout.listMenu(sideBySide = false))
+        // The conversation: all four behind its ⋮, in iOS's order.
         assertEquals(emptyList<AppView>(), ViewsLayout.conversationButtons(sideBySide = false))
-        assertEquals(listOf(AppView.Search, AppView.Activity, AppView.Bookmarks), ViewsLayout.conversationMenu(sideBySide = false))
+        assertEquals(
+            listOf(AppView.Search, AppView.Activity, AppView.Bookmarks, AppView.Uploads),
+            ViewsLayout.conversationMenu(sideBySide = false),
+        )
     }
 
     @Test
@@ -49,5 +53,16 @@ class FeedSheetsTest {
         assertEquals("No recent activity", HistoryFeed.Activity.words(FeedPlaceholder.Empty).title)
         assertEquals("Press and hold a message, then Save Message, to keep it here.", HistoryFeed.Bookmarks.words(FeedPlaceholder.Empty).subtitle)
         assertEquals("Couldn't load bookmarks", HistoryFeed.Bookmarks.words(FeedPlaceholder.Error).title)
+    }
+
+    /** iOS's symbols: `at` for Activity's empty, `bookmark` for Bookmarks', the warning for a failure, none while loading. */
+    @Test
+    fun theHistoryFeedsCarryIosGlyphs() {
+        assertEquals(StateSymbol.Mention, HistoryFeed.Activity.words(FeedPlaceholder.Empty).symbol)
+        assertEquals(StateSymbol.Bookmark, HistoryFeed.Bookmarks.words(FeedPlaceholder.Empty).symbol)
+        for (feed in HistoryFeed.entries) {
+            assertEquals(StateSymbol.Warning, feed.words(FeedPlaceholder.Error).symbol)
+            assertNull(feed.words(FeedPlaceholder.Loading).symbol)
+        }
     }
 }

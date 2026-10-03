@@ -29,7 +29,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -126,13 +129,7 @@ private fun NetworksListContent(
         val placeholder = NetworksListModel.placeholder(load)
         if (placeholder != null) {
             Box(Modifier.fillMaxSize().padding(padding)) {
-                StateView(
-                    title = placeholder.title,
-                    subtitle = placeholder.subtitle,
-                    isLoading = placeholder.isLoading,
-                    actionTitle = placeholder.actionTitle,
-                    onAction = onPlaceholderAction,
-                )
+                StateView(placeholder, onAction = onPlaceholderAction)
             }
             return@DialogPage
         }
@@ -176,11 +173,15 @@ private fun NetworkListRow(
         leadingContent = { StatusDot(row.light, Modifier.size(10.dp)) },
         headlineContent = { Text(config.name) },
         supportingContent = {
-            if (error != null) {
-                Text(error, color = LurkerTheme.colors.badText)
-            } else {
-                Text(NetworksListModel.subtitle(config, row), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            // The refusal takes the subtitle's place in the SAME text, rather than an `if` swapping one
+            // text for another: the answer to a verb picked from the menu lands after the menu has gone,
+            // and only a node that was already there can announce it (`AnnouncedSlot`). Live only while
+            // it's the refusal — the subtitle's state changes are the dot's and the words', not news.
+            Text(
+                error ?: NetworksListModel.subtitle(config, row),
+                color = if (error != null) LurkerTheme.colors.badText else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.semantics { if (error != null) liveRegion = LiveRegionMode.Polite },
+            )
         },
         trailingContent = { NetworkActionsButton(name = config.name, actionsFor = actionsFor, onAction = onAction) },
     )

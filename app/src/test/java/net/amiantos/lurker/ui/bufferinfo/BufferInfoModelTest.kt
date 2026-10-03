@@ -159,6 +159,33 @@ class BufferInfoModelTest {
         assertEquals("Your account is paused.", sections(blocked, opened = server, error = "Your account is paused.").single().footer)
     }
 
+    /**
+     * Only a refusal is read out when it lands (#20): the sections whose verbs can be refused keep a
+     * footer place with or without words, and announce only while the footer IS the refusal — not the
+     * standing blocked note, and none of a channel's notes.
+     */
+    @Test
+    fun onlyTheRefusalFootersAnnounce() {
+        val server = Buffer(networkId = 1, target = Buffer.serverTarget(1), kind = BufferKind.Server)
+        val quiet = sections(state(), opened = server).single()
+        assertTrue(quiet.holdsRefusals)
+        assertFalse(quiet.announcesFooter)
+        val refused = sections(state(), opened = server, error = "Your account is paused.").single()
+        assertTrue(refused.holdsRefusals && refused.announcesFooter)
+        // A blocked network's explanation is a standing note in the same place: read on focus, not announced.
+        val blocked = state().let { it.copy(networks = it.networks.mapValues { (_, n) -> n.copy(blocked = true) }) }
+        val note = sections(blocked, opened = server).single()
+        assertEquals(NetworksListModel.BLOCKED_EXPLANATION, note.footer)
+        assertTrue(note.holdsRefusals)
+        assertFalse(note.announcesFooter)
+        assertTrue(sections(blocked, opened = server, error = "Your account is paused.").single().announcesFooter)
+        val chat = Buffer(networkId = 1, target = "=bob", kind = BufferKind.Dcc)
+        assertFalse(sections(state(), opened = chat)[0].announcesFooter)
+        assertTrue(sections(state(), opened = chat, error = "No such nick")[0].announcesFooter)
+        // A channel's topic setter and created date are notes, not answers.
+        assertTrue(sections(state()).none { it.announcesFooter || it.holdsRefusals })
+    }
+
     @Test
     fun aServerLogWhoseNetworkIsntKnownAndTheSystemBufferHaveNothing() {
         val server = Buffer(networkId = 7, target = Buffer.serverTarget(7), kind = BufferKind.Server)

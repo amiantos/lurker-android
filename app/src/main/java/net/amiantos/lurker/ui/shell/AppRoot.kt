@@ -9,12 +9,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import net.amiantos.lurker.platform.AppEvents
 import net.amiantos.lurker.ui.dcc.DccOffers
 import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.signin.SignInScreen
+import net.amiantos.lurker.ui.uploads.UploadServices
 import kotlinx.coroutines.flow.StateFlow
 import net.amiantos.lurkerkit.session.ChatViewModel
 
@@ -38,20 +40,61 @@ fun AppRoot(
     uiPreferences: UiPreferences,
     events: AppEvents,
     dccOffers: DccOffers,
+    uploads: UploadServices,
     signInNotice: StateFlow<String?>,
     lastServerURL: () -> String,
     onSignIn: (server: String) -> Unit,
 ) {
     val session by model.sessionPublisher.collectAsStateWithLifecycle(initialValue = model.session)
+    val signedIn = session == ChatViewModel.SessionState.LoggedIn
+    // Which session this is: bumped on every arrival at LoggedIn, so each session gets a scaffold of
+    // its own. Keyed on signed-in alone, a sign-in landing while the last sign-out's fade is still
+    // running would hand the NEW session the OLD scaffold — Crossfade reuses the content still on
+    // screen for a target it already holds — with the old account's dialogs and history in it.
+    // Saveable, and an Int, so a rotation restores the same key and the scaffold's saved state with
+    // it. Counted in composition rather than an effect: an effect runs after the frame, and that one
+    // frame is exactly the reuse this exists to prevent.
+    val generations = rememberSaveable { SessionGenerations.start(signedIn) }
+    val current = SessionGenerations.advance(generations, signedIn)
     // The window's ground, behind the panes and the gap between them.
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-        // Keyed on signed-in or not, so `LoggedOut` ↔ `LoggingIn` doesn't rebuild the form.
-        Crossfade(targetState = session == ChatViewModel.SessionState.LoggedIn, label = "root") { signedIn ->
-            if (signedIn) {
-                MainScaffold(model = model, uiPreferences = uiPreferences, events = events, dccOffers = dccOffers, onSignOut = model::logout)
+        // Signed out is one key (`SIGNED_OUT`) whether `LoggedOut` or `LoggingIn`, so the form isn't
+        // rebuilt between them; signed in is the session's generation.
+        Crossfade(targetState = if (signedIn) current else SIGNED_OUT, label = "root") { shown ->
+            if (shown != SIGNED_OUT) {
+                MainScaffold(
+                    model = model,
+                    uiPreferences = uiPreferences,
+                    events = events,
+                    dccOffers = dccOffers,
+                    uploads = uploads,
+                    onSignOut = model::logout,
+                    // False while the scaffold fades out after a sign-out or a 401 — or after a newer
+                    // session has replaced it: its dialogs go at once rather than sitting over what's
+                    // coming in for the fade.
+                    sessionLive = signedIn && shown == current,
+                )
             } else {
                 SignInScreen(model = model, notice = signInNotice, initialServer = lastServerURL(), onSignIn = onSignIn)
             }
         }
+    }
+}
+
+/** The root's key while signed out — never a session generation, which count up from 0. */
+private const val SIGNED_OUT = -1
+
+/**
+ * The session generation `AppRoot` keys the signed-in side on, as a saveable `IntArray`: `[0]` the
+ * generation, `[1]` whether the last look was signed in. Bumped on each arrival at signed in, and
+ * idempotent per edge, so a recomposition with the same session counts nothing.
+ */
+internal object SessionGenerations {
+    fun start(signedIn: Boolean): IntArray = intArrayOf(0, if (signedIn) 1 else 0)
+
+    fun advance(state: IntArray, signedIn: Boolean): Int {
+        if (signedIn && state[1] == 0) state[0] += 1
+        state[1] = if (signedIn) 1 else 0
+        return state[0]
     }
 }

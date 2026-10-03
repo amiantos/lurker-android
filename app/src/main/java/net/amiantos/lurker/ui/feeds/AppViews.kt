@@ -21,7 +21,7 @@ import net.amiantos.lurker.ui.theme.LurkerIcons
  * The app's views — the surfaces you *look at*, as against the buffer you're in: what the menus list
  * and, where a bar has room, what its buttons open. One title and one glyph each, so a menu row and a
  * bar button for the same view can't drift apart between the two screens that carry them.
- * lurker-ios's `AppView`, minus the Lurker buffer (the list's own menu row) and Uploads (U8).
+ * lurker-ios's `AppView`, minus the Lurker buffer (the list's own menu row).
  */
 enum class AppView(val title: String) {
     Search("Search"),
@@ -32,15 +32,21 @@ enum class AppView(val title: String) {
      */
     Activity("Activity"),
     Bookmarks("Bookmarks"),
-    // U8: Uploads.
+
+    /**
+     * Everything the account has uploaded (lurker-ios#138) — the uploads browser, not a feed: a grid of
+     * files rather than a list of lines, hosted by `MainScaffold` beside the feeds (`UploadsSheets`).
+     */
+    Uploads("Uploads"),
     ;
 
-    /** Its glyph — iOS's `magnifyingglass`, `at`, `bookmark`. */
+    /** Its glyph — iOS's `magnifyingglass`, `at`, `bookmark`, `photo.on.rectangle`. */
     val icon: ImageVector
         get() = when (this) {
             Search -> LurkerIcons.Search
             Activity -> LurkerIcons.AlternateEmail
             Bookmarks -> LurkerIcons.BookmarkBorder
+            Uploads -> LurkerIcons.PhotoLibrary
         }
 }
 
@@ -50,8 +56,8 @@ enum class AppView(val title: String) {
  *
  * **One pane** (a phone): the list is a screen of its own, so it carries the views — Search as a
  * magnifier in its bar (Android's search action, where iOS puts a field in the bottom toolbar), and
- * Activity and Bookmarks in its ⋮ menu. The conversation, the only thing on screen once you're in it,
- * carries all three behind its own ⋮, as iOS's chat bar does.
+ * Activity, Bookmarks and Uploads in its ⋮ menu. The conversation, the only thing on screen once you're
+ * in it, carries all four behind its own ⋮, as iOS's chat bar does.
  *
  * **Side by side**: the conversation column has the room, so it carries them — Search as a button at
  * the bar's trailing edge (iOS's column field), the rest in its menu — and the sidebar sheds its copies,
@@ -62,7 +68,8 @@ object ViewsLayout {
     fun listSearch(sideBySide: Boolean): Boolean = !sideBySide
 
     /** The views in the buffer list's ⋮ menu. Search isn't there: it's the bar's magnifier. */
-    fun listMenu(sideBySide: Boolean): List<AppView> = if (sideBySide) emptyList() else listOf(AppView.Activity, AppView.Bookmarks)
+    fun listMenu(sideBySide: Boolean): List<AppView> =
+        if (sideBySide) emptyList() else listOf(AppView.Activity, AppView.Bookmarks, AppView.Uploads)
 
     /** The views the conversation's bar shows as buttons of their own. */
     fun conversationButtons(sideBySide: Boolean): List<AppView> = if (sideBySide) listOf(AppView.Search) else emptyList()

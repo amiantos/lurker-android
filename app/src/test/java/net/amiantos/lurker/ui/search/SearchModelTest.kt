@@ -3,9 +3,11 @@
 
 package net.amiantos.lurker.ui.search
 
+import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurkerkit.model.SearchQuery
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -73,5 +75,16 @@ class SearchModelTest {
         assertEquals("Searching…", SearchWords.loading(SearchShowing.Results).title)
         assertEquals("Couldn't load highlights", SearchWords.error(SearchShowing.Landing).title)
         assertEquals("Pull to try again, or edit your search.", SearchWords.error(SearchShowing.Results).subtitle)
+    }
+
+    /** iOS's symbols: the magnifier for both "search" empties, the ellipsis for keep typing, the warning for a failure. */
+    @Test
+    fun theStatesCarryIosGlyphs() {
+        assertEquals(StateSymbol.Search, SearchWords.empty(SearchShowing.Landing, "").symbol)
+        assertEquals(StateSymbol.Ellipsis, SearchWords.empty(SearchShowing.TooShort, "h").symbol)
+        assertEquals(StateSymbol.Search, SearchWords.empty(SearchShowing.Results, "zebra").symbol)
+        assertEquals(StateSymbol.Warning, SearchWords.error(SearchShowing.Landing).symbol)
+        assertEquals(StateSymbol.Warning, SearchWords.error(SearchShowing.Results).symbol)
+        assertNull(SearchWords.loading(SearchShowing.Results).symbol)
     }
 }
