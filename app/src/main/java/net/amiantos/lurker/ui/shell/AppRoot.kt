@@ -12,6 +12,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import net.amiantos.lurker.ui.signin.SignInScreen
+import kotlinx.coroutines.flow.StateFlow
 import net.amiantos.lurkerkit.session.ChatViewModel
 
 /**
@@ -30,6 +31,7 @@ import net.amiantos.lurkerkit.session.ChatViewModel
 @Composable
 fun AppRoot(
     model: ChatViewModel,
+    signInNotice: StateFlow<String?>,
     lastServerURL: () -> String,
     onSignIn: (server: String) -> Unit,
 ) {
@@ -41,7 +43,7 @@ fun AppRoot(
             if (signedIn) {
                 MainScaffold(model = model, onSignOut = model::logout)
             } else {
-                SignInScreen(model = model, initialServer = lastServerURL(), onSignIn = onSignIn)
+                SignInScreen(model = model, notice = signInNotice, initialServer = lastServerURL(), onSignIn = onSignIn)
             }
         }
     }

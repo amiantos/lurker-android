@@ -6,6 +6,9 @@ package net.amiantos.lurker.platform
 import android.content.Context
 import android.text.format.DateUtils
 import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 
 /**
  * When an ignore rule lapses, as a person reads it — the kit's `formatExpiry` (see
@@ -17,19 +20,34 @@ import java.time.Instant
  * on every call, so a long-lived instance never goes stale over a region change — the care
  * LurkerKit's `ExpiryText` takes with `autoupdatingCurrent`.
  *
- * Words only within a day either side (`transitionResolution` of a day): iOS's relative formatting
- * names today, tomorrow and yesterday and dates the rest, where a longer transition here would say
- * "In 3 days".
+ * The day word is decided on CALENDAR days, as iOS's `doesRelativeDateFormatting` decides it, not
+ * on elapsed time: at 09:00, a rule lapsing at 21:00 tomorrow and one lapsing at 05:00 tomorrow
+ * both say "Tomorrow". `DateUtils.getRelativeDateTimeString`'s `transitionResolution` is an
+ * elapsed window and would have split them. Today and tomorrow get a word (a lapse is never in
+ * the past); anything further gets the date, with the year only when it is not this one.
  */
-class ExpiryText(context: Context) : (Instant) -> String {
+class ExpiryText(context: Context, private val now: () -> Instant = Instant::now) : (Instant) -> String {
     private val context = context.applicationContext
 
-    override fun invoke(instant: Instant): String =
-        DateUtils.getRelativeDateTimeString(
-            context,
-            instant.toEpochMilli(),
-            DateUtils.DAY_IN_MILLIS,
-            DateUtils.DAY_IN_MILLIS,
-            DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_ABBREV_MONTH,
-        ).toString()
+    override fun invoke(instant: Instant): String {
+        val zone = ZoneId.systemDefault()
+        // `LocalDate.ofInstant` is API 34; minSdk is 33.
+        val day = instant.atZone(zone).toLocalDate()
+        val today = now().atZone(zone).toLocalDate()
+        val millis = instant.toEpochMilli()
+        val time = DateUtils.formatDateTime(context, millis, DateUtils.FORMAT_SHOW_TIME)
+        return when (ChronoUnit.DAYS.between(today, day)) {
+            0L, 1L -> {
+                // "Today" / "Tomorrow" in the device's language: the span string at day
+                // resolution names the day for these two, and only these two are asked.
+                val word = DateUtils.getRelativeTimeSpanString(millis, now().toEpochMilli(), DateUtils.DAY_IN_MILLIS, 0)
+                "$word, $time"
+            }
+            else -> {
+                var flags = DateUtils.FORMAT_SHOW_DATE or DateUtils.FORMAT_SHOW_TIME or DateUtils.FORMAT_ABBREV_MONTH
+                if (day.year == today.year) flags = flags or DateUtils.FORMAT_NO_YEAR else flags = flags or DateUtils.FORMAT_SHOW_YEAR
+                DateUtils.formatDateTime(context, millis, flags)
+            }
+        }
+    }
 }

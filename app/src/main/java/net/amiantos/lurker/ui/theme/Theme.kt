@@ -37,9 +37,12 @@ fun LurkerTheme(
     content: @Composable () -> Unit,
 ) {
     val colors = if (darkTheme) LurkerColors.Dark else LurkerColors.Light
+    // Two palettes, two schemes, built once: `isSystemInDarkTheme` reads the configuration, so
+    // this recomposes on every rotation and fold, and a 40-slot scheme is not worth rebuilding.
+    val scheme = if (darkTheme) darkScheme else lightScheme
     CompositionLocalProvider(LocalLurkerColors provides colors) {
         MaterialTheme(
-            colorScheme = lurkerColorScheme(colors),
+            colorScheme = scheme,
             typography = Typography(),
             content = content,
         )
@@ -70,6 +73,9 @@ object LurkerTheme {
  * the direction each scheme's elevation goes. `surfaceTint` is the surface itself, so tonal
  * elevation adds no purple cast to Lurker's greys.
  */
+private val darkScheme: ColorScheme by lazy { lurkerColorScheme(LurkerColors.Dark) }
+private val lightScheme: ColorScheme by lazy { lurkerColorScheme(LurkerColors.Light) }
+
 internal fun lurkerColorScheme(colors: LurkerColors): ColorScheme {
     val wash = colors.accent.copy(alpha = 0.24f).compositeOver(colors.bg)
     val errorWash = colors.bad.copy(alpha = 0.24f).compositeOver(colors.bg)

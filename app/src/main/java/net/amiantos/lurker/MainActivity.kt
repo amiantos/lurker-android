@@ -35,6 +35,7 @@ class MainActivity : ComponentActivity() {
             LurkerTheme {
                 AppRoot(
                     model = app.model,
+                    signInNotice = app.browserSignIn.notice,
                     lastServerURL = { app.uiPreferences.lastServerURL },
                     onSignIn = app::signIn,
                 )

@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.map
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.ConnectionBannerState
 import net.amiantos.lurkerkit.session.ChatViewModel
+import net.amiantos.lurkerkit.store.ChatState
 
 /**
  * The app proper: the buffer list and the conversation, side by side wherever there's room for
@@ -114,14 +115,9 @@ private fun ListPanePlaceholder(model: ChatViewModel, onSignOut: () -> Unit) {
     // publishes the whole `ChatState` on every frame, and a `State<ChatState>` would compare each
     // new one to the last with a data class's deep `equals` — every buffer's messages, every frame.
     // U1 and U2 should read the store the same way: map to what the screen draws, then distinct.
-    val connectionFlow = remember(model) {
-        model.statePublisher
-            .map { ConnectionBannerState.of(reachable = it.reachable, connection = it.connection) }
-            .distinctUntilChanged()
-    }
-    val connection by connectionFlow.collectAsStateWithLifecycle(
-        initialValue = ConnectionBannerState.of(reachable = model.state.reachable, connection = model.state.connection),
-    )
+    fun banner(state: ChatState) = ConnectionBannerState.of(reachable = state.reachable, connection = state.connection)
+    val connectionFlow = remember(model) { model.statePublisher.map(::banner).distinctUntilChanged() }
+    val connection by connectionFlow.collectAsStateWithLifecycle(initialValue = banner(model.state))
     ListPaneContent(connection = connection, onSignOut = onSignOut)
 }
 

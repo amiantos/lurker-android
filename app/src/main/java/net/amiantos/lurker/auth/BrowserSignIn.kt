@@ -9,6 +9,9 @@ import android.util.Log
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.net.toUri
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import net.amiantos.lurkerkit.client.OAuth
 import okhttp3.HttpUrl
 
@@ -37,6 +40,16 @@ import okhttp3.HttpUrl
 class BrowserSignIn {
     private val waiter = RedirectWaiter()
 
+    /**
+     * What this side has to say when a sign-in ends for a reason the kit cannot see — it reads a
+     * null answer as "closed" and says nothing. Two cases: no browser could show the page, and a
+     * redirect that found no attempt waiting (the process died while the tab was up, taking the
+     * PKCE verifier with it, or the tab resumed the app before dispatching). The sign-in screen
+     * shows it where it shows the kit's status; a new attempt clears it.
+     */
+    private val noticeSubject = MutableStateFlow<String?>(null)
+    val notice: StateFlow<String?> = noticeSubject.asStateFlow()
+
     /** The started activity a tab can be launched from, if any. Held only between start and stop. */
     private var host: Activity? = null
 
@@ -49,21 +62,21 @@ class BrowserSignIn {
     }
 
     /** The address the page redirected to, or null when the tab closed without one. */
-    suspend fun authorize(page: HttpUrl): String? = waiter.await { open(page) }
+    suspend fun authorize(page: HttpUrl): String? {
+        noticeSubject.value = null
+        return waiter.await { open(page) }
+    }
 
-    /**
-     * An intent's data reached the activity. True when it was this sign-in's redirect (and so
-     * consumed), false for anything else — including a redirect with no attempt waiting for it.
-     */
-    fun onRedirect(data: String?): Boolean {
-        val callback = callbackFrom(data) ?: return false
+    /** An intent's data reached the activity; taken if it is this sign-in's redirect. */
+    fun onRedirect(data: String?) {
+        val callback = callbackFrom(data) ?: return
         if (!waiter.redirected(callback)) {
             // A redirect nothing is waiting for: the process died while the tab was up, taking the
-            // attempt's PKCE verifier with it, so the code can't be exchanged. The sign-in screen is
-            // showing; the user taps Sign in again.
+            // attempt's PKCE verifier with it, so the code can't be exchanged. The user approved
+            // and came back to the form; say why nothing happened. The kit's own sentence.
             Log.w(TAG, "sign-in redirect arrived with no sign-in waiting; dropped")
+            noticeSubject.value = "Sign-in didn\u2019t finish. Try again."
         }
-        return true
     }
 
     /** The activity resumed. See [RedirectWaiter.resumed] for why that can mean "closed". */
@@ -75,9 +88,10 @@ class BrowserSignIn {
         val activity = host
         if (activity == null) {
             // Asked while nothing is on screen — the app went to the background during the
-            // registration request. A tab can't be put up from there; the attempt ends quietly and
-            // the button is ready again when the user comes back.
+            // registration request. A tab can't be put up from there; the attempt ends, and the
+            // notice is waiting when the user comes back.
             Log.w(TAG, "no activity to open the sign-in page from")
+            noticeSubject.value = COULD_NOT_OPEN
             return false
         }
         val tab = CustomTabsIntent.Builder()
@@ -90,14 +104,16 @@ class BrowserSignIn {
             tab.launchUrl(activity, page.toString().toUri())
             true
         } catch (e: ActivityNotFoundException) {
-            // No browser at all. Rare enough not to have copy of its own: the kit reads a null
-            // answer as "closed", which says nothing, and this log is the only trace.
+            // No browser at all. The kit reads a null answer as "closed" and says nothing, so
+            // the notice does.
             Log.w(TAG, "no browser to open the sign-in page", e)
+            noticeSubject.value = COULD_NOT_OPEN
             false
         } catch (e: SecurityException) {
             // A browser that refuses the launch. Thrown out of here it would reach the kit's
             // `signIn` and crash the app scope; as "not shown" it ends the attempt like a close.
             Log.w(TAG, "the browser refused the sign-in page", e)
+            noticeSubject.value = COULD_NOT_OPEN
             false
         }
     }
@@ -105,26 +121,27 @@ class BrowserSignIn {
     internal companion object {
         private const val TAG = "BrowserSignIn"
 
-        /** `OAuth.redirectURI`'s path; see [callbackFrom]. */
-        private const val CALLBACK_PATH = "/oauth"
+        private const val COULD_NOT_OPEN = "Couldn\u2019t open a browser to sign in."
+
+        /** `OAuth.redirectURI`, split where the scheme ends: the scheme compares case-insensitively, the path exactly. */
+        private val redirectScheme = OAuth.redirectURI.substringBefore(':')
+        private val redirectPath = OAuth.redirectURI.substringAfter(':')
 
         /**
          * The callback text the kit's `OAuth.callback` reads, when [data] is the approval page's
          * redirect: scheme `chat.lurker` (any case, as RFC 3986 has it) and path exactly `/oauth`,
          * with whatever query it carries. Null for anything else.
-         *
-         * Kit: `OAuth.redirectURI` is internal, so only its scheme is shared (`callbackScheme`) and
-         * the path is spelled here. The manifest's filter can't check a path on a host-less URI
-         * (Android ignores `path` without a `host`), so this is where a stray `chat.lurker:` link
-         * is told apart from the redirect.
+         * The manifest's filter can't check a path on a host-less URI (Android ignores `path`
+         * without a `host`), so this is where a stray `chat.lurker:` link is told apart from the
+         * redirect.
          */
         fun callbackFrom(data: String?): String? {
             if (data == null) return null
             val colon = data.indexOf(':')
-            if (colon <= 0 || !data.substring(0, colon).equals(OAuth.callbackScheme, ignoreCase = true)) return null
+            if (colon <= 0 || !data.substring(0, colon).equals(redirectScheme, ignoreCase = true)) return null
             val rest = data.substring(colon + 1)
             val path = rest.substringBefore('?').substringBefore('#')
-            return if (path == CALLBACK_PATH) data else null
+            return if (path == redirectPath) data else null
         }
     }
 }

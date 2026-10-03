@@ -38,7 +38,11 @@ class UiPreferences(private val prefs: StringPrefs) {
         get() {
             val target = prefs.getString(LAST_BUFFER_TARGET)
             if (target.isNullOrEmpty()) return null
-            return BufferKey(networkId = prefs.getString(LAST_BUFFER_NETWORK_ID)?.toIntOrNull(), target = target)
+            // Absent is the system buffer; present but unreadable is no key at all — a stale or
+            // foreign value must not land on a system buffer named after a channel.
+            val stored = prefs.getString(LAST_BUFFER_NETWORK_ID)
+            val networkId = if (stored == null) null else (stored.toIntOrNull() ?: return null)
+            return BufferKey(networkId = networkId, target = target)
         }
 
     fun recordLastOpenBuffer(key: BufferKey) {

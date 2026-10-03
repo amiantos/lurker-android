@@ -39,6 +39,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import net.amiantos.lurker.ui.theme.LurkerTheme
+import kotlinx.coroutines.flow.StateFlow
 import net.amiantos.lurkerkit.session.ChatViewModel
 
 /**
@@ -54,6 +55,7 @@ import net.amiantos.lurkerkit.session.ChatViewModel
 @Composable
 fun SignInScreen(
     model: ChatViewModel,
+    notice: StateFlow<String?>,
     initialServer: String,
     onSignIn: (server: String) -> Unit,
 ) {
@@ -61,12 +63,15 @@ fun SignInScreen(
     // The reason a sign-in failed, or why a prior session ended (a mid-session 401 bounces here
     // with an explanation). The publisher replays its latest, so it is right on first frame.
     val status by model.statusPublisher.collectAsStateWithLifecycle(initialValue = null)
+    // What the kit cannot know: the browser side's reason (`BrowserSignIn.notice`). The kit's
+    // word wins when it has one; a new attempt clears both.
+    val browserNotice by notice.collectAsStateWithLifecycle()
     var server by rememberSaveable { mutableStateOf(initialServer) }
     SignInContent(
         server = server,
         onServerChange = { server = it },
         busy = session == ChatViewModel.SessionState.LoggingIn,
-        status = status,
+        status = status ?: browserNotice,
         onSignIn = { onSignIn(server) },
     )
 }
