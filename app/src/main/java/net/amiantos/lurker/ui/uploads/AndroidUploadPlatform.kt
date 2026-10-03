@@ -150,9 +150,21 @@ class AndroidUploadPlatform(
         file.delete()
     }
 
-    /** Anything a killed process left in the staging directory — called once at launch. */
+    /**
+     * Anything a killed process left behind — called once at launch, before any run can start: the
+     * staging directory's copies, redraws and transcodes, and the kit's assembled upload bodies.
+     *
+     * ⚠ The bodies aren't in the staging directory. The kit writes each one to
+     * `java.io.tmpdir/lurker-upload-<UUID>.multipart` (`MultipartBody.assemble`) — the app's cache root
+     * on Android — and deletes it when the upload ends; a process that dies mid-transmission leaves up
+     * to a whole video there. Read from the same property the kit reads, never assumed to be `cacheDir`.
+     */
     fun clearLeftovers() {
-        scope.launch(Dispatchers.IO) { directory.listFiles()?.forEach { it.delete() } }
+        scope.launch(Dispatchers.IO) {
+            directory.listFiles()?.forEach { it.delete() }
+            val tmp = System.getProperty("java.io.tmpdir")?.let(::File) ?: return@launch
+            tmp.listFiles { file -> isUploadBody(file.name) }?.forEach { it.delete() }
+        }
     }
 
     /** One write for every link that had nowhere to land. */
@@ -161,3 +173,9 @@ class AndroidUploadPlatform(
         clipboard.setPrimaryClip(ClipData.newPlainText("Links", text))
     }
 }
+
+/**
+ * Whether [name] is one of the kit's assembled upload bodies — `lurker-upload-<UUID>.multipart`
+ * (`MultipartBody.assemble`) — and nothing else that might share the temp directory.
+ */
+internal fun isUploadBody(name: String): Boolean = name.startsWith("lurker-upload-") && name.endsWith(".multipart")

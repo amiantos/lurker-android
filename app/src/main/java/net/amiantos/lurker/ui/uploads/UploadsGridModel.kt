@@ -3,6 +3,8 @@
 
 package net.amiantos.lurker.ui.uploads
 
+import net.amiantos.lurkerkit.model.LinkPreview
+import net.amiantos.lurkerkit.model.PreviewKind
 import net.amiantos.lurkerkit.model.UploadItem
 import net.amiantos.lurkerkit.model.UploadKind
 import net.amiantos.lurkerkit.model.UploadsFilter
@@ -48,12 +50,21 @@ data class UploadsGrid(
      */
     val pageInFailed: Boolean = false,
     val generation: Int = 0,
+    /**
+     * The star change each row is waiting on, by upload id: the token of its LATEST toggle. A refusal
+     * only acts while its toggle is still the latest — a newer toggle or a delete supersedes it.
+     */
+    val pendingStars: Map<Int, Long> = emptyMap(),
+    /** The last star token handed out. */
+    val starTokens: Long = 0,
+    /** Uploads deleted from under this browser — a late refusal must never bring one back. */
+    val deletedIds: Set<Int> = emptySet(),
 ) {
     /** One request to make: its generation, its question, its cursor. */
     data class Request(val generation: Int, val filter: UploadsFilter, val before: Int?, val limit: Int)
 
     /** A star change to undo if the server refuses it — only into the list it came from. */
-    data class Revert(val original: UploadItem, val index: Int, val generation: Int)
+    data class Revert(val original: UploadItem, val index: Int, val generation: Int, val token: Long = 0)
 
     /**
      * (Re)fetch from the newest page — first appearance, pull to refresh, and every filter change.
@@ -142,27 +153,44 @@ data class UploadsGrid(
         if (index < 0) return null
         val original = items[index]
         val wanted = !original.favorite
-        val next = if (filter.favoritesOnly && !wanted) removing(index) else copy(items = items.toMutableList().also { it[index] = original.copy(favorite = wanted) })
-        return next to Revert(original, index, generation)
+        val token = starTokens + 1
+        val flipped = if (filter.favoritesOnly && !wanted) removing(index) else copy(items = items.toMutableList().also { it[index] = original.copy(favorite = wanted) })
+        val next = flipped.copy(starTokens = token, pendingStars = pendingStars + (original.id to token))
+        return next to Revert(original, index, generation, token)
     }
 
     /**
      * Put a row back after a refused star. ⚠⚠ Only into the list it came from: putting a missing row back
      * BY INDEX is what an unstar-in-the-starred-view needs, and against a list since replaced it splices
      * a foreign row in and points the cursor at an id from a list that no longer exists.
+     *
+     * ⚠⚠ And only while that toggle is still the row's latest. Answers can land out of order — tap star,
+     * unstar, star in a second — and an older refusal applied over a newer toggle puts back a state the
+     * reader has since changed. A refusal that lands after the row was DELETED must not re-insert it
+     * through the missing-row branch: the file is gone.
      */
     fun revert(revert: Revert): UploadsGrid {
         if (revert.generation != generation) return this
-        val existing = items.indexOfFirst { it.id == revert.original.id }
-        if (existing >= 0) return copy(items = items.toMutableList().also { it[existing] = revert.original })
+        val id = revert.original.id
+        if (id in deletedIds || pendingStars[id] != revert.token) return this
+        val settled = copy(pendingStars = pendingStars - id)
+        val existing = items.indexOfFirst { it.id == id }
+        if (existing >= 0) return settled.copy(items = items.toMutableList().also { it[existing] = revert.original })
         val all = items.toMutableList().also { it.add(minOf(revert.index, it.size), revert.original) }
-        return copy(items = all, cursor = all.lastOrNull()?.id)
+        return settled.copy(items = all, cursor = all.lastOrNull()?.id)
     }
 
-    /** A delete went through: the row goes. */
+    /** A star change the server took: nothing left to revert, if it's still the latest. */
+    fun starred(revert: Revert): UploadsGrid {
+        val id = revert.original.id
+        return if (pendingStars[id] == revert.token) copy(pendingStars = pendingStars - id) else this
+    }
+
+    /** A delete went through: the row goes, and any star change still out for it is void. */
     fun deleted(id: Int): UploadsGrid {
+        val gone = copy(deletedIds = deletedIds + id, pendingStars = pendingStars - id)
         val index = items.indexOfFirst { it.id == id }
-        return if (index < 0) this else removing(index)
+        return if (index < 0) gone else gone.removing(index)
     }
 
     private fun removing(index: Int): UploadsGrid {
@@ -216,7 +244,7 @@ data class UploadsPlaceholder(val title: String, val subtitle: String? = null, v
 
 /** Everything a press-and-hold offers on one tile, in iOS's order. */
 enum class UploadAction(val title: String) {
-    /** Into the media viewer. U8: offered once U8a's viewer can take an upload (`isViewable`). */
+    /** Into the media viewer — for what it can show (`UploadTiles.preview`). */
     View("View"),
 
     /** Text, PDFs and whatever the viewer can't show hand off to the browser — named for what happens. */
@@ -240,7 +268,8 @@ enum class UploadAction(val title: String) {
 object UploadTiles {
     /**
      * The menu for [item]. [canInsert] is whether a composer is behind the browser; [viewable] whether
-     * the media viewer can show it.
+     * the media viewer can show it ([preview]) — named for what will happen: "View" stays in the app,
+     * "Open in Browser" leaves it.
      *
      * ⚠⚠ Star is offered on `!removed || favorite`: a takedown doesn't clear the star (the server keeps
      * it, so it survives a restore), so a tombstone can arrive starred — and hiding the control on every
@@ -248,7 +277,7 @@ object UploadTiles {
      *
      * ⚠ Delete only where [UploadItem.canDelete] says the bytes really can be destroyed.
      */
-    fun actions(item: UploadItem, canInsert: Boolean, viewable: Boolean = false): List<UploadAction> =
+    fun actions(item: UploadItem, canInsert: Boolean, viewable: Boolean = preview(item) != null): List<UploadAction> =
         buildList {
             if (!item.removed) add(if (viewable) UploadAction.View else UploadAction.OpenInBrowser)
             if (canInsert && !item.removed) add(UploadAction.AddToMessage)
@@ -259,6 +288,53 @@ object UploadTiles {
             }
             if (item.canDelete) add(UploadAction.Delete)
         }
+
+    /**
+     * An upload as the media viewer's descriptor, or null for one it can't show — lurker-ios's
+     * `UploadsViewController.preview`. [actions] offers View exactly when this isn't null.
+     *
+     * ⚠⚠ An image's `src` is the upload's OWN address, not a proxy path — the one place in the app that
+     * is true. Preview sources are proxied so that rendering a stranger's link can't report the reader
+     * to that stranger's host; here the host is the uploader this account chose and the file is one this
+     * account put there, so there's no third party to hide from. (The kit's media request builder sends
+     * an absolute address no bearer token.)
+     *
+     * ⚠ Video and audio carry `thumb` and never `src`: those stream from their origin in the player.
+     * Text has no viewer page, so it stays with the browser. And the admission test is the kit's
+     * `LinkPreview.isViewable`, the one the message list's attachments use (`AttachmentLayout.gallery`)
+     * — so a clip this app can't legally load (cleartext to a public host) offers the browser instead
+     * of a player that would fail.
+     */
+    fun preview(item: UploadItem): LinkPreview? {
+        if (item.removed) return null
+        val preview = when (item.kind ?: return null) {
+            UploadKind.Image -> LinkPreview(
+                url = item.url, status = LinkPreview.Status.Ok, kind = PreviewKind.Image,
+                title = item.filename, src = item.url, mime = item.mime,
+            )
+            UploadKind.Video -> LinkPreview(
+                url = item.url, status = LinkPreview.Status.Ok, kind = PreviewKind.Video,
+                title = item.filename, thumb = item.thumbnailPath, mime = item.mime,
+            )
+            UploadKind.Audio -> LinkPreview(
+                url = item.url, status = LinkPreview.Status.Ok, kind = PreviewKind.Audio,
+                title = item.filename, thumb = item.thumbnailPath, mime = item.mime,
+            )
+            UploadKind.Text -> return null
+        }
+        return preview.takeIf { it.isViewable }
+    }
+
+    /**
+     * The viewer's gallery for [picked]: every viewable row in [items], positioned on it — so the
+     * filters double as a way to scope it (narrow to Images, search "march", and swiping walks exactly
+     * those). Null when [picked] has nothing the viewer can present.
+     */
+    fun gallery(items: List<UploadItem>, picked: UploadItem): Pair<List<LinkPreview>, Int>? {
+        val previews = items.mapNotNull(::preview)
+        val start = previews.indexOfFirst { it.url == picked.url }
+        return if (start < 0) null else previews to start
+    }
 
     /**
      * When and how big, in that order — the two things that identify a file you're trying to find again.
