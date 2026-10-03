@@ -144,12 +144,12 @@ fun AttachButton(attachments: Attachments, size: Dp) {
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Icon(UploadIcons.AttachFile, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+            Icon(LurkerIcons.AttachFile, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
                 text = { Text("Photo Library") },
-                leadingIcon = { Icon(UploadIcons.PhotoLibrary, contentDescription = null) },
+                leadingIcon = { Icon(LurkerIcons.PhotoLibrary, contentDescription = null) },
                 onClick = {
                     expanded = false
                     attachments.pickPhotos()
@@ -157,7 +157,7 @@ fun AttachButton(attachments: Attachments, size: Dp) {
             )
             DropdownMenuItem(
                 text = { Text("Files") },
-                leadingIcon = { Icon(UploadIcons.InsertDriveFile, contentDescription = null) },
+                leadingIcon = { Icon(LurkerIcons.InsertDriveFile, contentDescription = null) },
                 onClick = {
                     expanded = false
                     attachments.pickFiles()

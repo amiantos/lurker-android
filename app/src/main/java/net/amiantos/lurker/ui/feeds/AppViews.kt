@@ -16,7 +16,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.vector.ImageVector
 import net.amiantos.lurker.ui.theme.LurkerIcons
-import net.amiantos.lurker.ui.uploads.UploadIcons
 
 /**
  * The app's views — the surfaces you *look at*, as against the buffer you're in: what the menus list
@@ -47,7 +46,7 @@ enum class AppView(val title: String) {
             Search -> LurkerIcons.Search
             Activity -> LurkerIcons.AlternateEmail
             Bookmarks -> LurkerIcons.BookmarkBorder
-            Uploads -> UploadIcons.PhotoLibrary
+            Uploads -> LurkerIcons.PhotoLibrary
         }
 }
 
