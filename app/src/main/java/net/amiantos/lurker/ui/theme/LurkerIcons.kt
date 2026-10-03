@@ -16,7 +16,8 @@ import androidx.compose.ui.unit.dp
  * this build, and `material-icons-extended` is a multi-megabyte dependency for a handful of
  * shapes. The path data is Material's own (`edit`, `more_vert`, `add`, `close`, `arrow_back`,
  * `keyboard`, `visibility`, `visibility_off`, `search`, `warning`, `keyboard_arrow_up`,
- * `keyboard_arrow_down` — Apache-2.0), so a
+ * `keyboard_arrow_down`, `language`, `chevron_right`, `check`, `arrow_drop_down`, `remove` —
+ * Apache-2.0), so a
  * glyph here is the one every Android user already reads. Tinted by the `Icon` that draws it.
  */
 object LurkerIcons {
@@ -118,6 +119,40 @@ object LurkerIcons {
 
     /** A refusal pinned in a form — iOS's `exclamationmark.triangle.fill` beside the reason. */
     val Warning: ImageVector by lazy { icon("Warning", "M1,21h22L12,2 1,21zM13,18h-2v-2h2v2zM13,14h-2v-4h2v4z") }
+
+    /** Settings' Networks row — iOS's `network` globe, as Material's `language`. */
+    val Language: ImageVector by lazy {
+        icon(
+            "Language",
+            "M11.99,2C6.47,2 2,6.48 2,12s4.47,10 9.99,10C17.52,22 22,17.52 22,12S17.52,2 11.99,2z" +
+                "M18.92,8h-2.95c-0.32,-1.25 -0.78,-2.45 -1.38,-3.56 1.84,0.63 3.37,1.91 4.33,3.56z" +
+                "M12,4.04c0.83,1.2 1.48,2.53 1.91,3.96h-3.82c0.43,-1.43 1.08,-2.76 1.91,-3.96z" +
+                "M4.26,14C4.1,13.36 4,12.69 4,12s0.1,-1.36 0.26,-2h3.38c-0.08,0.66 -0.14,1.32 -0.14,2" +
+                " 0,0.68 0.06,1.34 0.14,2L4.26,14z" +
+                "M5.08,16h2.95c0.32,1.25 0.78,2.45 1.38,3.56 -1.84,-0.63 -3.37,-1.9 -4.33,-3.56z" +
+                "M8.03,8L5.08,8c0.96,-1.66 2.49,-2.93 4.33,-3.56C8.81,5.55 8.35,6.75 8.03,8z" +
+                "M12,19.96c-0.83,-1.2 -1.48,-2.53 -1.91,-3.96h3.82c-0.43,1.43 -1.08,2.76 -1.91,3.96z" +
+                "M14.34,14L9.66,14c-0.09,-0.66 -0.16,-1.32 -0.16,-2 0,-0.68 0.07,-1.35 0.16,-2h4.68" +
+                "c0.09,0.65 0.16,1.32 0.16,2 0,0.68 -0.07,1.34 -0.16,2z" +
+                "M14.59,19.56c0.6,-1.11 1.06,-2.31 1.38,-3.56h2.95c-0.96,1.65 -2.49,2.93 -4.33,3.56z" +
+                "M16.36,14c0.08,-0.66 0.14,-1.32 0.14,-2 0,-0.68 -0.06,-1.34 -0.14,-2h3.38" +
+                "c0.16,0.64 0.26,1.31 0.26,2s-0.1,1.36 -0.26,2h-3.38z",
+        )
+    }
+
+    /** A row that goes somewhere — iOS's disclosure indicator. Mirrored right-to-left. */
+    val ChevronRight: ImageVector by lazy {
+        icon("ChevronRight", "M10,6L8.59,7.41 13.17,12l-4.58,4.59L10,18l6,-6z", autoMirror = true)
+    }
+
+    /** The choice in force in a pull-down — iOS's menu checkmark. */
+    val Check: ImageVector by lazy { icon("Check", "M9,16.17L4.83,12l-1.42,1.41L9,19 21,7l-1.41,-1.41z") }
+
+    /** A row whose value opens a menu of choices — Material's exposed dropdown arrow. */
+    val ArrowDropDown: ImageVector by lazy { icon("ArrowDropDown", "M7,10l5,5 5,-5z") }
+
+    /** A stepper's decrement — its increment is [Add]. */
+    val Remove: ImageVector by lazy { icon("Remove", "M19,13H5v-2h14v2z") }
 
     private fun icon(name: String, path: String, autoMirror: Boolean = false): ImageVector =
         ImageVector.Builder(
