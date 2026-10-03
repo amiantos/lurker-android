@@ -204,7 +204,9 @@ class SocketCloseTests {
  * (or a refusal with [upgradeStatus]), unmasked text and close frames out, masked frames in.
  */
 private class TinySocketServer(private val upgradeStatus: Int = 101) : AutoCloseable {
-    private val server = ServerSocket(0, 1, InetAddress.getLoopbackAddress())
+    // 127.0.0.1 by name, not `InetAddress.getLoopbackAddress()`: that's IPv4 on OpenJDK but `::1` on
+    // Android, where the client — dialling `http://127.0.0.1` — then finds nothing listening (#34).
+    private val server = ServerSocket(0, 1, InetAddress.getByName("127.0.0.1"))
     val port: Int get() = server.localPort
     private val received = LinkedBlockingQueue<String>()
     private val connected = CountDownLatch(1)

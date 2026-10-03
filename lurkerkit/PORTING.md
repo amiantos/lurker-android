@@ -246,3 +246,19 @@ are good material for a `// Port-only:` test (see `ServerAddressTests`).
 
 Without Android Studio's JDK on the path:
 `JAVA_HOME="/Applications/Android Studio.app/Contents/jbr/Contents/Home" ./gradlew :lurkerkit:test`
+
+## On a device (lurker-android#34)
+
+The suite runs on the host JVM, whose regex engine is OpenJDK's and whose `java.time` is the JDK's;
+a device runs ICU and Android's own. `:lurkerkit-device` compiles the kit's sources and this suite
+together as an Android library (the tests lean on `internal`, which only one module can see), so the
+same tests run as instrumented tests:
+
+    ./gradlew :lurkerkit-device:assembleDebugAndroidTest
+    adb -s <serial> install -r -t lurkerkit-device/build/outputs/apk/androidTest/debug/*.apk
+    adb -s <serial> shell am instrument -w net.amiantos.lurkerkit.device.test/androidx.test.runner.AndroidJUnitRunner
+
+(`connectedDebugAndroidTest` works too, but installs on every attached device.) First run, 2026-10-03,
+API 35 emulator: 1808 of 1808 after two harness fixes — the bundled catalogue resource, and a test
+server bound to `getLoopbackAddress()`, which is `::1` on Android. No kit behaviour differed. Not in CI
+(it needs a device); rerun it when the kit gains regex- or date-heavy code.

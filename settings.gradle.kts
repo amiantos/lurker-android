@@ -25,3 +25,5 @@ dependencyResolutionManagement {
 rootProject.name = "Lurker"
 include(":app")
 include(":lurkerkit")
+// The kit's suite on a device (lurker-android#34): Android's regex engine is ICU, not OpenJDK's.
+include(":lurkerkit-device")
