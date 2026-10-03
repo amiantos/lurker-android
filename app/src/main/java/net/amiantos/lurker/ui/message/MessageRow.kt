@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import net.amiantos.lurker.ui.media.MessageAttachments
 import net.amiantos.lurker.ui.media.PreviewPlan
+import net.amiantos.lurker.ui.media.PreviewUpdates
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.ConsolidationSummary
@@ -225,9 +226,14 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
     val revealed = message?.let(context.revealedSpoilers) ?: emptySet()
     // What this row's previews mean for it — which addresses the body drops and what draws under it —
     // once, for both halves: the text losing a URL and the picture appearing are the same event.
-    // Re-planned when the screen says preview state moved for something it shows (`revision`).
+    // ⚠ Re-planned when one of ITS URLs moves: reading their versions here subscribes this row, and
+    // only this row, to them — a batch resolving elsewhere recomposes nothing on this line.
     val previews = context.previews
-    val previewPlan = remember(message, previews?.store, previews?.toggles, previews?.revision) {
+    val previewUrls = remember(message, previews?.toggles) {
+        if (message == null || previews == null) emptyList() else previews.urls(message)
+    }
+    val moved = previewUrls.map(PreviewUpdates::version)
+    val previewPlan = remember(message, previews?.store, previews?.toggles, moved) {
         if (message == null || previews == null) PreviewPlan.None else previews.plan(message)
     }
     val body: AnnotatedString = when (content) {
@@ -353,6 +359,7 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                     media = previews.media,
                     onOpenGallery = context.onOpenMedia,
                     rowActions = if (!hasBody && plan.header == null) actions else emptyList(),
+                    onPlaced = { url, coordinates -> targets.attachments[url] = coordinates },
                     modifier = Modifier.padding(
                         start = with(LocalDensity.current) { style.indentSp.sp.toDp() },
                         top = CompactMetrics.attachmentsTop,

@@ -21,7 +21,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -29,7 +32,10 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onPlaced
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
@@ -42,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.unit.dp
 import net.amiantos.lurker.ui.theme.LurkerTheme
@@ -67,6 +74,10 @@ import net.amiantos.lurkerkit.model.PreviewKind
  * @param rowActions the row's TalkBack actions, for a row with nothing else to carry them — every
  *   address hidden behind its picture, and no author line above (U2a's custom actions would otherwise
  *   be on no element at all).
+ * @param onPlaced where each attachment landed, by the address it stands for — so the row can resolve
+ *   a long press on a tile or a card to that address's link actions, as on a link in the text. Every
+ *   attachment is keyed by its address, so one re-planned onto a different preview is a new element and
+ *   the old one's placement goes stale with it.
  */
 @Composable
 fun MessageAttachments(
@@ -75,6 +86,7 @@ fun MessageAttachments(
     onOpenGallery: ((List<LinkPreview>, Int) -> Unit)?,
     modifier: Modifier = Modifier,
     rowActions: List<CustomAccessibilityAction> = emptyList(),
+    onPlaced: (url: String, coordinates: LayoutCoordinates) -> Unit = { _, _ -> },
 ) {
     if (previews.isEmpty()) return
     val blocks = remember(previews) { AttachmentLayout.blocks(previews) }
@@ -91,10 +103,12 @@ fun MessageAttachments(
     val onCard: (String) -> Unit = { url -> uriHandler.openUri(url) }
     Column(modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(AttachmentLayout.SPACING.dp)) {
         for (block in blocks) {
-            when (block) {
-                is AttachmentLayout.Block.Mosaic -> Mosaic(block.rows, media, onMedia, rowActions)
-                is AttachmentLayout.Block.Media -> MediaBox(block.preview, media, onMedia, rowActions)
-                is AttachmentLayout.Block.Card -> Card(block.preview, media, onCard, rowActions)
+            key(block.key) {
+                when (block) {
+                    is AttachmentLayout.Block.Mosaic -> Mosaic(block.rows, media, onMedia, rowActions, onPlaced)
+                    is AttachmentLayout.Block.Media -> MediaBox(block.preview, media, onMedia, rowActions, onPlaced)
+                    is AttachmentLayout.Block.Card -> Card(block.preview, media, onCard, rowActions, onPlaced)
+                }
             }
         }
     }
@@ -146,27 +160,29 @@ private fun Mosaic(
     media: MediaSource,
     onTap: (String) -> Unit,
     rowActions: List<CustomAccessibilityAction>,
+    onPlaced: (String, LayoutCoordinates) -> Unit,
 ) {
     val gap = AttachmentLayout.MOSAIC_GAP.dp
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(gap)) {
-        for (row in rows) {
+        // Keyed, so a re-planned mosaic never hands one picture's tile (and its decoded still) to another.
+        for (row in rows) key(row.key) {
             when (row) {
                 is AttachmentLayout.MosaicRow.ThreeUp -> Row(
                     Modifier.fillMaxWidth().height(AttachmentLayout.MOSAIC_THREE_UP_HEIGHT.dp),
                     horizontalArrangement = Arrangement.spacedBy(gap),
                 ) {
-                    Tile(row.tall, media, onTap, rowActions, Modifier.weight(1f).fillMaxHeight())
+                    Tile(row.tall, media, onTap, rowActions, onPlaced, Modifier.weight(1f).fillMaxHeight())
                     Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(gap)) {
-                        Tile(row.top, media, onTap, rowActions, Modifier.weight(1f).fillMaxWidth())
-                        Tile(row.bottom, media, onTap, rowActions, Modifier.weight(1f).fillMaxWidth())
+                        Tile(row.top, media, onTap, rowActions, onPlaced, Modifier.weight(1f).fillMaxWidth())
+                        Tile(row.bottom, media, onTap, rowActions, onPlaced, Modifier.weight(1f).fillMaxWidth())
                     }
                 }
                 is AttachmentLayout.MosaicRow.Pair -> Row(
                     Modifier.fillMaxWidth().height(AttachmentLayout.MOSAIC_ROW_HEIGHT.dp),
                     horizontalArrangement = Arrangement.spacedBy(gap),
                 ) {
-                    Tile(row.left, media, onTap, rowActions, Modifier.weight(1f).fillMaxHeight())
-                    Tile(row.right, media, onTap, rowActions, Modifier.weight(1f).fillMaxHeight())
+                    Tile(row.left, media, onTap, rowActions, onPlaced, Modifier.weight(1f).fillMaxHeight())
+                    Tile(row.right, media, onTap, rowActions, onPlaced, Modifier.weight(1f).fillMaxHeight())
                 }
             }
         }
@@ -180,12 +196,16 @@ private fun Tile(
     media: MediaSource,
     onTap: (String) -> Unit,
     rowActions: List<CustomAccessibilityAction>,
+    onPlaced: (String, LayoutCoordinates) -> Unit,
     modifier: Modifier,
 ) {
-    val still by rememberPreviewStill(preview.src, media)
+    var box by remember { mutableStateOf(IntSize.Zero) }
+    val still by rememberPreviewStill(preview.src, media, box, DecodeSize.Mode.Fill)
     val animated = still?.animated == true
     Box(
         modifier
+            .onPlaced { onPlaced(preview.url, it) }
+            .onSizeChanged { box = it }
             .clip(RoundedCornerShape(AttachmentLayout.CORNER.dp))
             .background(boxFill())
             .attachmentSemantics(AttachmentLayout.mediaLabel(PreviewKind.Image, animated), "open", { onTap(preview.url) }, rowActions)
@@ -212,15 +232,19 @@ private fun MediaBox(
     media: MediaSource,
     onTap: (String) -> Unit,
     rowActions: List<CustomAccessibilityAction>,
+    onPlaced: (String, LayoutCoordinates) -> Unit,
 ) {
     val picture = preview.inlinePicture
-    val still by rememberPreviewStill(picture, media)
+    var box by remember { mutableStateOf(IntSize.Zero) }
+    val still by rememberPreviewStill(picture, media, box, DecodeSize.Mode.Fill)
     val isImage = preview.kind == PreviewKind.Image
     val animated = isImage && still?.animated == true
     Box(
         Modifier
             .fillMaxWidth()
             .heightFromWidth { width -> AttachmentLayout.mediaHeight(preview, width) }
+            .onPlaced { onPlaced(preview.url, it) }
+            .onSizeChanged { box = it }
             .clip(RoundedCornerShape(AttachmentLayout.CORNER.dp))
             .background(boxFill())
             .attachmentSemantics(AttachmentLayout.mediaLabel(preview.kind, animated), "open", { onTap(preview.url) }, rowActions)
@@ -264,6 +288,7 @@ private fun Card(
     media: MediaSource,
     onOpen: (String) -> Unit,
     rowActions: List<CustomAccessibilityAction>,
+    onPlaced: (String, LayoutCoordinates) -> Unit,
 ) {
     val colors = LurkerTheme.colors
     val rule = colors.border
@@ -272,6 +297,7 @@ private fun Card(
     Box(
         Modifier
             .fillMaxWidth()
+            .onPlaced { onPlaced(preview.url, it) }
             .attachmentSemantics(AttachmentLayout.cardLabel(preview), "open link", { onOpen(preview.url) }, rowActions)
             .clickable { onOpen(preview.url) }
             .drawBehind {
@@ -320,10 +346,12 @@ private fun CardText(preview: LinkPreview, modifier: Modifier) {
 /** A near-square picture as a 64dp chip beside the words. */
 @Composable
 private fun Chip(path: String, media: MediaSource) {
-    val still by rememberPreviewStill(path, media)
+    var box by remember { mutableStateOf(IntSize.Zero) }
+    val still by rememberPreviewStill(path, media, box, DecodeSize.Mode.Fill)
     Box(
         Modifier
             .size(AttachmentLayout.THUMB_SIDE.dp)
+            .onSizeChanged { box = it }
             .clip(RoundedCornerShape(AttachmentLayout.CHIP_CORNER.dp))
             .background(boxFill()),
     ) { PreviewStillImage(still, ContentScale.Crop) }
@@ -336,11 +364,13 @@ private fun Chip(path: String, media: MediaSource) {
  */
 @Composable
 private fun HeroBand(path: String, media: MediaSource) {
-    val still by rememberPreviewStill(path, media)
+    var box by remember { mutableStateOf(IntSize.Zero) }
+    val still by rememberPreviewStill(path, media, box, DecodeSize.Mode.Fit)
     Box(
         Modifier
             .fillMaxWidth()
             .aspectRatio(AttachmentLayout.HERO_ASPECT)
+            .onSizeChanged { box = it }
             .clip(RoundedCornerShape(AttachmentLayout.CORNER.dp))
             .background(boxFill()),
     ) { PreviewStillImage(still, ContentScale.Fit) }
@@ -355,11 +385,13 @@ private fun HeroBand(path: String, media: MediaSource) {
  */
 @Composable
 private fun VideoFacade(path: String, media: MediaSource) {
-    val still by rememberPreviewStill(path, media)
+    var box by remember { mutableStateOf(IntSize.Zero) }
+    val still by rememberPreviewStill(path, media, box, DecodeSize.Mode.Fill)
     Box(
         Modifier
             .fillMaxWidth()
             .aspectRatio(AttachmentLayout.VIDEO_ASPECT)
+            .onSizeChanged { box = it }
             .clip(RoundedCornerShape(AttachmentLayout.CORNER.dp))
             .background(boxFill()),
         contentAlignment = Alignment.Center,

@@ -3,37 +3,49 @@
 
 package net.amiantos.lurker.ui.media
 
+import androidx.compose.runtime.MutableIntState
+import androidx.compose.runtime.mutableIntStateOf
 import net.amiantos.lurkerkit.client.LinkPreviewStore
 
 /**
- * The kit's one `LinkPreviewStore.onUpdate`, handed to every screen that wants it.
+ * The kit's `LinkPreviewStore.onUpdate`, turned into state a row can read: a version per URL, bumped
+ * whenever that URL's preview state moves.
  *
- * The store takes a single callback; a conversation is rebuilt per buffer, and during a phone's pane
- * transition two can be composed at once — whichever set the callback last would silently orphan the
- * other. So `LurkerApp` installs this once and screens [listen].
+ * ⚠⚠ Per URL, and that is the point. The store says WHICH addresses moved, and it is shared by every
+ * buffer — most of what resolves during a connect burst belongs to some other screen. A row reads the
+ * versions of its own URLs ([version]) while composing, so a batch landing recomposes exactly the rows
+ * that mention something in it, wherever they are in the list, and nothing else. (One state object per
+ * URL rather than a snapshot map: a map's reads are tracked as a whole, so any write would recompose
+ * every row that had read it.)
  *
- * ⚠ What arrives is WHICH URLs moved, and a listener's job is to ask whether any of them are on its
- * screen — the store is shared by every buffer, and most of what resolves belongs to another one.
- *
- * A process-wide object, as lurker-ios's `PreviewImageLoader.shared` is: it outlives every screen, and
- * threading it through the activity would buy nothing. Main thread only, as the store is.
+ * A process-wide object, as lurker-ios's `PreviewImageLoader.shared` is — it outlives every screen —
+ * installed once by `LurkerApp`. Main thread only, as the store is.
  */
 object PreviewUpdates {
-    private val listeners = mutableListOf<(Set<String>) -> Unit>()
+    private val versions = HashMap<String, MutableIntState>()
 
     /** Take over [store]'s callback. Once, from `LurkerApp`. */
     fun install(store: LinkPreviewStore) {
         store.onUpdate = ::publish
     }
 
-    /** Hear every batch of moved URLs until the returned function is called. */
-    fun listen(listener: (Set<String>) -> Unit): () -> Unit {
-        listeners += listener
-        return { listeners.remove(listener) }
+    /**
+     * The version of [url]'s preview state. Read during composition, it subscribes the reader to that
+     * URL alone. Starts at 0 for a URL nothing has moved yet — whoever reads it then plans from the
+     * store's current answer, and hears about the next one.
+     */
+    fun version(url: String): Int = versions.getOrPut(url) { mutableIntStateOf(0) }.intValue
+
+    /** [urls] moved: bump the ones somebody is reading. A URL nobody has read has nobody to tell. */
+    fun publish(urls: Set<String>) {
+        for (url in urls) versions[url]?.let { it.intValue += 1 }
     }
 
-    /** Over a copy: a listener may stop listening from inside its own call. */
-    fun publish(urls: Set<String>) {
-        for (listener in listeners.toList()) listener(urls)
+    /**
+     * Forget every version. On sign-out, with the store's own reset: the next account's rows start
+     * from nothing, and the URLs the last one read are its reading history.
+     */
+    fun reset() {
+        versions.clear()
     }
 }

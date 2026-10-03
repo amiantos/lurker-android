@@ -491,6 +491,7 @@ fun MainScaffold(
                             sideBySide = sideBySide,
                             onOpenView = { view -> feedSheets.show(view) },
                             onOpenMedia = mediaViewer::show,
+                            media = media,
                         )
                     }
                 }
