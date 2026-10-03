@@ -7,13 +7,19 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -22,6 +28,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurkerkit.model.ReactionGroup
 
 /**
@@ -34,12 +41,11 @@ import net.amiantos.lurkerkit.model.ReactionGroup
  * would fight over.
  *
  * Tapping a chip adds our reaction or takes it back, when [ReactionChips.canToggle] says one can go
- * out right now. When it can't, iOS opens the reaction sheet instead; that sheet is U6, so until then
- * such a chip is drawn and not tappable — a press that lights up and does nothing reads as broken.
- *
- * U6: the trailing add chip (always there while the line has reactions, as Slack does, unless
- * `showsAdd` is off) opens the picker, and a long press on a chip opens the sheet. Both arrive with
- * the picker; until then there's no add chip at all, for the same reason.
+ * out right now; when it can't, the tap opens the reaction sheet instead of sending something the
+ * server would refuse in silence. The trailing add chip — always there while the line has reactions,
+ * as Slack does, unless `showsAdd` is off (a notice, an encrypted line) — opens the sheet too, which is
+ * also where a touch screen sees who gave what. A long press on the row of chips opens it as well
+ * (`RowPress.Reactions`, resolved by the row).
  */
 @Composable
 internal fun ReactionChipRow(
@@ -48,6 +54,8 @@ internal fun ReactionChipRow(
     textStyle: TextStyle,
     onToggle: (String) -> Unit,
     modifier: Modifier = Modifier,
+    /** The reaction sheet, or null where there is none — then no add chip, and a dead chip stays dead. */
+    onOpen: (() -> Unit)? = null,
 ) {
     FlowRow(
         modifier = modifier,
@@ -55,8 +63,9 @@ internal fun ReactionChipRow(
         verticalArrangement = Arrangement.spacedBy(CHIP_GAP),
     ) {
         for (group in chips.groups) {
-            ReactionChip(group, canToggle = chips.canToggle, style = style, textStyle = textStyle, onToggle = onToggle)
+            ReactionChip(group, canToggle = chips.canToggle, style = style, textStyle = textStyle, onToggle = onToggle, onOpen = onOpen)
         }
+        if (chips.showsAdd && onOpen != null) AddChip(style = style, textStyle = textStyle, onOpen = onOpen)
     }
 }
 
@@ -67,6 +76,7 @@ private fun ReactionChip(
     style: MessageTextStyle,
     textStyle: TextStyle,
     onToggle: (String) -> Unit,
+    onOpen: (() -> Unit)?,
 ) {
     val colors = style.colors
     val shape = RoundedCornerShape(4.dp)
@@ -74,8 +84,18 @@ private fun ReactionChip(
     val fill = if (group.mine) colors.accent.copy(alpha = 0.15f) else colors.bgSoft
     val edge = if (group.mine) colors.accent.copy(alpha = 0.3f) else colors.border
     val spoken = MessageText.spokenReaction(group)
+    // What a tap does: toggles ours when one can go out, else shows the sheet (when there is one).
+    val tap: (() -> Unit)? = when {
+        canToggle -> ({ onToggle(group.value) })
+        onOpen != null -> onOpen
+        else -> null
+    }
     // What TalkBack says a tap does — iOS's hint.
-    val action = if (group.mine) "take your reaction back" else "add your reaction"
+    val action = when {
+        !canToggle -> "show reactions"
+        group.mine -> "take your reaction back"
+        else -> "add your reaction"
+    }
     Text(
         "${MessageText.chipValue(group.value)} ${group.nicks.size}",
         modifier = Modifier
@@ -83,10 +103,10 @@ private fun ReactionChip(
             .clearAndSetSemantics {
                 contentDescription = spoken
                 selected = group.mine
-                if (canToggle) {
+                if (tap != null) {
                     role = Role.Button
                     onClick(label = action) {
-                        onToggle(group.value)
+                        tap()
                         true
                     }
                 }
@@ -94,9 +114,7 @@ private fun ReactionChip(
             .clip(shape)
             .background(fill, shape)
             .border(1.dp, edge, shape)
-            .then(
-                if (canToggle) Modifier.clickable(role = Role.Button, onClickLabel = action) { onToggle(group.value) } else Modifier,
-            )
+            .then(if (tap != null) Modifier.clickable(role = Role.Button, onClickLabel = action, onClick = tap) else Modifier)
             // A pixel more below than above: an emoji's glyph sits low in the line, and even padding
             // left it touching the bottom edge while its top floated (the web's correction too).
             .padding(start = 6.dp, end = 6.dp, top = 4.dp, bottom = 5.dp),
@@ -104,6 +122,45 @@ private fun ReactionChip(
         color = ink,
         maxLines = 1,
     )
+}
+
+/**
+ * The add chip: a placeholder, not a reaction, so it's faded well below the chips beside it — the web
+ * found a placeholder-strength glyph still read as one more reaction. The same box as a chip (a line
+ * of text tall, the same padding), so a row of them lines up.
+ */
+@Composable
+private fun AddChip(style: MessageTextStyle, textStyle: TextStyle, onOpen: () -> Unit) {
+    val colors = style.colors
+    val shape = RoundedCornerShape(4.dp)
+    val density = LocalDensity.current
+    val line = with(density) { textStyle.lineHeight.toDp() }
+    val glyph = with(density) { (textStyle.fontSize * 0.95f).toDp() }
+    Box(
+        modifier = Modifier
+            .clearAndSetSemantics {
+                // iOS's label and hint.
+                contentDescription = "Reactions"
+                role = Role.Button
+                onClick(label = "show who reacted, and add yours") {
+                    onOpen()
+                    true
+                }
+            }
+            .clip(shape)
+            .border(1.dp, colors.border.copy(alpha = colors.border.alpha * 0.6f), shape)
+            .clickable(role = Role.Button, onClick = onOpen)
+            .padding(start = 6.dp, end = 6.dp, top = 4.dp, bottom = 5.dp)
+            .height(line),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            LurkerIcons.Smile,
+            contentDescription = null,
+            modifier = Modifier.size(glyph),
+            tint = colors.fgMuted.copy(alpha = colors.fgMuted.alpha * 0.55f),
+        )
+    }
 }
 
 private val CHIP_GAP = 4.dp

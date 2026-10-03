@@ -19,7 +19,8 @@ import androidx.compose.ui.unit.dp
  * `keyboard_arrow_down`, `language`, `chevron_right`, `check`, `arrow_drop_down`, `remove`,
  * `arrow_upward`, `cancel`, `info_outline`, `group`, `account_circle`, `content_copy`, `refresh`,
  * `chat_bubble_outline`, `tune`, `list`, `help_outline`, `more_horiz`, `check_circle_outline`,
- * `security`, `memory`, `wifi_tethering` — Apache-2.0), so a
+ * `security`, `memory`, `wifi_tethering`, `reply`, `sentiment_satisfied`, `bookmark_border`, `bookmark`,
+ * `open_in_new`, `share`, `block` — Apache-2.0), so a
  * glyph here is the one every Android user already reads. Tinted by the `Icon` that draws it.
  */
 object LurkerIcons {
@@ -306,6 +307,70 @@ object LurkerIcons {
                 " 0,-2.21 1.79,-4 4,-4s4,1.79 4,4c0,1.48 -0.81,2.75 -2,3.45l1,1.74c1.79,-1.04 3,-2.97 3,-5.19z" +
                 "M12,3C6.48,3 2,7.48 2,13c0,3.7 2.01,6.92 4.99,8.65l1,-1.73C5.61,18.53 4,15.96 4,13c0,-4.42 3.58,-8 8,-8" +
                 "s8,3.58 8,8c0,2.96 -1.61,5.53 -4,6.92l1,1.73c2.99,-1.73 5,-4.95 5,-8.65 0,-5.52 -4.48,-10 -10,-10z",
+        )
+    }
+
+    // U6 — a message's actions sheet and the reaction chips.
+
+    /** Reply to a line — iOS's `arrowshape.turn.up.left`. Mirrored right-to-left, as Material's is. */
+    val Reply: ImageVector by lazy {
+        icon("Reply", "M10,9V5l-7,7 7,7v-4.1c5,0 8.5,1.6 11,5.1 -1,-5 -4,-10 -11,-11z", autoMirror = true)
+    }
+
+    /** React, and the reaction row's add chip — iOS's `face.smiling` (Material's `sentiment_satisfied`). */
+    val Smile: ImageVector by lazy {
+        icon(
+            "Smile",
+            "M15.5,9.5m-1.5,0a1.5,1.5 0,1 1,3 0a1.5,1.5 0,1 1,-3 0" +
+                "M8.5,9.5m-1.5,0a1.5,1.5 0,1 1,3 0a1.5,1.5 0,1 1,-3 0" +
+                "M11.99,2C6.47,2 2,6.48 2,12s4.47,10 9.99,10C17.52,22 22,17.52 22,12S17.52,2 11.99,2z" +
+                "M12,20c-4.42,0 -8,-3.58 -8,-8s3.58,-8 8,-8 8,3.58 8,8 -3.58,8 -8,8z" +
+                "M12,16c-1.48,0 -2.75,-0.81 -3.45,-2H6.88c0.8,2.05 2.79,3.5 5.12,3.5s4.32,-1.45 5.12,-3.5h-1.67" +
+                "c-0.7,1.19 -1.97,2 -3.45,2z",
+        )
+    }
+
+    /** Save Message — iOS's `bookmark` (Material's `bookmark_border`). */
+    val BookmarkBorder: ImageVector by lazy {
+        icon(
+            "BookmarkBorder",
+            "M17,3H7c-1.1,0 -1.99,0.9 -1.99,2L5,21l7,-3 7,3V5c0,-1.1 -0.9,-2 -2,-2zM17,18l-5,-2.18L7,18V5h10v13z",
+        )
+    }
+
+    /** Remove Bookmark — iOS's `bookmark.fill`. */
+    val BookmarkFilled: ImageVector by lazy {
+        icon("BookmarkFilled", "M17,3H7c-1.1,0 -1.99,0.9 -1.99,2L5,21l7,-3 7,3V5c0,-1.1 -0.9,-2 -2,-2z")
+    }
+
+    /** Open Link — iOS's `safari` (Material's `open_in_new`). */
+    val OpenInNew: ImageVector by lazy {
+        icon(
+            "OpenInNew",
+            "M19,19H5V5h7V3H5c-1.11,0 -2,0.9 -2,2v14c0,1.1 0.89,2 2,2h14c1.1,0 2,-0.9 2,-2v-7h-2v7z" +
+                "M14,3v2h3.59l-9.83,9.83 1.41,1.41L19,6.41V10h2V3h-7z",
+        )
+    }
+
+    /** Share Link — iOS's `square.and.arrow.up` (Material's `share`). */
+    val Share: ImageVector by lazy {
+        icon(
+            "Share",
+            "M18,16.08c-0.76,0 -1.44,0.3 -1.96,0.77L8.91,12.7c0.05,-0.23 0.09,-0.46 0.09,-0.7s-0.04,-0.47 -0.09,-0.7" +
+                "l7.05,-4.11c0.54,0.5 1.25,0.81 2.04,0.81 1.66,0 3,-1.34 3,-3s-1.34,-3 -3,-3 -3,1.34 -3,3" +
+                "c0,0.24 0.04,0.47 0.09,0.7L8.04,9.81C7.5,9.31 6.79,9 6,9c-1.66,0 -3,1.34 -3,3s1.34,3 3,3" +
+                "c0.79,0 1.5,-0.31 2.04,-0.81l7.12,4.16c-0.05,0.21 -0.08,0.43 -0.08,0.65 0,1.61 1.31,2.92 2.92,2.92" +
+                " 1.61,0 2.92,-1.31 2.92,-2.92s-1.31,-2.92 -2.92,-2.92z",
+        )
+    }
+
+    /** Ignore someone — the web's `fa-ban` (Material's `block`). */
+    val Block: ImageVector by lazy {
+        icon(
+            "Block",
+            "M12,2C6.48,2 2,6.48 2,12s4.48,10 10,10 10,-4.48 10,-10S17.52,2 12,2z" +
+                "M4,12c0,-4.42 3.58,-8 8,-8 1.85,0 3.55,0.63 4.9,1.69L5.69,16.9C4.63,15.55 4,13.85 4,12z" +
+                "M12,20c-1.85,0 -3.55,-0.63 -4.9,-1.69L18.31,7.1C19.37,8.45 20,10.15 20,12c0,4.42 -3.58,8 -8,8z",
         )
     }
 
