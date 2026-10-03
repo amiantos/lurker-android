@@ -21,6 +21,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
@@ -202,6 +203,10 @@ private fun MarkerRow(plan: RowPlan.Marker, modifier: Modifier = Modifier) {
  *
  * One TalkBack element for the header and body together — "alice, morning, 14:42" — with the quote
  * its own element before it, as iOS reads them.
+ *
+ * A long press anywhere on the row is resolved to what it landed on — the chips, a link, or the line
+ * (`PressTargets`) — and handed to the screen (`MessageListContext.onLongPress`); TalkBack reaches the
+ * line's actions as a custom action instead.
  */
 @Composable
 private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modifier: Modifier = Modifier) {
@@ -238,10 +243,19 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
     // hidden behind its picture).
     val semantics = Modifier.clearAndSetSemantics {
         text = label
+        val actions = mutableListOf<CustomAccessibilityAction>()
+        // The long press, for TalkBack — which has no long press on an element it reads whole.
+        val press = context.onLongPress
+        if (message != null && press != null) {
+            actions += CustomAccessibilityAction("Message actions") {
+                press(RowPress.Line(message))
+                true
+            }
+        }
         if (message != null && ordinals.isNotEmpty()) {
             // One action per hidden box, named by position, since the whole point is that their
             // contents can't be read out to tell them apart.
-            customActions = ordinals.mapIndexed { position, ordinal ->
+            actions += ordinals.mapIndexed { position, ordinal ->
                 val name = if (ordinals.size == 1) "Reveal spoiler" else "Reveal spoiler ${position + 1} of ${ordinals.size}"
                 CustomAccessibilityAction(name) {
                     context.onToggleSpoiler(message, ordinal)
@@ -249,11 +263,27 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                 }
             }
         }
+        if (actions.isNotEmpty()) customActions = actions
     }
     val hasBody = body.isNotEmpty()
+    val onLongPress = context.onLongPress
+    val targets = remember { PressTargets() }
+    val pressable = if (onLongPress == null) {
+        Modifier
+    } else {
+        Modifier
+            .onPlaced { targets.row = it }
+            .longPressAnywhere { position ->
+                // Resolved first: a press on nothing to act on is let go, not swallowed.
+                val press = targets.resolve(position, message) ?: return@longPressAnywhere false
+                onLongPress(press)
+                true
+            }
+    }
 
     Column(
         modifier
+            .then(pressable)
             .fillMaxWidth()
             .padding(bottom = if (plan.endsBlock) metrics.blockGap - metrics.wash * 2 else 0.dp),
     ) {
@@ -288,7 +318,9 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = if (header != null && reply == null) CompactMetrics.headerGap else 0.dp)
+                        .onPlaced { targets.body = it }
                         .then(semantics),
+                    onTextLayout = { targets.bodyLayout = it },
                     style = textStyle,
                     inlineContent = if (content is RowPlan.Content.Typists) typingGlyph(colors.fgMuted) else emptyMap(),
                 )
@@ -301,8 +333,10 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                     style = style,
                     textStyle = textStyle,
                     onToggle = { value -> context.reactions?.onToggle?.invoke(message, value) },
-                    // Under the body, one character in, as the body sits under its author.
-                    modifier = Modifier.padding(
+                    onOpen = context.reactions?.let { reactions -> { reactions.onOpen(message) } },
+                    // Under the body, one character in, as the body sits under its author. Placed
+                    // before the padding, so a long press in the padding still counts as on the chips.
+                    modifier = Modifier.onPlaced { targets.chips = it }.padding(
                         start = with(LocalDensity.current) { style.indentSp.sp.toDp() },
                         top = CompactMetrics.reactionTop,
                         bottom = CompactMetrics.reactionBottom,

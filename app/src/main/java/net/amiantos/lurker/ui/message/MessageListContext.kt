@@ -65,6 +65,11 @@ class MessageListContext(
     val onJumpToReply: ((ReplyQuote) -> Unit)? = null,
     /** What a line's reaction chips need (lurker-ios#183), or null on screens that don't draw them. */
     val reactions: ReactionContext? = null,
+    /**
+     * A long press on a row (lurker-ios#60): on its line, a link in it, or its chips — see [RowPress].
+     * Null on screens with no actions sheet; the rows then take no long press at all.
+     */
+    val onLongPress: ((RowPress) -> Unit)? = null,
     /** Which time zone decides a minute and a day. */
     val zone: ZoneId = ZoneId.systemDefault(),
     /** Today, as the day labels read it — the screen advances it at midnight. */
@@ -88,6 +93,7 @@ class MessageListContext(
             onToggleSpoiler: (Message, Int) -> Unit = { _, _ -> },
             onJumpToReply: ((ReplyQuote) -> Unit)? = null,
             reactions: ReactionContext? = null,
+            onLongPress: ((RowPress) -> Unit)? = null,
             zone: ZoneId = ZoneId.systemDefault(),
             today: LocalDate = LocalDate.now(zone),
             locale: Locale = Locale.getDefault(),
@@ -103,6 +109,7 @@ class MessageListContext(
             onToggleSpoiler = onToggleSpoiler,
             onJumpToReply = onJumpToReply,
             reactions = reactions,
+            onLongPress = onLongPress,
             zone = zone,
             today = today,
             locale = locale,
@@ -120,11 +127,14 @@ class ReactionContext(
     val canToggle: (Message) -> Boolean,
     /**
      * Whether the line could ever take a reaction from here — a notice or an encrypted line shows
-     * its chips but offers no add chip. U6: read by the add chip, which arrives with the picker.
+     * its chips but offers no add chip.
      */
     val showsAdd: (Message) -> Boolean,
     val onToggle: (Message, String) -> Unit,
-    /** U6: the reaction sheet — who gave what, and a way to add yours. */
+    /**
+     * The reaction sheet — who gave what, and a way to add yours: the add chip, and a chip on a line
+     * a reaction can't go out on right now (a tap there can't toggle, so it shows instead).
+     */
     val onOpen: (Message) -> Unit,
 )
 

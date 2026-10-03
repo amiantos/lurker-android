@@ -54,6 +54,8 @@ import net.amiantos.lurker.platform.AppEvent
 import net.amiantos.lurker.platform.AppEvents
 import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.conversation.ConversationScreen
+import net.amiantos.lurker.ui.dcc.DccOfferDialog
+import net.amiantos.lurker.ui.dcc.DccOffers
 import net.amiantos.lurker.ui.list.BufferListModel
 import net.amiantos.lurker.ui.list.BufferListScreen
 import net.amiantos.lurkerkit.model.Buffer
@@ -75,7 +77,13 @@ import net.amiantos.lurkerkit.session.ChatViewModel
  */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
-fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: AppEvents, onSignOut: () -> Unit) {
+fun MainScaffold(
+    model: ChatViewModel,
+    uiPreferences: UiPreferences,
+    events: AppEvents,
+    dccOffers: DccOffers,
+    onSignOut: () -> Unit,
+) {
     // The content key is the buffer the detail pane shows, in parts a Bundle can hold — the
     // navigator saves its history, so the conversation survives rotation and process death.
     val navigator = rememberListDetailPaneScaffoldNavigator<BufferRoute>(scaffoldDirective = lurkerPaneDirective())
@@ -470,6 +478,9 @@ fun MainScaffold(model: ChatViewModel, uiPreferences: UiPreferences, events: App
         )
         NoticeHost(events, Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
         ServerErrorDialog(model)
+        // A DCC chat offer, asked about over whatever is on screen — here for the error dialog's
+        // reason, so it neither waits behind the list on a phone nor closes when a conversation opens.
+        DccOfferDialog(dccOffers)
         // Joining is also switching: you asked for a channel, so land in it — once the server says
         // you're in (lurker-ios#57). Nothing navigates before then: a join can be refused, and a
         // screen for a channel you never got into has nothing to show. `requestJoin` opens the
