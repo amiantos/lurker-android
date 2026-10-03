@@ -64,6 +64,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import net.amiantos.lurker.ui.networks.NetworkSheetsHost
+import net.amiantos.lurker.ui.networks.rememberNetworkSheets
 import net.amiantos.lurker.ui.shell.ConnectionBanner
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.shell.StatusTitle
@@ -132,6 +134,8 @@ fun BufferListScreen(
 
     var optimistic by remember { mutableStateOf<OptimisticFavorites?>(null) }
     var drag by remember { mutableStateOf<DragSession?>(null) }
+    // Join Channel, Add Network and the networks list — full-screen dialogs over this screen.
+    val sheets = rememberNetworkSheets()
 
     // ⚠⚠ The burst gate. `hasRenderedList` is NEVER reset here. On iOS it used to be cleared
     // whenever `backlogComplete` was false — meant as "a fresh session waits again" — which
@@ -186,7 +190,7 @@ fun BufferListScreen(
         menuFor = { buffer -> BufferListModel.rowMenu(model.state, buffer) },
         onJoin = { buffer ->
             // No navigation — the row lighting up is the answer — and a refusal says why
-            // (lurker-ios#57; U4 draws that notice).
+            // (lurker-ios#57: `AppEvent.Notice`, the scaffold's snackbar).
             val networkId = buffer.networkId
             if (networkId != null) model.requestJoin(networkId = networkId, channel = buffer.target, opens = false)
         },
@@ -230,6 +234,11 @@ fun BufferListScreen(
         onOpenSystem = { onOpen(model.state.buffers[Buffer.system.key.id] ?: Buffer.system) },
         onMarkAllRead = model::markAllRead,
         onSignOut = onSignOut,
+        // Read as the "+" menu opens, not when the bar was drawn — see `AddMenu`.
+        hasNetworks = { model.state.networks.isNotEmpty() },
+        onJoinChannel = sheets::showJoinChannel,
+        onAddNetwork = sheets::showAddNetwork,
+        onOpenNetworks = sheets::showNetworks,
     )
 
     BufferListContent(
@@ -248,6 +257,14 @@ fun BufferListScreen(
         draggingSection = drag?.sectionId,
         actions = actions,
     )
+
+    // Joining is also switching: you asked for a channel, so land in it — once the server says
+    // you're in (lurker-ios#57). Nothing navigates before then: a join can be refused, and a screen
+    // for a channel you never got into has nothing to show. `requestJoin` opens the channel when
+    // `channel-joined` lands (`AppEvent.OpenBuffer`), and says why when it doesn't (`AppEvent.Notice`).
+    NetworkSheetsHost(sheets = sheets, model = model) { networkId, channel ->
+        model.requestJoin(networkId = networkId, channel = channel, opens = true)
+    }
 }
 
 /** What the list's touches do. One object so the content composable stays stateless (previews). */
@@ -263,6 +280,11 @@ internal class BufferListActions(
     val onOpenSystem: () -> Unit,
     val onMarkAllRead: () -> Unit,
     val onSignOut: () -> Unit,
+    /** Whether the account has any network — what the "+" menu offers depends on it. */
+    val hasNetworks: () -> Boolean,
+    val onJoinChannel: () -> Unit,
+    val onAddNetwork: () -> Unit,
+    val onOpenNetworks: () -> Unit,
 ) {
     companion object {
         /** Touches that do nothing — for previews. */
@@ -278,6 +300,10 @@ internal class BufferListActions(
             onOpenSystem = {},
             onMarkAllRead = {},
             onSignOut = {},
+            hasNetworks = { true },
+            onJoinChannel = {},
+            onAddNetwork = {},
+            onOpenNetworks = {},
         )
     }
 }
@@ -302,8 +328,7 @@ internal fun BufferListContent(
                 // Inline: the bar's own row is enough to say what the screen is.
                 title = { StatusTitleText(title) },
                 actions = {
-                    // U4: the "+" — "Join Channel…" and, under a divider, "Add Network…" (iOS's
-                    // `joinItem`) — sits here, left of "More".
+                    AddMenu(actions = actions)
                     OverflowMenu(actions = actions, onSignOut = { confirmingSignOut = true })
                 },
             )
@@ -329,11 +354,13 @@ internal fun BufferListContent(
                     contentPadding = PaddingValues(bottom = padding.calculateBottomPadding() + RosterMetrics.groupGap),
                 )
                 BufferListPlaceholder.Loading -> StateView(title = "Loading buffers…", isLoading = true)
-                // U4: this state's "Add Network" button goes here — the whole point of the state on
-                // iOS, where it used to say "add a network" to a person with nowhere to do it.
+                // The button is the whole point of this state: it used to say "add a network" to a
+                // person with nowhere to do it, which is the dead end lurker-ios#11 exists to close.
                 BufferListPlaceholder.NoNetworks -> StateView(
                     title = "No networks yet",
                     subtitle = "Add a network to start a conversation.",
+                    actionTitle = "Add Network",
+                    onAction = actions.onAddNetwork,
                 )
                 // They've done the adding already — the next step is joining something, and saying
                 // "add a network" here would read as the app not knowing its own state.
@@ -372,6 +399,56 @@ internal fun BufferListContent(
 }
 
 /**
+ * "+" — "one more of these": join a channel on a network you have, or add a network to have channels
+ * on. lurker-ios's `joinItem`, item for item: one "Join Channel…" whatever the account looks like
+ * (the network is picked inside the dialog, where it has a default and can be ignored), or a disabled
+ * "No networks" on an account with none; then, under a divider because it's the rarer of the two by a
+ * wide margin, "Add Network…".
+ *
+ * Read as it opens ([BufferListActions.hasNetworks]), as iOS defers its menu: built earlier, it
+ * could offer "No networks" to an account whose first network has since arrived. Join Channel stays
+ * enabled when nothing is connected — the dialog names each network's state and disables Join, which
+ * says why; a greyed-out menu row says nothing at all.
+ */
+@Composable
+private fun AddMenu(actions: BufferListActions) {
+    var expanded by remember { mutableStateOf(false) }
+    // Kept apart from `expanded`, so the items don't change under the menu's closing fade.
+    var hasNetworks by remember { mutableStateOf(false) }
+    Box {
+        IconButton(
+            onClick = {
+                hasNetworks = actions.hasNetworks()
+                expanded = true
+            },
+        ) {
+            Icon(LurkerIcons.Add, contentDescription = "Add")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            if (hasNetworks) {
+                DropdownMenuItem(
+                    text = { Text("Join Channel…") },
+                    onClick = {
+                        expanded = false
+                        actions.onJoinChannel()
+                    },
+                )
+            } else {
+                DropdownMenuItem(text = { Text("No networks") }, enabled = false, onClick = {})
+            }
+            HorizontalDivider()
+            DropdownMenuItem(
+                text = { Text("Add Network…") },
+                onClick = {
+                    expanded = false
+                    actions.onAddNetwork()
+                },
+            )
+        }
+    }
+}
+
+/**
  * The app-wide menu: the things that outlast whichever conversation you're reading. One "⋮" —
  * Android's idiom for what iOS splits between a cog and its own "…".
  */
@@ -402,6 +479,15 @@ private fun OverflowMenu(actions: BufferListActions, onSignOut: () -> Unit) {
             )
             // U7: Highlights and Bookmarks go here (search is the list's own field on iOS).
             // U8: and Uploads.
+            // U10: moves into Settings (iOS's Settings → Networks), which doesn't exist yet. Until then
+            // it's here, because the networks screen is the one place to connect, edit or delete one.
+            DropdownMenuItem(
+                text = { Text("Networks") },
+                onClick = {
+                    expanded = false
+                    actions.onOpenNetworks()
+                },
+            )
             HorizontalDivider()
             DropdownMenuItem(
                 text = { Text("Sign Out") },
