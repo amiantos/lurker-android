@@ -75,4 +75,13 @@ class BufferRouteTest {
         assertFalse(restored.claim(JumpRequest(messageId = 12, nonce = 2)))
         assertTrue(restored.claim(JumpRequest(messageId = 9, nonce = 3)))
     }
+
+    /**
+     * Routes saved by an earlier build must still restore after an update: the added nullable
+     * `jump` is a compatible change, and Java rejects a stream whose UID moved.
+     */
+    @Test
+    fun `a route keeps the serial version it shipped with`() {
+        assertEquals(1L, java.io.ObjectStreamClass.lookup(BufferRoute::class.java).serialVersionUID)
+    }
 }

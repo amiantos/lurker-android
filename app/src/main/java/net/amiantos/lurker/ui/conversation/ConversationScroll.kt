@@ -248,19 +248,31 @@ internal class ReplyWatch(
     var arrivedAtSeq: Long? = null
         private set
 
-    /** One frame's list and row, in order. */
-    fun observe(list: List<Message>?, row: Buffer?, seq: Long) {
-        if (arrivedAtSeq != null) return
+    /**
+     * One frame's list and row, in order. True when this frame is the reply landing — the caller
+     * hands that change to no other watch ([rebase] them instead): one reply answers one request.
+     */
+    fun observe(list: List<Message>?, row: Buffer?, seq: Long): Boolean {
+        if (arrivedAtSeq != null) return false
         val nowHydrated = row?.hydrated == true
         val nowDetached = row?.hasMoreNewer == true
         val landed = (!hydrated && nowHydrated) ||
             (detached && !nowDetached) ||
             (anchorId != null && list.orEmpty().any { it.id == anchorId }) ||
             (list !== last && !isAppend(last, list))
-        last = list
-        hydrated = nowHydrated
-        detached = nowDetached
+        rebase(list, row)
         if (landed) arrivedAtSeq = seq
+        return landed
+    }
+
+    /**
+     * Take this frame as the new starting point without judging it — an older request's reply
+     * landed in it, and the server answers in order, so it isn't this one's.
+     */
+    fun rebase(list: List<Message>?, row: Buffer?) {
+        last = list
+        hydrated = row?.hydrated == true
+        detached = row?.hasMoreNewer == true
     }
 
     /** Whether the reply has landed and [current] is a build of a frame at or after it. */
@@ -395,6 +407,21 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
      */
     private var tailFetch: ReplyWatch? = null
 
+    /**
+     * Fetches still in the air whose requester is gone — a jump superseded by another, or cancelled
+     * by jump-to-latest, before its reply landed. The reply lands anyway (the store applies it
+     * whoever is waiting), so it's kept here to be recognised as ITS reply rather than taken for the
+     * next request's: replies are matched to requests in order ([onFrame]), and a new jump doesn't
+     * send its own fetch until these have landed ([requestAround]), so its watch starts after them.
+     * Voided by a drop or a new burst, like any request.
+     */
+    private val strays = ArrayDeque<ReplyWatch>()
+
+    /** Keep [watch]'s reply accounted for if it hasn't landed. */
+    private fun retire(watch: ReplyWatch?) {
+        if (watch != null && watch.arrivedAtSeq == null) strays.addLast(watch)
+    }
+
     /** Whether the buffer was detached as of the previous build — iOS's `wasDetached`. */
     private var wasDetached = false
 
@@ -453,6 +480,8 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
     }
 
     private fun begin(anchorId: Long, flashesFirstUnread: Boolean) {
+        retire(jump?.fetch)
+        retire(tailFetch)
         landsAtTail = false
         tailFetch = null
         jump = PendingJump(anchorId, flashesFirstUnread)
@@ -489,10 +518,12 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         if (!hasRows) return ToLatest.Nothing
         newWhileAway = 0
         val fetching = jump?.fetch?.let { it.arrivedAtSeq == null } == true
+        retire(jump?.fetch)
         jump = null
         if (options.showsClearedHistory) options = options.copy(showsClearedHistory = false)
         if (detached || fetching) {
             landsAtTail = true
+            retire(tailFetch)
             tailFetch = null
             return ToLatest.Reattach
         }
@@ -529,11 +560,23 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
      * `readStateKnown`.
      */
     fun onFrame(state: ChatState, key: BufferKey, seq: Long): FrameStep {
-        val around = requestAround(state, key)
         val list = state.messages[key.id]
         val row = state.buffers[key.id]
-        jump?.fetch?.observe(list, row, seq)
-        tailFetch?.observe(list, row, seq)
+        // A drop or a new burst voids what was asked over the old socket — no reply is coming.
+        if (state.connection != SocketStatus.Connected) {
+            strays.clear()
+        } else {
+            strays.removeAll { it.generation != state.burstGeneration }
+        }
+        // Replies are handed out in the order the requests went: the oldest outstanding watch gets
+        // this frame's change, and the rest take it as their new starting point.
+        var answered = false
+        for (watch in strays + listOfNotNull(jump?.fetch, tailFetch)) {
+            if (answered) watch.rebase(list, row) else answered = watch.observe(list, row, seq)
+        }
+        strays.removeAll { it.arrivedAtSeq != null }
+        // After the replies are accounted for, so a request made now watches from this frame on.
+        val around = requestAround(state, key)
         var changed = false
         if (options.dividerAfterId == null && row != null && row.readStateKnown) {
             options = options.copy(dividerAfterId = row.lastReadId)
@@ -567,6 +610,9 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         }
         if (pending.fetch?.generation?.let { it != state.burstGeneration } == true) pending.fetch = null
         if (pending.fetch != null) return null
+        // A superseded fetch is still in the air: wait for its reply before sending ours, or its
+        // reply would be taken for ours.
+        if (strays.isNotEmpty()) return null
         val held = state.messages[key.id].orEmpty()
         // A row the `/clear` marker hides is held but not drawn — `onRows`' reveal resolves that.
         if (held.any { it.id == pending.anchorId }) return null
@@ -763,8 +809,13 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         val pending = jump ?: return null
         if (pending.flashesFirstUnread) {
             val fetch = pending.fetch
-            if (fetch != null && !fetch.landedIn(current)) return null
-            return current.firstUnreadRow
+            if (fetch != null) return if (fetch.landedIn(current)) current.firstUnreadRow else null
+            // No fetch: trustworthy only when none is needed — the seam (the boundary) is already
+            // held, or this kind can't fetch. Otherwise the fetch hasn't gone out (offline, or a
+            // superseded one is still in the air) or a drop voided it, and the divider is still
+            // pinned to the top of the stale window; the reconnect asks again.
+            val held = current.inputs.messages.orEmpty().any { it.id == pending.anchorId }
+            return if (held || !kind.hydratesOnDemand) current.firstUnreadRow else null
         }
         return current.rowIndex(pending.anchorId)
     }
@@ -850,10 +901,18 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
      * - **Paging**: near the top, older; near the bottom of a detached slice, newer — the kit guards
      *   both against re-entry and against there being nothing more. Port addition: not while a
      *   landing is pending (iOS paged from user scrolls, which a landing doesn't make; this fires on
-     *   every pass, so a page could otherwise splice onto the slice a jump is replacing), and not
-     *   before the history has landed (likewise — an unhydrated stub belongs to the hydrate).
+     *   every pass, so a page could otherwise splice onto the slice a jump is replacing), not
+     *   before the history has landed (likewise — an unhydrated stub belongs to the hydrate), and
+     *   ⚠ never while [online] is false ([mayWrite]): the kit marks a page in flight before the
+     *   client drops the request, and nothing clears that on reconnect — paging would stay blocked.
      */
-    fun onLayout(facts: LayoutFacts, current: BuiltRows, detached: Boolean, connectionBannerShown: Boolean): LayoutStep {
+    fun onLayout(
+        facts: LayoutFacts,
+        current: BuiltRows,
+        detached: Boolean,
+        connectionBannerShown: Boolean,
+        online: Boolean,
+    ): LayoutStep {
         if (facts.nearBottom) newWhileAway = 0
         if (!jumpPending && current.historyLanded && facts.dividerVisible) dividerSeen = true
         val hasRows = current.rows.isNotEmpty()
@@ -863,7 +922,7 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
             showsUnread = current.firstUnreadRow != null && !dividerSeen && facts.dividerAbove &&
                 !jumpPending && !connectionBannerShown,
         )
-        val pages = !landingPending && current.historyLanded && !current.inputs.messages.isNullOrEmpty()
+        val pages = online && !landingPending && current.historyLanded && !current.inputs.messages.isNullOrEmpty()
         return LayoutStep(
             pills = pills,
             loadOlder = pages && facts.pagesOlder,
@@ -879,10 +938,10 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
      * rows is unscrollable, which puts the oldest of them within reach of [onLayout]'s paging.)
      * An ignored sender who dominates a channel gets here, and so do the `none` and `smart` tiers.
      * Gated on the raw list being non-empty: with nothing loaded this is an unhydrated buffer, which
-     * the hydrate owns.
+     * the hydrate owns. And on being [online], for the paging reason in [onLayout].
      */
-    fun wantsTopUp(current: BuiltRows): Boolean {
-        if (jumpPending || current.rows.isNotEmpty()) return false
+    fun wantsTopUp(current: BuiltRows, online: Boolean): Boolean {
+        if (!online || jumpPending || current.rows.isNotEmpty()) return false
         val buffer = current.inputs.buffer ?: return false
         return buffer.hydrated && buffer.hasMoreOlder && !current.inputs.messages.isNullOrEmpty()
     }
@@ -897,6 +956,16 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
          * INDEX instead — so the viewport jumps by however many rows landed below.
          */
         const val KEY_WINDOW = 100
+
+        /**
+         * Whether a request sent now can reach the server: the socket is up AND the device has a
+         * path. ⚠ Asked BEFORE anything the kit bookkeeps per request. `markRead` advances its
+         * dedupe mark, and `loadOlder`/`loadNewer` their in-flight flags, before the client drops a
+         * write onto a dead socket — and none of those reset on reconnect, so a mark sent offline
+         * suppresses the same mark later, and a page sent offline blocks paging for good. Both
+         * signals: airplane mode flips `reachable` while the socket still reads Connected.
+         */
+        fun mayWrite(state: ChatState): Boolean = state.connection == SocketStatus.Connected && state.reachable
 
         /**
          * Whether the reader was parked at the newest row as [drawn] is replaced — iOS's

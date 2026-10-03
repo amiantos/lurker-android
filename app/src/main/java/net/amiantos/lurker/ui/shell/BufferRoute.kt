@@ -29,7 +29,7 @@ data class BufferRoute(
     val key: BufferKey get() = BufferKey(networkId = networkId, target = target)
 
     companion object {
-        private const val serialVersionUID = 2L
+        private const val serialVersionUID = 1L
 
         fun of(key: BufferKey, jump: JumpRequest? = null): BufferRoute =
             BufferRoute(networkId = key.networkId, target = key.target, jump = jump)

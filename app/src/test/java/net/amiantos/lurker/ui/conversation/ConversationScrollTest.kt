@@ -185,21 +185,21 @@ class ConversationScrollTest {
     fun `the unread banner shows when a first unread exists above the viewport and hasn't been seen`() {
         val (scroll, built) = withDivider()
         assertNotNull(built.firstUnreadRow)
-        val step = scroll.onLayout(facts(dividerAbove = true), built, detached = false, connectionBannerShown = false)
+        val step = scroll.onLayout(facts(dividerAbove = true), built, detached = false, connectionBannerShown = false, online = true)
         assertTrue(step.pills.showsUnread)
     }
 
     @Test
     fun `off screen is not above - a divider below the viewport raises no banner`() {
         val (scroll, built) = withDivider()
-        val step = scroll.onLayout(facts(nearBottom = false, dividerAbove = false), built, detached = false, connectionBannerShown = false)
+        val step = scroll.onLayout(facts(nearBottom = false, dividerAbove = false), built, detached = false, connectionBannerShown = false, online = true)
         assertFalse(step.pills.showsUnread)
     }
 
     @Test
     fun `the unread banner yields its slot to the connection banner`() {
         val (scroll, built) = withDivider()
-        val step = scroll.onLayout(facts(dividerAbove = true), built, detached = false, connectionBannerShown = true)
+        val step = scroll.onLayout(facts(dividerAbove = true), built, detached = false, connectionBannerShown = true, online = true)
         assertFalse(step.pills.showsUnread)
     }
 
@@ -207,17 +207,17 @@ class ConversationScrollTest {
     fun `the unread banner stays down while a jump is pending`() {
         val (scroll, built) = withDivider()
         assertTrue(scroll.jumpToFirstUnread())
-        val step = scroll.onLayout(facts(dividerAbove = true), built, detached = false, connectionBannerShown = false)
+        val step = scroll.onLayout(facts(dividerAbove = true), built, detached = false, connectionBannerShown = false, online = true)
         assertFalse(step.pills.showsUnread)
     }
 
     @Test
     fun `seeing the divider retires the banner for good`() {
         val (scroll, built) = withDivider()
-        scroll.onLayout(facts(dividerVisible = true), built, detached = false, connectionBannerShown = false)
+        scroll.onLayout(facts(dividerVisible = true), built, detached = false, connectionBannerShown = false, online = true)
         assertTrue(scroll.dividerSeen)
         // Read forward past it: it's above again, and the banner stays retired.
-        val step = scroll.onLayout(facts(dividerAbove = true), built, detached = false, connectionBannerShown = false)
+        val step = scroll.onLayout(facts(dividerAbove = true), built, detached = false, connectionBannerShown = false, online = true)
         assertFalse(step.pills.showsUnread)
     }
 
@@ -226,7 +226,7 @@ class ConversationScrollTest {
         // Unhydrated: the live events that outran the backlog, all past the boundary, the divider
         // top-pinned to a stub that fits on screen — visible by arithmetic, seen by nobody.
         val (scroll, built) = withDivider(hydrated = false)
-        scroll.onLayout(facts(dividerVisible = true), built, detached = false, connectionBannerShown = false)
+        scroll.onLayout(facts(dividerVisible = true), built, detached = false, connectionBannerShown = false, online = true)
         assertFalse(scroll.dividerSeen)
     }
 
@@ -234,7 +234,7 @@ class ConversationScrollTest {
     fun `dividerSeen keys off history having landed, not hydrated - a server log latches once its row exists`() {
         val log = BufferKey(1, Buffer.serverTarget(1))
         val (scroll, built) = withDivider(hydrated = false, key = log)
-        scroll.onLayout(facts(dividerVisible = true), built, detached = false, connectionBannerShown = false)
+        scroll.onLayout(facts(dividerVisible = true), built, detached = false, connectionBannerShown = false, online = true)
         assertTrue(scroll.dividerSeen)
     }
 
@@ -242,7 +242,7 @@ class ConversationScrollTest {
     fun `dividerSeen does not latch while a jump is pending - a divider swept past wasn't seen`() {
         val (scroll, built) = withDivider()
         scroll.jumpTo(9)
-        scroll.onLayout(facts(dividerVisible = true), built, detached = false, connectionBannerShown = false)
+        scroll.onLayout(facts(dividerVisible = true), built, detached = false, connectionBannerShown = false, online = true)
         assertFalse(scroll.dividerSeen)
     }
 
@@ -252,7 +252,7 @@ class ConversationScrollTest {
         val built = build(scroll, state(messages = msgs(1L..10L)))
         scroll.onRows(built, wasNearBottom = true)
         assertNull(built.firstUnreadRow)
-        assertFalse(scroll.onLayout(facts(dividerAbove = true), built, false, false).pills.showsUnread)
+        assertFalse(scroll.onLayout(facts(dividerAbove = true), built, false, false, true).pills.showsUnread)
     }
 
     // MARK: - Following the tail, and the badge
@@ -300,7 +300,7 @@ class ConversationScrollTest {
         assertEquals(2, scroll.newWhileAway)
         // Back at the bottom, however they got there: caught up.
         val built = build(scroll, state(messages = msgs(1L..12L)))
-        scroll.onLayout(facts(nearBottom = true), built, false, false)
+        scroll.onLayout(facts(nearBottom = true), built, false, false, true)
         assertEquals(0, scroll.newWhileAway)
     }
 
@@ -339,9 +339,9 @@ class ConversationScrollTest {
         val scroll = machine()
         val built = build(scroll, state(row(hasMoreNewer = true), msgs(1L..5L)))
         scroll.onRows(built, wasNearBottom = true)
-        assertTrue(scroll.onLayout(facts(nearBottom = true), built, detached = true, connectionBannerShown = false).pills.showsLatest)
-        assertFalse(scroll.onLayout(facts(nearBottom = true), built, detached = false, connectionBannerShown = false).pills.showsLatest)
-        assertTrue(scroll.onLayout(facts(nearBottom = false), built, detached = false, connectionBannerShown = false).pills.showsLatest)
+        assertTrue(scroll.onLayout(facts(nearBottom = true), built, detached = true, connectionBannerShown = false, online = true).pills.showsLatest)
+        assertFalse(scroll.onLayout(facts(nearBottom = true), built, detached = false, connectionBannerShown = false, online = true).pills.showsLatest)
+        assertTrue(scroll.onLayout(facts(nearBottom = false), built, detached = false, connectionBannerShown = false, online = true).pills.showsLatest)
     }
 
     // MARK: - Jumps
@@ -683,6 +683,58 @@ class ConversationScrollTest {
         assertFalse(scroll.jumpPending)
     }
 
+    @Test
+    fun `two jumps out of the slice before either reply - each reply is its own request's`() {
+        val d = Drive()
+        val live = msgs(100L..110L)
+        d.frame(state(messages = live))
+        d.scroll.jumpTo(4)
+        assertEquals(4L, d.frame(state(messages = live)).loadAround)
+        // B supersedes A before A's reply: B's fetch waits for A's reply, or it'd take it for its own.
+        d.scroll.jumpTo(60)
+        assertNull(d.scroll.requestAround(d.last, channel))
+        assertNull(d.frame(state(messages = live)).loadAround)
+        assertEquals(ConversationScroll.Landing.Wait, d.land())
+        // A's reply lands — without B's message. It's A's: B isn't abandoned, it asks now.
+        val aReply = d.frame(state(row(hasMoreNewer = true), msgs(1L..8L)))
+        assertEquals(60L, aReply.loadAround)
+        assertEquals(ConversationScroll.Landing.Wait, d.land())
+        assertTrue(d.scroll.jumpPending)
+        // B's reply lands with B's message in it, and that's where it goes.
+        d.frame(state(row(hasMoreNewer = true), msgs(55L..65L)))
+        val built = d.built()
+        assertTrue(d.scroll.landing(built) is ConversationScroll.Landing.Converge)
+        assertEquals(60L, built.rows[d.scroll.jumpTargetRow(built)!!].message?.id)
+    }
+
+    @Test
+    fun `an unread jump whose fetch a drop voided waits for the reconnect, not the stale divider`() {
+        val d = Drive()
+        val pointer = row(readStateKnown = true, lastReadId = 5)
+        val window = msgs(100L..110L)
+        d.frame(state(pointer, window))
+        assertTrue(d.scroll.jumpToFirstUnread())
+        assertEquals(5L, d.frame(state(pointer, window)).loadAround)
+        // The socket drops while the slice is in the air.
+        d.frame(state(pointer, window, connection = SocketStatus.Reconnecting))
+        val stale = d.built()
+        assertNull(d.scroll.jumpTargetRow(stale))
+        assertEquals(ConversationScroll.Landing.Wait, d.scroll.landing(stale))
+        // Back up: asked again.
+        assertEquals(5L, d.frame(state(pointer, window, burstGeneration = 2)).loadAround)
+    }
+
+    @Test
+    fun `the unread banner tapped offline waits rather than landing on the top-pinned divider`() {
+        val d = Drive()
+        val pointer = row(readStateKnown = true, lastReadId = 5)
+        d.frame(state(pointer, msgs(100L..110L), connection = SocketStatus.Reconnecting))
+        assertTrue(d.scroll.jumpToFirstUnread())
+        assertNull(d.scroll.requestAround(d.last, channel))
+        assertEquals(ConversationScroll.Landing.Wait, d.land())
+        assertTrue(d.scroll.jumpPending)
+    }
+
     // MARK: - The /clear reveal
 
     private val clearedAt = Instant.parse("2026-07-25T13:00:00Z")
@@ -827,11 +879,11 @@ class ConversationScrollTest {
         val attached = build(scroll, state(messages = msgs(1L..10L)))
         scroll.onRows(attached, wasNearBottom = true)
         val near = facts(pagesOlder = true, pagesNewer = true)
-        val step = scroll.onLayout(near, attached, detached = false, connectionBannerShown = false)
+        val step = scroll.onLayout(near, attached, detached = false, connectionBannerShown = false, online = true)
         assertTrue(step.loadOlder)
         assertFalse(step.loadNewer)
-        assertTrue(scroll.onLayout(near, attached, detached = true, connectionBannerShown = false).loadNewer)
-        assertFalse(scroll.onLayout(facts(), attached, detached = true, connectionBannerShown = false).loadOlder)
+        assertTrue(scroll.onLayout(near, attached, detached = true, connectionBannerShown = false, online = true).loadNewer)
+        assertFalse(scroll.onLayout(facts(), attached, detached = true, connectionBannerShown = false, online = true).loadOlder)
     }
 
     @Test
@@ -839,10 +891,10 @@ class ConversationScrollTest {
         val scroll = machine()
         val near = facts(pagesOlder = true, pagesNewer = true)
         val stub = build(scroll, state(row(hydrated = false), msgs(100L..103L)))
-        assertFalse(scroll.onLayout(near, stub, detached = false, connectionBannerShown = false).loadOlder)
+        assertFalse(scroll.onLayout(near, stub, detached = false, connectionBannerShown = false, online = true).loadOlder)
         val built = build(scroll, state(messages = msgs(1L..10L)))
         scroll.jumpTo(200)
-        val step = scroll.onLayout(near, built, detached = true, connectionBannerShown = false)
+        val step = scroll.onLayout(near, built, detached = true, connectionBannerShown = false, online = true)
         assertFalse(step.loadOlder)
         assertFalse(step.loadNewer)
     }
@@ -854,12 +906,35 @@ class ConversationScrollTest {
         val all = (1L..5L).map { msg(it, nick = "spammer") }
         val empty = build(scroll, state(messages = all, ignores = ignores))
         assertTrue(empty.rows.isEmpty())
-        assertTrue(scroll.wantsTopUp(empty))
+        assertTrue(scroll.wantsTopUp(empty, online = true))
         // Not with history exhausted, not for an unhydrated buffer (the hydrate's), not mid-jump.
-        assertFalse(scroll.wantsTopUp(build(scroll, state(row(hasMoreOlder = false), all, ignores = ignores))))
-        assertFalse(scroll.wantsTopUp(build(scroll, state(row(hydrated = false), all, ignores = ignores))))
+        assertFalse(scroll.wantsTopUp(build(scroll, state(row(hasMoreOlder = false), all, ignores = ignores)), online = true))
+        assertFalse(scroll.wantsTopUp(build(scroll, state(row(hydrated = false), all, ignores = ignores)), online = true))
         scroll.jumpTo(3)
-        assertFalse(scroll.wantsTopUp(empty))
+        assertFalse(scroll.wantsTopUp(empty, online = true))
+    }
+
+    @Test
+    fun `nothing is paged or topped up offline - the kit would mark it in flight for good`() {
+        val scroll = machine()
+        val attached = build(scroll, state(messages = msgs(1L..10L)))
+        scroll.onRows(attached, wasNearBottom = true)
+        val near = facts(pagesOlder = true, pagesNewer = true)
+        val offline = scroll.onLayout(near, attached, detached = true, connectionBannerShown = false, online = false)
+        assertFalse(offline.loadOlder)
+        assertFalse(offline.loadNewer)
+        val ignores = IgnoreSet(byNetwork = mapOf(1 to listOf(IgnoreRule(id = 1, mask = "spammer"))))
+        val empty = build(scroll, state(messages = (1L..5L).map { msg(it, nick = "spammer") }, ignores = ignores))
+        assertTrue(scroll.wantsTopUp(empty, online = true))
+        assertFalse(scroll.wantsTopUp(empty, online = false))
+    }
+
+    @Test
+    fun `a request may go out only with the socket up and a path to the server`() {
+        assertTrue(ConversationScroll.mayWrite(state()))
+        assertFalse(ConversationScroll.mayWrite(state(connection = SocketStatus.Reconnecting)))
+        // Airplane mode: the socket still reads Connected for a while.
+        assertFalse(ConversationScroll.mayWrite(state().copy(reachable = false)))
     }
 
     // MARK: - Layout facts

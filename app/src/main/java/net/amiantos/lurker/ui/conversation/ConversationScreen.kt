@@ -198,7 +198,12 @@ fun ConversationScreen(
     // Frames, stamped with the order this screen processed them in — see `ConversationScroll.onRows`.
     val frames = remember(key) { MutableStateFlow<Frame?>(null) }
     val frameSeq = remember(key) { FrameCounter() }
-    val jobs = remember(key) { Jobs() }
+    // Seeded from where the list state starts, not "at the bottom": a rotation restores a reader
+    // mid-history, and a first build that lands before the list has measured would otherwise read
+    // the fallback, follow the tail, and throw the restored position away.
+    val jobs = remember(key) {
+        Jobs(nearBottom = ConversationModel.followsTail(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, followSlop))
+    }
 
     // The two things the screen must DO about every frame, rather than draw, in iOS's order: notice
     // the buffer disappearing (or moving), ask for its history, ask for a jump's slice, latch the
@@ -246,17 +251,21 @@ fun ConversationScreen(
             // `view.window != nil`). ⚠ A WRITE: the server's pointer moves for every device. Asked
             // when this buffer's messages changed (or it's the first mark), as iOS's deduped `apply`
             // asks — not for every frame of every other buffer, each of which would scan this one's.
+            // ⚠ And only online (`mayWrite`), checked before anything is recorded: the kit advances
+            // its dedupe mark before a dead socket drops the write, and keeps it across reconnects.
             val held = state.messages[key.id]
-            if (scroll.marksRead && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) && held !== jobs.markedFor) {
+            if (scroll.marksRead && ConversationScroll.mayWrite(state) &&
+                lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) && held !== jobs.markedFor
+            ) {
                 jobs.markedFor = held
                 model.markRead(key)
             }
             frames.value = Frame(seq, state)
         }
     }
-    // Coming into view marks read too (iOS's `viewDidAppear`) — the same gate.
+    // Coming into view marks read too (iOS's `viewDidAppear`) — the same gates.
     LifecycleStartEffect(key, scroll) {
-        if (scroll.marksRead) model.markRead(key)
+        if (scroll.marksRead && ConversationScroll.mayWrite(model.state)) model.markRead(key)
         onStopOrDispose {}
     }
 
@@ -424,7 +433,7 @@ fun ConversationScreen(
         }
         // A window the filters thinned to nothing asks for more itself — no layout will — and says
         // "Loading messages…" while the page is in the air rather than claiming the buffer is empty.
-        forceLoading = scroll.wantsTopUp(built) &&
+        forceLoading = scroll.wantsTopUp(built, online = ConversationScroll.mayWrite(model.state)) &&
             model.loadOlder(key, showingClearedHistory = scroll.options.showsClearedHistory)
         land()
     }
@@ -457,8 +466,11 @@ fun ConversationScreen(
                 val rows = sample.rows
                 if (rows.rows.isEmpty()) {
                     pills = ConversationScroll.Pills()
-                    // Nothing drawn is the bottom: whatever lands first is followed.
-                    jobs.nearBottom = true
+                    // Nothing measured: where the list state says it is (the bottom, unless a
+                    // restore put it elsewhere — it keeps its position while there's no list).
+                    jobs.nearBottom = ConversationModel.followsTail(
+                        listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset, followSlop,
+                    )
                     return@collect
                 }
                 val info = sample.layout
@@ -473,7 +485,12 @@ fun ConversationScreen(
                 // Read live, as iOS's `isDetached` is: whether a page is worth asking for is a question
                 // about the server's latest word, not the frame that happened to trigger this pass.
                 val detached = model.state.buffers[key.id]?.hasMoreNewer == true
-                val step = scroll.onLayout(facts, rows, detached = detached, connectionBannerShown = sample.connectionShown)
+                val step = scroll.onLayout(
+                    facts, rows,
+                    detached = detached,
+                    connectionBannerShown = sample.connectionShown,
+                    online = ConversationScroll.mayWrite(model.state),
+                )
                 pills = step.pills
                 if (step.loadOlder) model.loadOlder(key, showingClearedHistory = scroll.options.showsClearedHistory)
                 if (step.loadNewer) model.loadNewer(key)
@@ -600,7 +617,10 @@ private class FrameCounter {
 }
 
 /** The screen's running coroutines and bookkeeping — not state. */
-private class Jobs {
+private class Jobs(
+    /** Whether the reader was at the bottom, as of the last layout that measured what's drawn. */
+    var nearBottom: Boolean,
+) {
     var converging: Job? = null
     var flashes = 0L
 
@@ -609,9 +629,6 @@ private class Jobs {
 
     /** The last frame the frame stream processed — what a tap's request is judged against. */
     var lastFrame: ChatState? = null
-
-    /** Whether the reader was at the bottom, as of the last layout that measured what's drawn. */
-    var nearBottom = true
 }
 
 /** What the layout stream reads, in one value, so a change to any of it re-decides. */
