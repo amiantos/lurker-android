@@ -458,32 +458,38 @@ fun MainScaffold(
         }
     }
 
-    // The kit's asks of the screen (`AppEvents`), taken for as long as this scaffold is composed.
-    // Attached across a configuration change — that gap is what the queue bridges — and detached
-    // when the screen goes for good, so nothing waits for a launch hours later.
+    // The kit's asks of the screen (`AppEvents`), taken for as long as this scaffold is composed AND
+    // its session is the live one ([sessionLive]): a scaffold fading out after a sign-out — or still
+    // fading while a quick sign-in's new scaffold comes up — stops taking them at once, so it can't
+    // consume the new session's navigation. Attached across a configuration change — that gap is what
+    // the queue bridges — and detached when the screen goes for good (or its session does), so
+    // nothing waits for a launch hours later. The detach is by token, so a late one from an old
+    // scaffold can't switch off the new one's attachment.
     val activity = LocalContext.current.findActivity()
-    DisposableEffect(events) {
-        events.attach()
-        onDispose { if (activity?.isChangingConfigurations != true) events.detach() }
-    }
-    LaunchedEffect(events) {
-        events.events.collect { event ->
-            when (event) {
-                // iOS's `land(on:)`: anything presented comes down, then the buffer opens — the same
-                // move as a pick; the buffer is synthesized when its row hasn't landed yet, and the
-                // conversation hydrates it.
-                is AppEvent.OpenBuffer -> {
-                    sheets.dismiss()
-                    bufferSheets.dismiss()
-                    feedSheets.dismiss()
-                    mediaViewer.dismiss()
-                    uploadsSheets.dismiss()
-                    showingSettings = false
-                    open(event.key, jumpTo = event.jumpTo)
+    if (sessionLive) {
+        DisposableEffect(events) {
+            val attachment = events.attach()
+            onDispose { if (activity?.isChangingConfigurations != true) events.detach(attachment) }
+        }
+        LaunchedEffect(events) {
+            events.events.collect { event ->
+                when (event) {
+                    // iOS's `land(on:)`: anything presented comes down, then the buffer opens — the same
+                    // move as a pick; the buffer is synthesized when its row hasn't landed yet, and the
+                    // conversation hydrates it.
+                    is AppEvent.OpenBuffer -> {
+                        sheets.dismiss()
+                        bufferSheets.dismiss()
+                        feedSheets.dismiss()
+                        mediaViewer.dismiss()
+                        uploadsSheets.dismiss()
+                        showingSettings = false
+                        open(event.key, jumpTo = event.jumpTo)
+                    }
+                    is AppEvent.BufferRenamed -> follow(event.from, event.to)
+                    // Shown by `NoticeHost`, never sent down this channel.
+                    is AppEvent.Notice -> Unit
                 }
-                is AppEvent.BufferRenamed -> follow(event.from, event.to)
-                // Shown by `NoticeHost`, never sent down this channel.
-                is AppEvent.Notice -> Unit
             }
         }
     }
@@ -550,9 +556,11 @@ fun MainScaffold(
                 }
             },
         )
-        NoticeHost(events, Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
-        // Every window below goes the moment the session ends — see [sessionLive].
+        // Every window below goes the moment the session ends — see [sessionLive]. The notice host
+        // too, though it isn't a window: a fading scaffold's host would otherwise claim and show the
+        // new session's notices.
         if (sessionLive) {
+            NoticeHost(events, Modifier.align(Alignment.BottomCenter).safeDrawingPadding())
             ServerErrorDialog(model)
             // A DCC chat offer, asked about over whatever is on screen — here for the error dialog's
             // reason, so it neither waits behind the list on a phone nor closes when a conversation opens.

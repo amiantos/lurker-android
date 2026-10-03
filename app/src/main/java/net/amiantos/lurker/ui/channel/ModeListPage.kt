@@ -34,6 +34,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -55,7 +56,7 @@ import kotlinx.coroutines.withContext
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormInset
 import net.amiantos.lurker.ui.networks.PageExit
-import net.amiantos.lurker.ui.shell.AnnouncedSlot
+import net.amiantos.lurker.ui.shell.Announcer
 import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.theme.LurkerIcons
@@ -269,12 +270,12 @@ private fun ModeListContent(
     ) { padding ->
         PullToRefreshBox(isRefreshing = refreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize().padding(padding)) {
             LazyColumn(Modifier.fillMaxSize()) {
-                // The refusal leads, where it's seen whether the list is long or empty. There with or without
-                // one, so a change refused while the list is open is read out where it lands (`AnnouncedSlot`).
-                item(key = "footer") {
-                    AnnouncedSlot(words = footer, modifier = Modifier.fillMaxWidth()) {
+                // The refusal leads, where it's seen whether the list is long or empty. Not announced from
+                // here — an item scrolled away isn't composed — but by the `Announcer` below.
+                if (footer != null) {
+                    item(key = "footer") {
                         Text(
-                            footer.orEmpty(),
+                            footer,
                             modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 8.dp),
                             style = MaterialTheme.typography.bodyMedium,
                             color = LurkerTheme.colors.badText,
@@ -300,6 +301,9 @@ private fun ModeListContent(
             if (placeholder != null) {
                 StateView(placeholder, onRetry = if (status is ModeListStatus.Failed) onReload else null)
             }
+            // A change refused while the list is open, read out wherever the list is scrolled: outside
+            // the lazy list, always in the viewport (`Announcer`).
+            Announcer(words = footer, modifier = Modifier.align(Alignment.TopStart))
         }
     }
 }

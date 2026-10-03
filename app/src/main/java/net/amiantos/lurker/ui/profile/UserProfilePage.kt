@@ -5,9 +5,10 @@ package net.amiantos.lurker.ui.profile
 
 import android.content.ClipData
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
@@ -18,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -40,7 +42,7 @@ import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormSectionFooter
 import net.amiantos.lurker.ui.networks.FormSectionHeader
 import net.amiantos.lurker.ui.networks.PageExit
-import net.amiantos.lurker.ui.shell.AnnouncedSlot
+import net.amiantos.lurker.ui.shell.Announcer
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.FriendPresence
@@ -143,30 +145,24 @@ private fun UserProfileContent(
     onExit: () -> Unit,
     onRow: (ProfileRow) -> Unit,
 ) {
-    // The status line — "Looking up alice…", "alice isn't on this network." — leads in a place of its
-    // own that's there whatever the lookup's state, rather than as a row that comes and goes: a lookup
-    // lands while the reader waits, and only a node that was already there can announce it
-    // (`AnnouncedSlot`), or keep TalkBack's focus when the line it was on is answered. Quiet while the
-    // lookup is out; on landing it says the [outcome] — the miss, or a hit as the Status row's value
-    // ("alice, Online"), which with no line to show is a place 1dp tall that's read but not drawn.
-    val statusLine = sections.firstOrNull()?.rows?.singleOrNull() as? ProfileRow.Status
-    val rest = if (statusLine != null) sections.drop(1) else sections
     DialogPage(title = title, exit = exit, onExit = onExit) { padding ->
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
-            item(key = "status") {
-                AnnouncedSlot(words = statusLine?.text ?: outcome, modifier = Modifier.fillMaxWidth(), live = outcome != null) {
-                    if (statusLine != null) StatusLineRow(statusLine)
-                }
-            }
-            rest.forEachIndexed { index, section ->
-                item(key = "section$index") {
-                    Column {
-                        section.header?.let { FormSectionHeader(it) }
-                        section.rows.forEach { row -> ProfileRowView(row, onRow) }
-                        section.footer?.let { FormSectionFooter(it) }
+        Box(Modifier.fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
+                sections.forEachIndexed { index, section ->
+                    item(key = "section$index") {
+                        Column {
+                            section.header?.let { FormSectionHeader(it) }
+                            section.rows.forEach { row -> ProfileRowView(row, onRow) }
+                            section.footer?.let { FormSectionFooter(it) }
+                        }
                     }
                 }
             }
+            // A lookup lands while the reader waits: its [outcome] — the miss, or a hit as the Status row's
+            // value ("alice, Online") — is read out from here, outside the lazy list where it's always in
+            // the viewport (`Announcer`), not from the status line, which comes and goes and can be
+            // scrolled away. Quiet while the lookup is out.
+            Announcer(words = outcome, modifier = Modifier.padding(padding).align(Alignment.TopStart))
         }
     }
 }
@@ -177,7 +173,6 @@ private fun ProfileRowView(row: ProfileRow, onRow: (ProfileRow) -> Unit) {
     val tint = MaterialTheme.colorScheme.primary
     val clear = ListItemDefaults.colors(containerColor = Color.Transparent)
     when (row) {
-        // Drawn in the page's status place (`UserProfileContent`), not among the sections.
         is ProfileRow.Status -> StatusLineRow(row)
         // Label above, value below — on every row, not just the long ones: a hostmask always needs the
         // room, and one row in a different shape reads as something gone wrong. The LABEL is the quiet
@@ -212,7 +207,7 @@ private fun ProfileRowView(row: ProfileRow, onRow: (ProfileRow) -> Unit) {
     }
 }
 
-/** The lookup's status line, as iOS draws it: the glyph and the words, muted. Its semantics are its place's. */
+/** The lookup's status line, as iOS draws it: the glyph and the words, muted. Announced by `UserProfileContent`'s `Announcer`. */
 @Composable
 private fun StatusLineRow(row: ProfileRow.Status) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant

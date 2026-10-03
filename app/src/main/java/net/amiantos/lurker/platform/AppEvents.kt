@@ -75,7 +75,9 @@ class AppEvents {
     /** The hosts that can show a notice, in the order they claimed; the last one shows. */
     val noticeHosts: StateFlow<List<Any>> = hosts.asStateFlow()
 
-    private var attached = false
+    /** The current attachment ([attach]'s token), or null while no screen is up. */
+    private var attachment: Any? = null
+    private val attached: Boolean get() = attachment != null
 
     private val refused = MutableSharedFlow<BufferKey>(extraBufferCapacity = 64)
 
@@ -118,16 +120,26 @@ class AppEvents {
     }
 
     /**
-     * A screen that can act on events is up. A flag, not a count: `MainScaffold` skips [detach]
-     * across a configuration change — the gap the queue exists to bridge — and the recreated one
-     * attaches again, which a count would read as two screens and never get back to none.
+     * A screen that can act on events is up; returns its token for [detach]. The latest attach is the
+     * attachment, not a count: `MainScaffold` skips [detach] across a configuration change — the gap
+     * the queue exists to bridge — and the recreated one attaches again, which a count would read as
+     * two screens and never get back to none.
      */
-    fun attach() {
-        attached = true
+    fun attach(): Any {
+        val token = Any()
+        attachment = token
+        return token
     }
 
-    fun detach() {
-        attached = false
+    /**
+     * The screen holding [token] has gone. ⚠ A no-op unless it is still the CURRENT attachment: on a
+     * quick sign-out and sign-in, the old session's scaffold can still be fading out after the new
+     * one attached, and its late detach must not switch the new screen's events off (dropping its
+     * joins' OpenBuffers and its notices) or clear the notices waiting for it.
+     */
+    fun detach(token: Any) {
+        if (attachment !== token) return
+        attachment = null
         pending.value = emptyList()
     }
 

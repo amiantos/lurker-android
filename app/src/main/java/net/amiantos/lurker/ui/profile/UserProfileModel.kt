@@ -140,8 +140,15 @@ object UserProfileModel {
      * while the reader waits (#20): "alice isn't on this network.", or the Status row's own value
      * under the nick ("alice, Away — lunch"). Null while a lookup is out (a wait isn't news — the
      * line says "Looking up alice…" on focus, quietly) and when nothing is known to say.
+     *
+     * ⚠ Null for ANY lookup in flight, not just the status line's `Waiting`: with a cached reply on
+     * screen `ProfileStatus.resolve` drops the line while a refresh is out (the details speak for
+     * themselves), and reading that as "settled" would hold the old outcome through a reopen or a
+     * Refresh — so a refresh answering the same thing would never be read out again. Going null for
+     * the wait is what makes every answer a change. The cached details still draw.
      */
     fun lookupOutcome(inputs: ProfileInputs, nick: String): String? {
+        if (inputs.isLookingUp) return null
         val status = status(inputs, nick)
         return when (status.statusLine) {
             ProfileStatus.StatusLine.Waiting -> null

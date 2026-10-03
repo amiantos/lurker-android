@@ -71,9 +71,9 @@ class AppEventsTest {
     @Test
     fun detachingTheLastScreenAndDrainingClearNotices() {
         val events = AppEvents()
-        events.attach()
+        val screen = events.attach()
         events.send(AppEvent.Notice("one"))
-        events.detach()
+        events.detach(screen)
         assertTrue(events.notices.value.isEmpty())
         events.attach()
         events.send(AppEvent.Notice("two"))
@@ -86,9 +86,32 @@ class AppEventsTest {
         val events = AppEvents()
         events.attach()
         // Rotation: the old scaffold skips detach, the new one attaches again.
-        events.attach()
-        events.detach()
+        val recreated = events.attach()
+        events.detach(recreated)
         events.send(AppEvent.Notice("late"))
+        assertTrue(events.notices.value.isEmpty())
+    }
+
+    /**
+     * A quick sign-out and sign-in: the old session's scaffold is still fading out when the new one
+     * attaches, and its detach lands after. Only the current attachment's detach counts, so the new
+     * screen keeps taking OpenBuffers and notices — and the ones already waiting for it stay.
+     */
+    @Test
+    fun aStaleDetachLeavesTheCurrentScreenAttached() = runBlocking {
+        val events = AppEvents()
+        val old = events.attach()
+        val current = events.attach()
+        events.send(AppEvent.Notice("for the new session"))
+        events.detach(old)
+        assertEquals(1, events.notices.value.size)
+        events.send(AppEvent.OpenBuffer(a))
+        events.send(AppEvent.Notice("still heard"))
+        assertEquals(2, events.notices.value.size)
+        assertEquals(AppEvent.OpenBuffer(a), events.events.first())
+        // The current one's own detach still switches everything off.
+        events.detach(current)
+        events.send(AppEvent.Notice("nobody here"))
         assertTrue(events.notices.value.isEmpty())
     }
 
