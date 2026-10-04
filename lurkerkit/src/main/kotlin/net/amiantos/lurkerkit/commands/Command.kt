@@ -368,6 +368,15 @@ data class CommandSpec(
         }
 
     companion object {
+        /**
+         * Whether `token` can fill `arg` for the strict pass: a channel in a channel slot, no channel
+         * in a nick slot. Any other slot takes anything.
+         */
+        private fun agrees(arg: ArgSpec, token: String): Boolean {
+            if (arg.kind != ArgKind.Channel && arg.kind != ArgKind.Nick) return true
+            return ChannelName.isChannelTarget(token) == (arg.kind == ArgKind.Channel)
+        }
+
         /** Walk one form. Null when the typed tokens don't fit it. */
         private fun kind(form: List<ArgSpec>, preceding: List<String>, typing: String, strict: Boolean): ArgKind? {
             var slot = 0
@@ -385,15 +394,15 @@ data class CommandSpec(
                 }
                 val arg = form[slot]
                 if (arg.kind == ArgKind.Keyword && token.lowercase() != arg.label.lowercase()) return null
-                if (strict && (arg.kind == ArgKind.Channel || arg.kind == ArgKind.Nick) &&
-                    ChannelName.isChannelTarget(token) != (arg.kind == ArgKind.Channel)
-                ) {
-                    return null
-                }
+                if (strict && !agrees(arg, token)) return null
                 slot += 1
             }
             skipFlags(typing)
-            if (slot < form.size) return form[slot].kind
+            if (slot < form.size) {
+                // The half-typed token counts too, once there is one: `/invite #ot` is a channel.
+                if (strict && typing.isNotEmpty() && !agrees(form[slot], typing)) return null
+                return form[slot].kind
+            }
             val last = form.lastOrNull()
             if (last != null && last.rest) return last.kind
             return null

@@ -1200,6 +1200,12 @@ class CommandParserTests {
         assertEquals(ArgKind.Nick, kickban.argKind(emptyList()))
         assertEquals(ArgKind.Nick, kickban.argKind(listOf("#other")))
         assertEquals(ArgKind.Text, kickban.argKind(listOf("troll")))
+        // The first argument while it's still being typed: a sigil means the channel-first form.
+        assertEquals(ArgKind.Channel, invite.argKind(emptyList(), typing = "#ot"))
+        assertEquals(ArgKind.Channel, kickban.argKind(emptyList(), typing = "#ot"))
+        assertEquals(ArgKind.Nick, invite.argKind(emptyList(), typing = "bo"))
+        assertEquals(ArgKind.Nick, invite.argKind(emptyList(), typing = ""))
+        assertEquals(ArgKind.Channel, invite.argKind(listOf("bob"), typing = "#o"))
         // A single form still fits a channel in a nick slot: `/msg #chan hi` is a message.
         assertEquals(ArgKind.Text, CommandRegistry.spec("msg")!!.argKind(listOf("#chan")))
     }
