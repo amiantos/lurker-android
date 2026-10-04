@@ -872,10 +872,12 @@ internal class LurkerClient(
      * made merely *opening a screen* reopen a buffer on every device the user owns, and,
      * because the server's paused-account gate correctly classes writes as writes, made a
      * paused account unable to read its own history at all.
+     *
+     * Returns whether it was handed to a socket — see `send`.
      */
-    fun openBuffer(networkId: Int?, target: String, countBy: HistoryCountBy) {
-        if (networkId == null) return
-        send(
+    fun openBuffer(networkId: Int?, target: String, countBy: HistoryCountBy): Boolean {
+        if (networkId == null) return false
+        return send(
             buildJsonObject {
                 put("type", "open-buffer")
                 put("networkId", networkId)

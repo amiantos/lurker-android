@@ -24,9 +24,9 @@ import net.amiantos.lurkerkit.model.BufferKey
  */
 sealed interface AppEvent {
     /**
-     * A join or a DCC chat this device asked for has its buffer — go there (lurker-ios#57). With
-     * [jumpTo], land on that message rather than the bottom: U9's notification tap, which carries
-     * the message the push was about (`MainScaffold.open`).
+     * A join, a DCC chat or a DM this device asked for has its buffer — go there (lurker-ios#57,
+     * lurker-ios#201). With [jumpTo], land on that message rather than the bottom: U9's
+     * notification tap, which carries the message the push was about (`MainScaffold.open`).
      */
     data class OpenBuffer(val key: BufferKey, val jumpTo: Long? = null) : AppEvent
 

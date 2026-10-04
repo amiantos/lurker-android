@@ -860,6 +860,20 @@ data class ChatState(
     }
 
     /**
+     * Whether a write for this network can reach it right now: the device has a path, our socket
+     * is up, and the network is connected — the one rule `/join`, a DM's `open-buffer`
+     * (lurker-ios#201) and a reaction share, so a reconnect can't make them disagree.
+     *
+     * ⚠ All three, not just the network's row. After a drop `connection` reads `.reconnecting`
+     * while the network row still says `.connected`, and the client keeps the closed socket until
+     * it reconnects — so a send there "succeeds" and nothing ever answers.
+     */
+    fun canWrite(networkId: Int?): Boolean {
+        if (!(reachable && connection == SocketStatus.Connected) || networkId == null) return false
+        return networks[networkId]?.state == ConnectionState.Connected
+    }
+
+    /**
      * Whether a reaction — or a reply's tags — can go out on this network right now: it's
      * connected and its last registration said yes (§5.1). The server's own gate needs a reply
      * tag allowed too, so this is also the nearest signal for "a reply will carry its tag".
@@ -868,9 +882,8 @@ data class ChatState(
      * last snapshot said, and nothing we send goes anywhere.
      */
     fun canReact(networkId: Int?): Boolean {
-        if (!(reachable && connection == SocketStatus.Connected) || networkId == null) return false
-        val network = networks[networkId] ?: return false
-        return network.state == ConnectionState.Connected && network.canReact
+        if (!canWrite(networkId = networkId) || networkId == null) return false
+        return networks[networkId]?.canReact == true
     }
 
     /**

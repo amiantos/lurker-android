@@ -63,7 +63,7 @@ class DccOffers(
     /**
      * The prompt is answered: run the verb, report a refusal, and bring up the next offer if one was
      * queued behind this one. On a successful Accept the app is taken to the chat by
-     * `onDccChatOpened` — once its `=nick` row exists (the kit's `PendingDccOpen`).
+     * `onBufferOpened` — once its `=nick` row exists (the kit's `PendingOpens`).
      *
      * Accept never passes `passive`, as iOS doesn't: accepting answers the peer's offer, whose shape
      * the server already holds. ⚠ Both verbs are WRITES.

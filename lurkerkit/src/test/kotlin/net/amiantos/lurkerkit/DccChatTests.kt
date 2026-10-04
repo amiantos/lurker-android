@@ -19,10 +19,10 @@ import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.BufferOrder
 import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.DccChat
-import net.amiantos.lurkerkit.model.DccOpens
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Network
-import net.amiantos.lurkerkit.model.PendingDccOpen
+import net.amiantos.lurkerkit.model.PendingOpen
+import net.amiantos.lurkerkit.model.PendingOpens
 import net.amiantos.lurkerkit.model.SearchQuery
 import net.amiantos.lurkerkit.model.StatusLight
 import net.amiantos.lurkerkit.store.LurkerStore
@@ -457,14 +457,14 @@ class DccChatTests {
 
     @Test
     fun testAnOpenWaitsForTheRowThenGoesThere() {
-        val pending = PendingDccOpen(networkId = 1, nick = "bob", now = opened)
+        val pending = PendingOpen(key = DccChat.key(networkId = 1, nick = "bob"), now = opened)
         assertEquals(
-            PendingDccOpen.Outcome.Waiting,
+            PendingOpen.Outcome.Waiting,
             pending.settle(buffers = emptyMap(), now = opened.plusSeconds(1)),
         )
         val row = Buffer(networkId = 1, target = "=Bob", kind = BufferKind.Dcc)
         assertEquals(
-            PendingDccOpen.Outcome.Open(row.key),
+            PendingOpen.Outcome.Open(row.key),
             pending.settle(buffers = mapOf(row.key.id to row), now = opened.plusSeconds(1)),
             "the server's spelling of the name",
         )
@@ -473,10 +473,10 @@ class DccChatTests {
     /** What a close checks before it cancels the wait: the same chat, however it was spelled. */
     @Test
     fun testAWaitKnowsWhichChatItIsFor() {
-        val pending = PendingDccOpen(networkId = 1, nick = "bob", now = opened)
-        assertTrue(pending.isFor(networkId = 1, nick = "Bob"))
-        assertFalse(pending.isFor(networkId = 1, nick = "carol"))
-        assertFalse(pending.isFor(networkId = 2, nick = "bob"))
+        val pending = PendingOpen(key = DccChat.key(networkId = 1, nick = "bob"), now = opened)
+        assertTrue(pending.isFor(DccChat.key(networkId = 1, nick = "Bob")))
+        assertFalse(pending.isFor(DccChat.key(networkId = 1, nick = "carol")))
+        assertFalse(pending.isFor(DccChat.key(networkId = 2, nick = "bob")))
     }
 
     /**
@@ -485,12 +485,12 @@ class DccChatTests {
      */
     @Test
     fun testARowThatLandsAfterTheDeadlineGoesNowhere() {
-        val pending = PendingDccOpen(networkId = 1, nick = "bob", now = opened)
-        val late = opened.plus(PendingDccOpen.patience.plusSeconds(1))
-        assertEquals(PendingDccOpen.Outcome.Expired, pending.settle(buffers = emptyMap(), now = late))
+        val pending = PendingOpen(key = DccChat.key(networkId = 1, nick = "bob"), now = opened)
+        val late = opened.plus(PendingOpen.patience.plusSeconds(1))
+        assertEquals(PendingOpen.Outcome.Expired, pending.settle(buffers = emptyMap(), now = late))
         val row = Buffer(networkId = 1, target = "=bob", kind = BufferKind.Dcc)
         assertEquals(
-            PendingDccOpen.Outcome.Expired,
+            PendingOpen.Outcome.Expired,
             pending.settle(buffers = mapOf(row.key.id to row), now = late),
         )
     }
@@ -511,9 +511,9 @@ class DccChatTests {
      */
     @Test
     fun testACloseOvertakesAnOpenStillInFlight() {
-        val opens = DccOpens()
-        val ticket = opens.begin(networkId = 1, nick = "bob")
-        opens.closing(networkId = 1, nick = "Bob")
+        val opens = PendingOpens()
+        val ticket = opens.begin(DccChat.key(networkId = 1, nick = "bob"))
+        opens.closing(DccChat.key(networkId = 1, nick = "Bob"))
         opens.opened(ticket, now = opened)
         assertNull(opens.waiting)
         assertNull(opens.settle(buffers = row("=bob"), now = opened))
@@ -521,9 +521,9 @@ class DccChatTests {
 
     @Test
     fun testACloseOfAnotherChatDoesNot() {
-        val opens = DccOpens()
-        val ticket = opens.begin(networkId = 1, nick = "bob")
-        opens.closing(networkId = 1, nick = "carol")
+        val opens = PendingOpens()
+        val ticket = opens.begin(DccChat.key(networkId = 1, nick = "bob"))
+        opens.closing(DccChat.key(networkId = 1, nick = "carol"))
         opens.opened(ticket, now = opened)
         assertEquals(bobKey, opens.settle(buffers = row("=bob"), now = opened))
     }
@@ -531,9 +531,9 @@ class DccChatTests {
     /** Once a close is behind it, opening the same chat again works as it did the first time. */
     @Test
     fun testAnOpenAfterACloseStillWaits() {
-        val opens = DccOpens()
-        opens.closing(networkId = 1, nick = "bob")
-        val ticket = opens.begin(networkId = 1, nick = "bob")
+        val opens = PendingOpens()
+        opens.closing(DccChat.key(networkId = 1, nick = "bob"))
+        val ticket = opens.begin(DccChat.key(networkId = 1, nick = "bob"))
         opens.opened(ticket, now = opened)
         assertNotNull(opens.waiting)
     }
@@ -544,18 +544,18 @@ class DccChatTests {
      */
     @Test
     fun testACloseStopsAWaitBeforeItsOwnNoticeCanSatisfyIt() {
-        val opens = DccOpens()
-        opens.opened(opens.begin(networkId = 1, nick = "bob"), now = opened)
-        opens.closing(networkId = 1, nick = "bob")
+        val opens = PendingOpens()
+        opens.opened(opens.begin(DccChat.key(networkId = 1, nick = "bob")), now = opened)
+        opens.closing(DccChat.key(networkId = 1, nick = "bob"))
         assertNull(opens.settle(buffers = row("=bob"), now = opened))
     }
 
     /** A refused close ended nothing: the chat is still coming, so the wait comes back. */
     @Test
     fun testARefusedClosePutsTheWaitBack() {
-        val opens = DccOpens()
-        opens.opened(opens.begin(networkId = 1, nick = "bob"), now = opened)
-        val mark = opens.closing(networkId = 1, nick = "bob")
+        val opens = PendingOpens()
+        opens.opened(opens.begin(DccChat.key(networkId = 1, nick = "bob")), now = opened)
+        val mark = opens.closing(DccChat.key(networkId = 1, nick = "bob"))
         opens.closeRefused(mark)
         assertEquals(bobKey, opens.settle(buffers = row("=bob"), now = opened))
     }
@@ -563,10 +563,10 @@ class DccChatTests {
     /** …unless the user has asked for something else since. */
     @Test
     fun testARefusedCloseDoesNotOverrideANewerOpen() {
-        val opens = DccOpens()
-        opens.opened(opens.begin(networkId = 1, nick = "bob"), now = opened)
-        val mark = opens.closing(networkId = 1, nick = "bob")
-        opens.begin(networkId = 1, nick = "carol")
+        val opens = PendingOpens()
+        opens.opened(opens.begin(DccChat.key(networkId = 1, nick = "bob")), now = opened)
+        val mark = opens.closing(DccChat.key(networkId = 1, nick = "bob"))
+        opens.begin(DccChat.key(networkId = 1, nick = "carol"))
         opens.closeRefused(mark)
         assertNull(opens.waiting)
     }
@@ -577,9 +577,9 @@ class DccChatTests {
      */
     @Test
     fun testTheLatestRequestWinsWhateverOrderTheRepliesArrive() {
-        val opens = DccOpens()
-        val bob = opens.begin(networkId = 1, nick = "bob")
-        val carol = opens.begin(networkId = 1, nick = "carol")
+        val opens = PendingOpens()
+        val bob = opens.begin(DccChat.key(networkId = 1, nick = "bob"))
+        val carol = opens.begin(DccChat.key(networkId = 1, nick = "carol"))
         opens.opened(carol, now = opened)
         opens.opened(bob, now = opened)
         assertNull(opens.settle(buffers = row("=bob"), now = opened))
@@ -590,9 +590,9 @@ class DccChatTests {
     /** An open sent before a sign-out must not land in whoever signs in next. */
     @Test
     fun testAReplyFromBeforeASignOutIsStale() {
-        val opens = DccOpens()
-        val ticket = opens.begin(networkId = 1, nick = "bob")
-        opens.reset()
+        val opens = PendingOpens()
+        val ticket = opens.begin(DccChat.key(networkId = 1, nick = "bob"))
+        opens.cancel()
         opens.opened(ticket, now = opened)
         assertNull(opens.waiting)
     }
