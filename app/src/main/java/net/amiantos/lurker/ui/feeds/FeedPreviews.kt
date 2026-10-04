@@ -13,6 +13,7 @@ import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.PageExit
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.EventType
+import net.amiantos.lurkerkit.model.FeedPaging
 import net.amiantos.lurkerkit.model.FeedReaction
 import net.amiantos.lurkerkit.model.HighlightItem
 import net.amiantos.lurkerkit.model.Message
@@ -40,7 +41,7 @@ internal fun previewFeedItems(now: Instant): List<HighlightItem> {
 }
 
 @Composable
-private fun FeedPreview(dark: Boolean, kind: HistoryFeed, placeholder: FeedPlaceholder? = null) {
+private fun FeedPreview(dark: Boolean, kind: HistoryFeed, placeholder: FeedPaging.Placeholder? = null) {
     LurkerTheme(darkTheme = dark) {
         val style = rememberMessageTextStyle()
         val now = Instant.parse("2026-07-25T14:41:00Z")
@@ -93,24 +94,24 @@ private fun BookmarksPreviewDark() = FeedPreview(dark = true, kind = HistoryFeed
 
 @Preview(name = "Activity loading — light", heightDp = 400)
 @Composable
-private fun LoadingPreviewLight() = FeedPreview(dark = false, kind = HistoryFeed.Activity, placeholder = FeedPlaceholder.Loading)
+private fun LoadingPreviewLight() = FeedPreview(dark = false, kind = HistoryFeed.Activity, placeholder = FeedPaging.Placeholder.Loading)
 
 @Preview(name = "Activity loading — dark", heightDp = 400)
 @Composable
-private fun LoadingPreviewDark() = FeedPreview(dark = true, kind = HistoryFeed.Activity, placeholder = FeedPlaceholder.Loading)
+private fun LoadingPreviewDark() = FeedPreview(dark = true, kind = HistoryFeed.Activity, placeholder = FeedPaging.Placeholder.Loading)
 
 @Preview(name = "Bookmarks empty — light", heightDp = 400)
 @Composable
-private fun EmptyPreviewLight() = FeedPreview(dark = false, kind = HistoryFeed.Bookmarks, placeholder = FeedPlaceholder.Empty)
+private fun EmptyPreviewLight() = FeedPreview(dark = false, kind = HistoryFeed.Bookmarks, placeholder = FeedPaging.Placeholder.Empty)
 
 @Preview(name = "Bookmarks empty — dark", heightDp = 400)
 @Composable
-private fun EmptyPreviewDark() = FeedPreview(dark = true, kind = HistoryFeed.Bookmarks, placeholder = FeedPlaceholder.Empty)
+private fun EmptyPreviewDark() = FeedPreview(dark = true, kind = HistoryFeed.Bookmarks, placeholder = FeedPaging.Placeholder.Empty)
 
 @Preview(name = "Activity failed — light", heightDp = 400)
 @Composable
-private fun ErrorPreviewLight() = FeedPreview(dark = false, kind = HistoryFeed.Activity, placeholder = FeedPlaceholder.Error)
+private fun ErrorPreviewLight() = FeedPreview(dark = false, kind = HistoryFeed.Activity, placeholder = FeedPaging.Placeholder.Error)
 
 @Preview(name = "Activity failed — dark", heightDp = 400)
 @Composable
-private fun ErrorPreviewDark() = FeedPreview(dark = true, kind = HistoryFeed.Activity, placeholder = FeedPlaceholder.Error)
+private fun ErrorPreviewDark() = FeedPreview(dark = true, kind = HistoryFeed.Activity, placeholder = FeedPaging.Placeholder.Error)

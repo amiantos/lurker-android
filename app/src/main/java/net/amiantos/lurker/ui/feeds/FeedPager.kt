@@ -3,28 +3,14 @@
 
 package net.amiantos.lurker.ui.feeds
 
-import net.amiantos.lurkerkit.model.FeedCursor
+import net.amiantos.lurkerkit.model.FeedPaging
 import net.amiantos.lurkerkit.model.HighlightItem
 import net.amiantos.lurkerkit.model.HighlightsPage
-
-/** Which of a feed's three placeholders stands in for its rows — each feed words them itself, as a `StateModel`. */
-enum class FeedPlaceholder { Loading, Empty, Error }
-
-
-/** One page to fetch: the first (newest) one, or the next older one from [cursor]. */
-sealed interface FeedFetch {
-    /** The reload generation this fetch answers; an answer under a newer one is dropped. */
-    val generation: Int
-
-    data class First(override val generation: Int) : FeedFetch
-
-    data class More(override val generation: Int, val cursor: FeedCursor) : FeedFetch
-}
 
 /** What a feed draws, as of the last change — one value, so the screen recomposes once per change. */
 data class FeedSnapshot(
     val items: List<HighlightItem> = emptyList(),
-    val placeholder: FeedPlaceholder? = FeedPlaceholder.Loading,
+    val placeholder: FeedPaging.Placeholder? = FeedPaging.Placeholder.Loading,
     /** A pull's own spinner is up — the page keeps its spinner away while it is. */
     val refreshing: Boolean = false,
     /**
@@ -41,125 +27,81 @@ data class FeedSnapshot(
 )
 
 /**
- * The paging rules of a cross-buffer feed — lurker-ios's `HistoryFeedViewController`, the half that
- * isn't table plumbing, synchronous and pure so every rule is tested. `FeedController` runs the
- * fetches it asks for.
+ * A cross-buffer feed's paging, as this app draws it: LurkerKit's [FeedPaging] — the cursor, the
+ * generation, the hop budget, the rows and which placeholder stands in for them, every rule shared with
+ * lurker-ios and tested there — plus the few rules that belong to this screen alone. Synchronous and
+ * pure like the kit's half, so they are tested too; `FeedController` runs the fetches it hands out.
  *
- * A REST read paginated by a cursor rather than streamed: it fetches on open and pages as you scroll,
- * with pull-to-refresh to pick up anything that changed while it sat open. It deliberately doesn't
- * follow live state — something arriving in some channel is a push/badge concern, not a reason to
- * mutate a list you're reading.
+ * What is only here, and why:
+ * - [FeedSnapshot.refreshing], the pull's own spinner (iOS's refresh control, which ends itself).
+ * - [FeedSnapshot.pageInFailed], the retry row under a failed page-in.
+ * - [FeedSnapshot.epoch], which throws away what was rendered for the last first page.
+ * - [wantsMore], the prefetch window (iOS's `willDisplay` check).
+ * - A removed row stays removed across a reload already in flight ([remove]). LurkerKit lacks this.
+ * - A removal pages only when it leaves the list inside the prefetch window, and a removal's own page
+ *   is not a fruitless hop ([remove]). LurkerKit pages on every removal with a live cursor.
  *
- * Five places part ways with the iOS original, which has these bugs too: a new question clears the
- * old answer ([reload]), a reload resets the hop budget, a pull supersedes a page-in, a removed row
- * stays removed across a reload already in flight ([remove]), and a removal pages only when it has to.
- *
- * @param supersedes whether a reload replaces a FIRST page already in flight rather than being dropped
- *   — iOS's `reloadSupersedes`. False for the feeds whose reload is idempotent: pulling twice re-fetches
- *   the same newest page, so the second pull buys nothing and dropping it keeps the refresh spinner
- *   honest. True for Search, where two reloads are two different questions and only the last typed is
- *   wanted. Either way a reload supersedes a page-in or a hop chain: the pull asked for the newest page,
- *   not for the older one still on its way.
+ * @param supersedes whether a reload replaces a FIRST page already in flight — [FeedPaging.supersedes].
  * @param visible the rows an ignore rule doesn't hide (lurker#301), judged as pages land.
  */
 class FeedPager(
-    private val supersedes: Boolean,
+    supersedes: Boolean,
     private val visible: (List<HighlightItem>) -> List<HighlightItem> = { it },
 ) {
-    var items: List<HighlightItem> = emptyList()
-        private set
-    var placeholder: FeedPlaceholder? = FeedPlaceholder.Loading
-        private set
+    private val paging = FeedPaging(supersedes)
+
+    val items: List<HighlightItem> get() = paging.items
+    /**
+     * [FeedPaging.placeholder] — except that an empty list with a page on its way says Loading, as the
+     * kit's own rule has it, after a removal asked for that page past the kit ([remove]): the kit had
+     * already settled the list as empty when it declined to page.
+     */
+    val placeholder: FeedPaging.Placeholder?
+        get() = if (items.isEmpty() && paging.isLoading) FeedPaging.Placeholder.Loading else paging.placeholder
+
+    val isLoading: Boolean get() = paging.isLoading
+
     var refreshing: Boolean = false
         private set
-
-    /** The next-page cursor from the last response; null once the server has no more. */
-    private var nextCursor: FeedCursor? = null
-    private var reachedEnd = false
-    var isLoading: Boolean = false
-        private set
-
-    /** What's in flight is a first page, not a page-in — only a first page can absorb a repeat pull. */
-    private var firstInFlight = false
-
-    /**
-     * Bumped by every [reload]. A page carries the generation it was requested under, and one that
-     * lands under a newer generation is dropped — the list it was fetched for no longer exists. Not only
-     * for Search, where each keystroke is a new query: a pull landing while a page-in was in flight would
-     * otherwise append the old list's next page onto the new list.
-     */
-    private var generation = 0
-
-    /**
-     * The first fetch failed with nothing to show — distinct from an empty result, so the placeholder
-     * says so and offers the pull rather than claiming the feed is empty.
-     */
-    private var loadFailed = false
 
     private var pageInFailed = false
     private var epoch = 0
 
-    /**
-     * Consecutive auto-page hops that yielded no visible rows. Each is a full history/FTS query on the
-     * server, and the chain feeds itself: a page that filters to nothing asks for the next. Against a
-     * channel an ignored sender dominates, that can run the whole history behind a spinner that never
-     * resolves; the cap stops it. Reset by every reload, so one exhausted query can't stop the next from
-     * paging past an all-ignored page; a scroll asks again too.
-     */
-    private var fruitlessHops = 0
+    /** The generation of the latest reload — what a removal is stamped with (see [removed]). */
+    private var reloadGeneration = 0
 
     /**
-     * Rows the reader removed, by message id, with the generation they were removed under. A reload
-     * already in flight was answered from before the removal, so its page still holds the row — filtered
-     * out here until a reload issued AFTER the removal lands, whose answer is the server's word on it.
+     * Rows the reader removed, by message id, with the reload generation they were removed under. A
+     * reload already in flight was answered from before the removal, so its page still holds the row —
+     * filtered out here until a reload issued AFTER the removal lands, whose answer is the server's word
+     * on it.
      */
     private val removed = HashMap<Long, Int>()
 
     fun snapshot(): FeedSnapshot = FeedSnapshot(items, placeholder, refreshing, pageInFailed, epoch)
 
     /** Whether [fetch] still answers the list on screen — re-checked when its request actually starts. */
-    fun isCurrent(fetch: FeedFetch): Boolean = fetch.generation == generation
+    fun isCurrent(fetch: FeedPaging.Fetch): Boolean = paging.isCurrent(fetch)
 
     /**
-     * (Re)fetch from the newest page: on open, on a pull, and — for Search — every time the question
-     * changes ([newQuestion]). Null when dropped: a repeat reload of an idempotent feed while its first
-     * page is still loading, which also ends the pull's spinner, or it would spin forever.
-     *
-     * A new question clears the old answer at once — rows, cursor and end — and shows Loading: otherwise
-     * the old query's rows would stand under the new query until it answered, and if it failed, stay
-     * there with no error while the next scroll paged the OLD cursor under the new question. A pull asks
-     * the same question again, so the rows it already has stay up under its own spinner.
+     * (Re)fetch from the newest page — [FeedPaging.reload]. A pull ([byPull]) puts its own spinner up;
+     * a dropped one (a repeat pull of an idempotent feed while its first page is still loading) ends it,
+     * or it would spin forever.
      */
-    fun reload(byPull: Boolean = false, newQuestion: Boolean = false): FeedFetch.First? {
-        if (isLoading && firstInFlight && !supersedes) {
+    fun reload(byPull: Boolean = false, newQuestion: Boolean = false): FeedPaging.Fetch? {
+        val fetch = paging.reload(newQuestion)
+        if (fetch == null) {
             refreshing = false
             return null
         }
-        generation += 1
-        isLoading = true
-        firstInFlight = true
-        loadFailed = false
-        pageInFailed = false
-        fruitlessHops = 0
+        reloadGeneration = fetch.generation
         refreshing = byPull
-        if (newQuestion) {
-            items = emptyList()
-            nextCursor = null
-            reachedEnd = false
-        }
-        if (items.isEmpty()) placeholder = FeedPlaceholder.Loading
-        return FeedFetch.First(generation)
+        pageInFailed = false
+        return fetch
     }
 
-    /** The next older page, if there is one and nothing is already loading. */
-    fun loadMore(): FeedFetch.More? {
-        if (isLoading || reachedEnd) return null
-        val cursor = nextCursor ?: return null
-        isLoading = true
-        firstInFlight = false
-        pageInFailed = false
-        return FeedFetch.More(generation, cursor)
-    }
+    /** The next older page, if there is one and nothing is already loading — [FeedPaging.loadMore]. */
+    fun loadMore(): FeedPaging.Fetch? = issued(paging.loadMore())
 
     /**
      * Whether a scroll that has drawn row [index] should ask for more: within [PREFETCH] rows of the
@@ -169,123 +111,77 @@ class FeedPager(
     fun wantsMore(index: Int): Boolean = index >= items.size - PREFETCH
 
     /**
-     * The first page landed (null: the fetch failed). Returns a follow-up fetch when the page filtered
-     * to nothing and a cursor is still live — see [settle].
+     * A page landed (null: the fetch failed) — [FeedPaging.land]. Returns the follow-up fetch when the
+     * page filtered to nothing and a cursor is still live.
      *
-     * A superseded answer returns before touching `isLoading`: clearing it here would let a scroll
-     * page the old query's cursor into the new query's list.
+     * A failed page-in under rows ends the list in a retry row ([FeedSnapshot.pageInFailed]). A first
+     * page ends a pull's spinner, failed or not, and one that answers is a new [FeedSnapshot.epoch].
      */
-    fun firstPage(fetch: FeedFetch.First, page: HighlightsPage?): FeedFetch.More? {
-        if (!isCurrent(fetch)) return null
-        isLoading = false
-        refreshing = false
-        if (page == null) {
-            loadFailed = true
-            if (items.isEmpty()) placeholder = FeedPlaceholder.Error
-            return null
-        }
-        // This answer was asked for after these removals, so it is the server's word on them.
-        removed.values.removeAll { it < fetch.generation }
-        epoch += 1
-        items = shown(page)
-        nextCursor = page.next
-        reachedEnd = !page.hasMore
-        return settle(gainedRows = items.isNotEmpty())
-    }
-
-    /**
-     * An older page landed (null: the fetch failed). A failed page-in keeps what's on screen and ends the
-     * list in a retry row ([FeedSnapshot.pageInFailed]) — not latching the end — unless the list is
-     * empty, where it says the fetch failed rather than spin forever.
-     *
-     * Filtered before the emptiness check, so a page holding nothing but ignored lines takes the same
-     * path as an empty one: record the cursor, then let [settle] decide whether to page past it.
-     */
-    fun appendPage(fetch: FeedFetch.More, page: HighlightsPage?): FeedFetch.More? {
-        if (!isCurrent(fetch)) return null
-        isLoading = false
-        if (page == null) {
-            if (items.isEmpty()) {
-                loadFailed = true
-                showPlaceholderForState()
-            } else {
-                pageInFailed = true
+    fun land(fetch: FeedPaging.Fetch, page: HighlightsPage?): FeedPaging.Fetch? {
+        val landing = paging.land(page, fetch) { rows -> shown(rows, fetch) } ?: return null
+        if (fetch.isFirstPage) {
+            refreshing = false
+            if (page != null) {
+                // This answer was asked for after these removals, so it is the server's word on them.
+                removed.values.removeAll { it < fetch.generation }
+                epoch += 1
             }
-            return null
+        } else if (page == null && items.isNotEmpty()) {
+            pageInFailed = true
         }
-        val fresh = shown(page)
-        nextCursor = page.next
-        reachedEnd = !page.hasMore
-        if (fresh.isEmpty()) return settle(gainedRows = false)
-        items = items + fresh
-        return settle(gainedRows = true)
-    }
-
-    /** A page's rows as shown: the ignore filter, less what the reader removed meanwhile. */
-    private fun shown(page: HighlightsPage): List<HighlightItem> {
-        val rows = visible(page.items)
-        return if (removed.isEmpty()) rows else rows.filter { it.message.id !in removed }
+        return issued(landing.next)
     }
 
     /**
-     * Drop one row — a bookmark swiped away. By message id, not position: the list can be replaced
-     * under an open swipe (a pull lands), and a position resolved again then would remove whatever now
-     * sits there. A row already gone is a no-op. Remembered against a reload in flight ([removed]).
+     * A page's rows as shown: the ignore filter, less what the reader removed meanwhile. A first page
+     * keeps only the removals made under its own reload — one asked for after a removal is the server's
+     * word on that row ([land] then forgets it).
+     */
+    private fun shown(rows: List<HighlightItem>, fetch: FeedPaging.Fetch): List<HighlightItem> {
+        val seen = visible(rows)
+        if (removed.isEmpty()) return seen
+        return seen.filter { item ->
+            val removedUnder = removed[item.message.id] ?: return@filter true
+            fetch.isFirstPage && removedUnder < fetch.generation
+        }
+    }
+
+    /**
+     * Drop one row — a bookmark swiped away — [FeedPaging.remove], by message id. Remembered against a
+     * reload in flight ([removed]).
      *
      * Pages in only when the removal leaves the list empty or inside the prefetch window — the point at
-     * which a scroll would have asked anyway. A swipe is not a fruitless page: it spends no hop, and
-     * it doesn't fetch another page on every bookmark removed.
+     * which a scroll would have asked anyway. A swipe is not a fruitless page, and it doesn't fetch
+     * another page on every bookmark removed.
      *
-     * Emptying the list by removing things isn't failing to load it, so the failure latch clears: a
-     * refresh that failed with rows still up would otherwise leave "Couldn't load" as the epitaph of a
-     * list the reader just cleared.
+     * ⚠ LurkerKit's `remove` instead pages whenever a cursor is live and spends a hop doing it. Its hop
+     * is given back here when this rule says not to page (by abandoning it, before anything was asked);
+     * the hop it counted stays counted until rows are gained or the feed reloads, which LurkerKit gives
+     * no way to undo. Where LurkerKit declines and this rule pages (the hop budget is spent), the page is
+     * asked for directly.
      */
-    fun remove(messageId: Long): FeedFetch.More? {
-        removed[messageId] = generation
-        val index = items.indexOfFirst { it.message.id == messageId }
-        if (index < 0) return null
-        items = items.toMutableList().apply { removeAt(index) }
-        if (items.isEmpty()) loadFailed = false
-        if (items.size <= PREFETCH) {
-            val more = loadMore()
-            if (more != null) {
-                if (items.isEmpty()) placeholder = FeedPlaceholder.Loading
-                return more
-            }
+    fun remove(messageId: Long): FeedPaging.Fetch? {
+        removed[messageId] = reloadGeneration
+        val landing = paging.remove(messageId) ?: return null
+        val runsShort = items.size <= PREFETCH
+        var next = landing.next
+        if (next != null && !runsShort) {
+            paging.abandon()
+            next = null
+        } else if (next == null && runsShort) {
+            next = paging.loadMore()
         }
-        showPlaceholderForState()
-        return null
+        return issued(next)
     }
 
-    /**
-     * Close out a page landing: re-arm paging, or say what the list now shows.
-     *
-     * The rule is about rows GAINED, not about the list being empty. Paging is driven by rows coming on
-     * screen, so a round that adds none can never ask for another — a dead end whether the list holds
-     * zero rows or three (a search whose second page is all an ignored sender would stop at three with a
-     * live cursor sitting there). So a stalled round asks for the next page itself, quietly beneath rows
-     * already being read, behind the spinner when there are none.
-     */
-    private fun settle(gainedRows: Boolean): FeedFetch.More? {
-        if (gainedRows) fruitlessHops = 0
-        val stalled = !gainedRows && !reachedEnd && nextCursor != null
-        if (stalled && fruitlessHops < MAX_FRUITLESS_HOPS) {
-            fruitlessHops += 1
-            if (items.isEmpty()) placeholder = FeedPlaceholder.Loading
-            return loadMore()
-        }
-        showPlaceholderForState()
-        return null
-    }
-
-    private fun showPlaceholderForState() {
-        placeholder = if (items.isEmpty()) (if (loadFailed) FeedPlaceholder.Error else FeedPlaceholder.Empty) else null
+    /** Every fetch handed out takes a failed page-in's retry row down: the page is being asked again. */
+    private fun issued(fetch: FeedPaging.Fetch?): FeedPaging.Fetch? {
+        if (fetch != null) pageInFailed = false
+        return fetch
     }
 
     companion object {
         /** Fetch the next page once a scroll comes within this many rows of the end. */
         const val PREFETCH = 8
-
-        const val MAX_FRUITLESS_HOPS = 10
     }
 }

@@ -5,6 +5,7 @@ package net.amiantos.lurker.ui.feeds
 
 import net.amiantos.lurker.ui.shell.StateSymbol
 import androidx.compose.runtime.saveable.SaverScope
+import net.amiantos.lurkerkit.model.FeedPaging
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -50,19 +51,19 @@ class FeedSheetsTest {
     @Test
     fun theHistoryFeedsSayWhatTheyAre() {
         assertEquals("Activity", HistoryFeed.Activity.title)
-        assertEquals("No recent activity", HistoryFeed.Activity.words(FeedPlaceholder.Empty).title)
-        assertEquals("Press and hold a message, then Save Message, to keep it here.", HistoryFeed.Bookmarks.words(FeedPlaceholder.Empty).subtitle)
-        assertEquals("Couldn't load bookmarks", HistoryFeed.Bookmarks.words(FeedPlaceholder.Error).title)
+        assertEquals("No recent activity", HistoryFeed.Activity.words(FeedPaging.Placeholder.Empty).title)
+        assertEquals("Press and hold a message, then Save Message, to keep it here.", HistoryFeed.Bookmarks.words(FeedPaging.Placeholder.Empty).subtitle)
+        assertEquals("Couldn't load bookmarks", HistoryFeed.Bookmarks.words(FeedPaging.Placeholder.Error).title)
     }
 
     /** iOS's symbols: `at` for Activity's empty, `bookmark` for Bookmarks', the warning for a failure, none while loading. */
     @Test
     fun theHistoryFeedsCarryIosGlyphs() {
-        assertEquals(StateSymbol.Mention, HistoryFeed.Activity.words(FeedPlaceholder.Empty).symbol)
-        assertEquals(StateSymbol.Bookmark, HistoryFeed.Bookmarks.words(FeedPlaceholder.Empty).symbol)
+        assertEquals(StateSymbol.Mention, HistoryFeed.Activity.words(FeedPaging.Placeholder.Empty).symbol)
+        assertEquals(StateSymbol.Bookmark, HistoryFeed.Bookmarks.words(FeedPaging.Placeholder.Empty).symbol)
         for (feed in HistoryFeed.entries) {
-            assertEquals(StateSymbol.Warning, feed.words(FeedPlaceholder.Error).symbol)
-            assertNull(feed.words(FeedPlaceholder.Loading).symbol)
+            assertEquals(StateSymbol.Warning, feed.words(FeedPaging.Placeholder.Error).symbol)
+            assertNull(feed.words(FeedPaging.Placeholder.Loading).symbol)
         }
     }
 }

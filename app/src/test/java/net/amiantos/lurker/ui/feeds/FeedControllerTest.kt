@@ -11,6 +11,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.FeedCursor
+import net.amiantos.lurkerkit.model.FeedPaging
 import net.amiantos.lurkerkit.model.HighlightItem
 import net.amiantos.lurkerkit.model.HighlightsPage
 import net.amiantos.lurkerkit.model.Message
@@ -143,5 +144,36 @@ class FeedControllerTest {
         runCurrent()
         assertEquals(FeedCursor(beforeMessage = 11), server.asked.last())
         assertTrue(!feed.snapshot.pageInFailed)
+    }
+
+    /** Search's too-short state: answered on the spot, so typing into it never flashes "Searching…". */
+    @Test
+    fun aLocalFirstPageLandsWithoutAskingAndCancelsTheQuestionInFlight() = runTest {
+        val server = Server()
+        var local: HighlightsPage? = null
+        val feed = FeedController(backgroundScope, supersedes = true, visible = { it }, fetch = server::fetch, localFirstPage = { local })
+        feed.reload()
+        runCurrent()
+        assertEquals(1, server.asked.size)
+        local = HighlightsPage(emptyList(), nextBefore = null)
+        feed.reload(newQuestion = true)
+        // Settled inside the reload, before anything is dispatched: never Loading.
+        assertEquals(FeedPaging.Placeholder.Empty, feed.snapshot.placeholder)
+        runCurrent()
+        assertEquals(1, server.cancelled)
+        assertEquals("never reaches the wire", 1, server.asked.size)
+    }
+
+    @Test
+    fun aRemovalThatRunsTheListShortAsksForTheNextPage() = runTest {
+        val server = Server()
+        val feed = controller(server, supersedes = false)
+        feed.reload()
+        runCurrent()
+        server.pending[0].complete(HighlightsPage((20L downTo 12L).map { item(it) }, nextBefore = 12))
+        runCurrent()
+        feed.remove(20)
+        runCurrent()
+        assertEquals(listOf(null, FeedCursor(beforeMessage = 12)), server.asked)
     }
 }
