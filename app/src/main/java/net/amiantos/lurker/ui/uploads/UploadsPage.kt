@@ -87,6 +87,9 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.filter
+import net.amiantos.lurker.platform.AppEvents
+import net.amiantos.lurker.platform.LocalAppEvents
+import net.amiantos.lurker.platform.confirmCopy
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.PageExit
 import net.amiantos.lurker.ui.shell.RetryRow
@@ -129,6 +132,7 @@ internal fun UploadsPage(
     onView: (List<LinkPreview>, Int) -> Unit = { _, _ -> },
 ) {
     val context = LocalContext.current
+    val events = LocalAppEvents.current
     val grid = state.grid
     val keyboard = LocalSoftwareKeyboardController.current
     // One formatter for the page, rebuilt only when the locale changes — not one per tile per frame.
@@ -152,7 +156,7 @@ internal fun UploadsPage(
             UploadAction.OpenInBrowser -> if (item.removed) state.reportTombstone() else openInBrowser(context, item.url)
             UploadAction.AddToMessage -> onAddToMessage?.invoke(item.url)
             UploadAction.Star, UploadAction.Unstar -> state.toggleStar(item)
-            UploadAction.CopyLink -> if (item.removed) state.reportTombstone() else copyLink(context, item.url)
+            UploadAction.CopyLink -> if (item.removed) state.reportTombstone() else copyLink(context, item.url, events)
             UploadAction.Share -> share(context, item.url)
             UploadAction.Delete -> state.askToDelete(item)
         }
@@ -549,12 +553,10 @@ private fun relativeAge(formatter: RelativeDateTimeFormatter, then: Instant): St
         )
     }
 
-/**
- * Put the address on the clipboard. No toast of our own: Android 13 and up confirm a copy themselves,
- * and a second notice for the same thing is noise (the platform's guidance).
- */
-private fun copyLink(context: Context, url: String) {
+/** Put the address on the clipboard, saying so where the system won't (`confirmCopy`). */
+private fun copyLink(context: Context, url: String, events: AppEvents?) {
     context.getSystemService(ClipboardManager::class.java)?.setPrimaryClip(ClipData.newPlainText("Link", url))
+    events.confirmCopy()
 }
 
 /** The system share sheet, with the address. */

@@ -19,7 +19,6 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.awaitEachGesture
 import android.content.Context
-import android.content.pm.PackageManager
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -197,9 +196,9 @@ internal data class AboutLines(val version: String, val server: String?)
 
 /** "Version 1.0 (1)", from the package — iOS reads the bundle's short version and build. */
 private fun versionLine(context: Context): String {
-    val info = runCatching {
-        context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
-    }.getOrNull()
+    // The int-flags overload: deprecated at 33, but it works everywhere, and the flags one is 33+.
+    @Suppress("DEPRECATION")
+    val info = runCatching { context.packageManager.getPackageInfo(context.packageName, 0) }.getOrNull()
     return SettingsModel.versionString(versionName = info?.versionName, versionCode = info?.longVersionCode)
 }
 

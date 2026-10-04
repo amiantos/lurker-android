@@ -31,6 +31,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import net.amiantos.lurker.platform.AppEvent
 import net.amiantos.lurker.platform.LocalAppEvents
+import net.amiantos.lurker.platform.confirmCopy
 import net.amiantos.lurker.ui.message.RowPress
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.Message
@@ -141,7 +142,10 @@ internal fun MessageActionsHost(
     }
 
     fun copy(label: String, text: String) {
-        scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(label, text))) }
+        scope.launch {
+            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(label, text)))
+            events.confirmCopy()
+        }
     }
 
     val effects = MessageActionsModel.LineEffects(

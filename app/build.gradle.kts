@@ -13,9 +13,10 @@ android {
 
     defaultConfig {
         applicationId = "net.amiantos.lurker"
-        // 33 (Android 13) so the app installs on e-ink Android devices, which lag
-        // the mainline API level — a Boox Palma is API 33. Nothing here needs 34.
-        minSdk = 33
+        // 28 (Android 9) so the app installs on Fire OS 7 tablets, which are built on
+        // Android 9, and on e-ink devices that lag the mainline API level. Nothing here
+        // needs more: lint (NewApi) holds the app and, via :lurkerkit-device, the kit to it.
+        minSdk = 28
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"

@@ -31,7 +31,7 @@ class ExpiryText(context: Context, private val now: () -> Instant = Instant::now
 
     override fun invoke(instant: Instant): String {
         val zone = ZoneId.systemDefault()
-        // `LocalDate.ofInstant` is API 34; minSdk is 33.
+        // `LocalDate.ofInstant` is API 34; minSdk is 28.
         val day = instant.atZone(zone).toLocalDate()
         val today = now().atZone(zone).toLocalDate()
         val millis = instant.toEpochMilli()
