@@ -134,9 +134,12 @@ object NickColor {
      * (apostrophes, combining marks) on both sides.
      */
     private fun isFinalSigma(index: Int, scalars: IntArray): Boolean {
-        val before = (index - 1 downTo 0).map { scalars[it] }.firstOrNull { !isCaseIgnorable(it) }
-        val after = (index + 1 until scalars.size).map { scalars[it] }.firstOrNull { !isCaseIgnorable(it) }
-        return before != null && isCased(before) && !(after != null && isCased(after))
+        var before = index - 1
+        while (before >= 0 && isCaseIgnorable(scalars[before])) before -= 1
+        if (before < 0 || !isCased(scalars[before])) return false
+        var after = index + 1
+        while (after < scalars.size && isCaseIgnorable(scalars[after])) after += 1
+        return after == scalars.size || !isCased(scalars[after])
     }
 
     /**

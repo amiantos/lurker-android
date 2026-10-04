@@ -38,8 +38,6 @@ data class FeedSnapshot(
  * - [FeedSnapshot.epoch], which throws away what was rendered for the last first page.
  * - [wantsMore], the prefetch window (iOS's `willDisplay` check).
  * - A removed row stays removed across a reload already in flight ([remove]). LurkerKit lacks this.
- * - A removal pages only when it leaves the list inside the prefetch window, and a removal's own page
- *   is not a fruitless hop ([remove]). LurkerKit pages on every removal with a live cursor.
  *
  * @param supersedes whether a reload replaces a FIRST page already in flight — [FeedPaging.supersedes].
  * @param visible the rows an ignore rule doesn't hide (lurker#301), judged as pages land.
@@ -148,30 +146,13 @@ class FeedPager(
 
     /**
      * Drop one row — a bookmark swiped away — [FeedPaging.remove], by message id. Remembered against a
-     * reload in flight ([removed]).
-     *
-     * Pages in only when the removal leaves the list empty or inside the prefetch window — the point at
-     * which a scroll would have asked anyway. A swipe is not a fruitless page, and it doesn't fetch
-     * another page on every bookmark removed.
-     *
-     * ⚠ LurkerKit's `remove` instead pages whenever a cursor is live and spends a hop doing it. Its hop
-     * is given back here when this rule says not to page (by abandoning it, before anything was asked);
-     * the hop it counted stays counted until rows are gained or the feed reloads, which LurkerKit gives
-     * no way to undo. Where LurkerKit declines and this rule pages (the hop budget is spent), the page is
-     * asked for directly.
+     * reload in flight ([removed]). Pages in only when the removal leaves the list inside the prefetch
+     * window, and spends no skip-ahead hop: LurkerKit's rule, given [PREFETCH].
      */
     fun remove(messageId: Long): FeedPaging.Fetch? {
         removed[messageId] = reloadGeneration
-        val landing = paging.remove(messageId) ?: return null
-        val runsShort = items.size <= PREFETCH
-        var next = landing.next
-        if (next != null && !runsShort) {
-            paging.abandon()
-            next = null
-        } else if (next == null && runsShort) {
-            next = paging.loadMore()
-        }
-        return issued(next)
+        val landing = paging.remove(messageId, prefetchWindow = PREFETCH) ?: return null
+        return issued(landing.next)
     }
 
     /** Every fetch handed out takes a failed page-in's retry row down: the page is being asked again. */

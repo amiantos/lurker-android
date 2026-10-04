@@ -10,8 +10,8 @@ package net.amiantos.lurkerkit.model
  * The half of the iOS app's `HistoryFeedViewController` that isn't table plumbing, kept synchronous
  * and pure so the rules can be tested. The screen runs the fetches this hands it and reports
  * each answer back through `land`; what comes back says whether the rows changed and whether
- * another page should be asked for straight away. lurker-android's `FeedPager` is the same
- * machine.
+ * another page should be asked for straight away. lurker-android's `FeedPager` drives the
+ * same type.
  *
  * A REST read paginated by a cursor rather than streamed: it fetches on open and pages as you
  * scroll, with pull-to-refresh to pick up anything that changed while it sat open.
@@ -251,13 +251,28 @@ class FeedPaging(
      * by removing things is not failing to load it, so the failure latch clears — a refresh that
      * failed while rows were still up would otherwise leave "Couldn't load" as the epitaph for a
      * list the user just cleared.
+     *
+     * Pages in only when the removal leaves `prefetchWindow` rows or fewer — the point at which a
+     * scroll would have asked anyway, so pass the screen's own prefetch threshold. And a removal
+     * spends no skip-ahead hop: a swipe is not a page an ignore rule emptied. Settling it like
+     * one fetched a page on every bookmark removed from a long list, and ten swipes spent the
+     * whole budget, so a later page an ignore rule emptied stopped the feed dead on a live cursor.
      */
-    fun remove(messageId: Long): Landing? {
+    fun remove(messageId: Long, prefetchWindow: Int): Landing? {
         val index = items.indexOfFirst { it.message.id == messageId }
         if (index < 0) return null
         items = items.filterIndexed { i, _ -> i != index }
         if (items.isEmpty()) loadFailed = false
-        return Landing(rowsChanged = true, next = settle(gainedRows = false))
+        // `loadMore` declines while a page is already in flight; that page settles the list.
+        if (items.size <= prefetchWindow) {
+            val next = loadMore()
+            if (next != null) {
+                if (items.isEmpty()) placeholder = Placeholder.Loading
+                return Landing(rowsChanged = true, next = next)
+            }
+        }
+        settlePlaceholder()
+        return Landing(rowsChanged = true, next = null)
     }
 
     /**

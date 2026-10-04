@@ -1274,30 +1274,38 @@ class ChatViewModel(
                     )
                 is CommandEffect.Activate -> if (networkId != null) {
                     val to = BufferKey(networkId = networkId, target = effect.target)
-                    if (ChannelName.isChannelTarget(effect.target)) {
+                    if (wentNowhere) {
+                        // `/msg … hi`'s line went nowhere: it is coming back to this composer to be
+                        // sent again, and going anywhere would take the user away from it — a
+                        // channel as much as a nick.
+                    } else if (ChannelName.isChannelTarget(effect.target)) {
                         // A channel: switch at once, as before lurker-ios#201. `open-buffer` JOINs
                         // only a `#` channel and mints no row for the rest, so there is no row to
                         // wait for.
                         client.openBuffer(networkId = networkId, target = effect.target, countBy = historyCountBy)
                         outcome = SendOutcome.Activate(to)
-                    } else if (!wentNowhere) {
+                    } else if (DccChat.isTarget(effect.target)) {
+                        // A DCC chat (`=nick`): `open-buffer` never mints one, so a wait could never
+                        // be met — it would only stand every other landing down and expire in
+                        // silence. Go if the row is held; a chat that isn't open is `/dcc chat`'s
+                        // to start.
+                        if (store.state.buffers[to.id] != null) outcome = SendOutcome.Activate(to)
+                    } else {
                         // A nick: mint/hydrate the DM row and switch to it once it's here. A
                         // brand-new /query target isn't in `state.buffers` yet, so the destination
                         // screen's own hydrate wouldn't fire — this `open-buffer` is what brings
                         // the row (and its backlog) into being, and going there before it lands
                         // bounces off a settled roster (lurker-ios#201). See `openAndShow`.
                         //
-                        // An `open-buffer` that couldn't go out refuses the line, as a send that
-                        // went nowhere does — it comes back to the composer. Minted here because
-                        // nothing else in a bare `/query` would have.
-                        if (!openThenShow(to)) {
+                        // An `open-buffer` that couldn't go out refuses a bare `/query`, as a send
+                        // that went nowhere does — it comes back to the composer. Minted here
+                        // because nothing else in a bare `/query` would have. Never `/msg bob hi`'s:
+                        // its line already went, and handing it back would have it sent twice.
+                        if (!openThenShow(to) && lineId == null) {
                             correlator()
                             wentNowhere = true
                         }
                     }
-                    // ⚠ …and nowhere at all when `/msg bob hi`'s line went nowhere: it is coming
-                    // back to this composer to be sent again, and going to bob would take the user
-                    // away from it.
                 }
                 is CommandEffect.AddIgnore ->
                     // `scope`, not `networkId`: null is a global rule, which is the default and the
@@ -1812,6 +1820,9 @@ class ChatViewModel(
 
     /** Close a buffer (part a channel / drop a DM) and remove its row immediately. */
     fun closeBuffer(key: BufferKey) {
+        // A close stands down a wait for the same buffer: a DM closed while its open is pending
+        // would otherwise be minted again by the late backlog and taken back into (lurker-ios#201).
+        pendingOpens.closing(key)
         client.closeBuffer(networkId = key.networkId, target = key.target)
         dropDraft(key)
         store.removeBuffer(key)

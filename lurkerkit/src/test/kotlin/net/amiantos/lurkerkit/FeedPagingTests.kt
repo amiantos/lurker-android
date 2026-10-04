@@ -301,9 +301,9 @@ class FeedPagingTests {
         paging.land(page(listOf(1L), nextBefore = null), first, visible)
         val pull = paging.reload()!!
         paging.land(null, pull, visible)
-        assertEquals(true, paging.remove(messageId = 1)?.rowsChanged)
+        assertEquals(true, paging.remove(messageId = 1, prefetchWindow = 8)?.rowsChanged)
         assertEquals(FeedPaging.Placeholder.Empty, paging.placeholder)
-        assertNull(paging.remove(messageId = 1), "already gone")
+        assertNull(paging.remove(messageId = 1, prefetchWindow = 8), "already gone")
     }
 
     /**
@@ -316,9 +316,44 @@ class FeedPagingTests {
         val first = paging.reload()!!
         paging.land(page(listOf(1L), nextBefore = 1), first, visible)
         val more = paging.loadMore()!!
-        assertNull(paging.remove(messageId = 1)?.next)
+        assertNull(paging.remove(messageId = 1, prefetchWindow = 8)?.next)
         assertEquals(FeedPaging.Placeholder.Loading, paging.placeholder, "a page is still on its way")
         assertEquals(FeedPaging.maxFruitlessHops, hopsUntilItStops(paging, from = more, at = 500))
+    }
+
+    /** A removal from a long list doesn't page: the next scroll into the prefetch window asks. */
+    @Test
+    fun testARemovalFromALongListDoesNotPage() {
+        val paging = loaded(supersedes = false)
+        val landing = paging.remove(messageId = 30, prefetchWindow = 8)
+        assertEquals(true, landing?.rowsChanged)
+        assertNull(landing?.next, "nine rows left, outside the window")
+        assertNull(paging.placeholder)
+        assertEquals(FeedCursor(beforeMessage = 21), paging.loadMore()?.cursor, "the cursor is still live")
+    }
+
+    @Test
+    fun testARemovalThatRunsTheListShortPages() {
+        val paging = loaded(supersedes = false)
+        assertNull(paging.remove(messageId = 30, prefetchWindow = 8)?.next)
+        assertEquals(
+            FeedCursor(beforeMessage = 21),
+            paging.remove(messageId = 29, prefetchWindow = 8)?.next?.cursor,
+            "eight rows left: inside the window, where a scroll would have asked",
+        )
+        assertNull(paging.placeholder, "topping up beneath rows is silent")
+    }
+
+    /**
+     * A swipe is not a page an ignore rule emptied: the page a removal asks for leaves the whole
+     * skip-ahead budget for the fruitless pages after it.
+     */
+    @Test
+    fun testARemovalSpendsNoHop() {
+        val paging = loaded(supersedes = false)
+        paging.remove(messageId = 30, prefetchWindow = 8)
+        val fetch = paging.remove(messageId = 29, prefetchWindow = 8)!!.next!!
+        assertEquals(FeedPaging.maxFruitlessHops, hopsUntilItStops(paging, from = fetch, at = 20))
     }
 
     @Test
