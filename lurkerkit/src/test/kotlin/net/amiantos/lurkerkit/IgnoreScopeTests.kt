@@ -21,6 +21,7 @@ import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NickCompletion
+import net.amiantos.lurkerkit.model.SpeakerMap
 import net.amiantos.lurkerkit.model.TypingActivity
 import net.amiantos.lurkerkit.model.TypingEntry
 import net.amiantos.lurkerkit.store.ChatState
@@ -538,10 +539,10 @@ class IgnoreScopeTests {
             Member(nick = "bobby", user = "u", host = "h"),
             Member(nick = "bonnie", user = "u", host = "h"),
         )
-        val messages = listOf(Message(id = 1, type = EventType.Message, nick = "bobby", text = "hi"))
+        val speakers = SpeakerMap().record("bobby", Instant.ofEpochSecond(1))
         val set = IgnoreSet(global = listOf(rule(mask = "bobby")))
         val candidates = NickCompletion.candidates(
-            messages = messages, members = members, selfNick = "me", query = "bo", isChannel = true,
+            speakers = speakers, members = members, selfNick = "me", query = "bo", isChannel = true,
             ignores = set, networkId = 1,
         )
         assertEquals(listOf("bonnie"), candidates)
@@ -559,7 +560,7 @@ class IgnoreScopeTests {
         assertEquals(
             emptyList(),
             NickCompletion.candidates(
-                messages = emptyList(), members = members, selfNick = "me", query = "bo", isChannel = true,
+                speakers = SpeakerMap(), members = members, selfNick = "me", query = "bo", isChannel = true,
                 ignores = set, networkId = 1,
             ),
         )

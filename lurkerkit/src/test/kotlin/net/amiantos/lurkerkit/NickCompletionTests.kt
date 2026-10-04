@@ -3,14 +3,14 @@
 
 package net.amiantos.lurkerkit
 
-import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Member
-import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.NickCompletion
 import net.amiantos.lurkerkit.model.SettingOption
 import net.amiantos.lurkerkit.model.SettingType
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.model.SpeakerMap
+import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -18,21 +18,25 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Locks the @‑mention logic to the web client's `nickCompletion.ts`: speakers before
+ * Locks nick completion to the web client's `nickCompletion.ts`: speakers before
  * members, recency order, self excluded, departed speakers dropped in channels — plus
  * the token scanner and the addressing suffix the composer inserts.
  */
 class NickCompletionTests {
 
-    private fun speech(id: Long, nick: String, isSelf: Boolean = false): Message =
-        Message(id = id, type = EventType.Message, nick = nick, text = "hi", isSelf = isSelf)
+    /**
+     * A speaker map where each nick spoke at its index — so the LAST listed spoke most recently,
+     * the way a buffer's history reads.
+     */
+    private fun spoke(vararg nicks: String): SpeakerMap =
+        nicks.foldIndexed(SpeakerMap()) { index, map, nick -> map.record(nick, Instant.ofEpochSecond(index + 1L)) }
 
     // MARK: - Candidates
 
     @Test
     fun testRecentSpeakersLeadNewestFirstThenMembersAlphabetically() {
         val candidates = NickCompletion.candidates(
-            messages = listOf(speech(1, "alice"), speech(2, "bob")),
+            speakers = spoke("alice", "bob"),
             members = listOf(Member(nick = "zoe"), Member(nick = "alice"), Member(nick = "bob"), Member(nick = "carol")),
             selfNick = "me",
             query = "",
@@ -47,7 +51,7 @@ class NickCompletionTests {
     @Test
     fun testFilteringIsCaseInsensitiveAndKeepsRecencyOrder() {
         val candidates = NickCompletion.candidates(
-            messages = listOf(speech(1, "Anna"), speech(2, "arthur")),
+            speakers = spoke("Anna", "arthur"),
             members = listOf(Member(nick = "Anna"), Member(nick = "arthur"), Member(nick = "AXEL"), Member(nick = "bob")),
             selfNick = null,
             query = "a",
@@ -59,7 +63,7 @@ class NickCompletionTests {
     @Test
     fun testYouAreNeverACandidate() {
         val candidates = NickCompletion.candidates(
-            messages = listOf(speech(1, "ME", isSelf = true), speech(2, "alice")),
+            speakers = spoke("ME", "alice"),
             members = listOf(Member(nick = "me"), Member(nick = "alice")),
             selfNick = "me",
             query = "",
@@ -74,36 +78,35 @@ class NickCompletionTests {
      */
     @Test
     fun testADepartedSpeakerIsDroppedInChannelsButNotDMs() {
-        val history = listOf(speech(1, "ghost"), speech(2, "alice"))
+        val speakers = spoke("ghost", "alice")
         val inChannel = NickCompletion.candidates(
-            messages = history, members = listOf(Member(nick = "alice")),
+            speakers = speakers, members = listOf(Member(nick = "alice")),
             selfNick = null, query = "", isChannel = true,
         )
         assertEquals(listOf("alice"), inChannel)
 
         val inDM = NickCompletion.candidates(
-            messages = history, members = emptyList(),
+            speakers = speakers, members = emptyList(),
             selfNick = null, query = "", isChannel = false,
         )
         assertEquals(listOf("alice", "ghost"), inDM)
     }
 
     @Test
-    fun testOnlySpeechCountsAsSpeakingAndTheCapHolds() {
-        val noisy: List<Message> = listOf(
-            speech(1, "alice"),
-            Message(id = 2, type = EventType.Join, nick = "joiner", text = null),
-            Message(id = 3, type = EventType.Notice, nick = "noticebot", text = "psa"),
-            Message(id = 4, type = EventType.Action, nick = "bob", text = "waves"),
-        )
-        val members = listOf("alice", "bob", "joiner", "noticebot", "carol", "dave").map { Member(nick = it) }
+    fun testTheCapHolds() {
+        val members = listOf("alice", "bob", "carol", "dave", "erin", "frank").map { Member(nick = it) }
         val candidates = NickCompletion.candidates(
-            messages = noisy, members = members, selfNick = null, query = "", isChannel = true,
+            speakers = spoke("alice", "bob"), members = members, selfNick = null, query = "", isChannel = true,
         )
-        assertEquals(4, candidates.size, "capped at four")
+        assertEquals(listOf("bob", "alice", "carol", "dave"), candidates, "capped at four")
+    }
+
+    /** A speaker is offered as they last spelled their nick, not as the map's lowercased key. */
+    @Test
+    fun testASpeakerKeepsTheirSpelling() {
         assertEquals(
-            listOf("bob", "alice"), candidates.take(2),
-            "an action speaks; a join or notice does not",
+            listOf("Alice"),
+            NickCompletion.candidates(speakers = spoke("Alice"), members = emptyList(), selfNick = null, query = "al", isChannel = false),
         )
     }
 
@@ -474,7 +477,7 @@ class NickCompletionTests {
     @Test
     fun testTheQueryFoldsBeyondAsciiButANickIsStillMatchedLiterally() {
         fun candidates(query: String): List<String> = NickCompletion.candidates(
-            messages = listOf(speech(1, "\u00D1u")),
+            speakers = spoke("\u00D1u"),
             members = listOf("\u00C9mile", "\u00D1u", "bob", "\uD83D\uDE00bob", "\u00E9va").map { Member(nick = it) },
             selfNick = null, query = query, isChannel = true,
         )

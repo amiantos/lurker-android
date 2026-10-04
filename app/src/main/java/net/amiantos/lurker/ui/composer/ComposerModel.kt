@@ -23,6 +23,7 @@ import net.amiantos.lurkerkit.model.NickCompletion
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.model.SpeakerMap
 import net.amiantos.lurkerkit.model.member
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.support.TextRange
@@ -178,9 +179,11 @@ internal class CandidateSources(
     val ignores: IgnoreSet,
     val buffers: Map<String, Buffer>,
     val selfNick: String?,
+    val speakers: SpeakerMap?,
 ) {
     companion object {
         fun of(state: ChatState, key: BufferKey) = CandidateSources(
+            speakers = state.speakers[key.id],
             members = state.members[key.id],
             ignores = state.ignores,
             buffers = state.buffers,
@@ -189,7 +192,7 @@ internal class CandidateSources(
 
         fun same(old: CandidateSources, new: CandidateSources): Boolean =
             old.members === new.members && old.ignores === new.ignores && old.buffers === new.buffers &&
-                old.selfNick == new.selfNick
+                old.selfNick == new.selfNick && old.speakers === new.speakers
     }
 }
 

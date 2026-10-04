@@ -19,12 +19,13 @@ data class Speaker(
 /**
  * One buffer's "who has spoken here lately", keyed by lowercased nick.
  *
- * Feeds two readers, and it matters that they share one map. The smart filter (lurker-ios#63)
+ * Feeds three readers, and it matters that they share one map. The smart filter (lurker-ios#63)
  * asks *when* a nick last spoke, to decide whether their join/part/quit/nick line is churn
  * worth hiding; `Consolidation` asks *whether* they're in the set at all, to float people you
  * were just talking to to the front of a truncated summary. Two derivations of "recent
  * speaker" would eventually disagree, and the disagreement would show up as a line the filter
- * hid and the summary still counted.
+ * hid and the summary still counted. Nick completion (`NickCompletion.candidates`) ranks by it
+ * too, as the web's does — capped, so a keystroke never pays for how much history is loaded.
  *
  * **Seeded from the server, then kept current locally.** The seed is what makes the phone agree
  * with the browser: the server's list is capped at 20 and computed over a fixed scan window, and
@@ -39,19 +40,32 @@ data class Speaker(
  * `this` when there is nothing to change.
  */
 @ConsistentCopyVisibility
-data class SpeakerMap private constructor(private val lastSpoke: Map<String, Instant>) {
+data class SpeakerMap private constructor(
+    /** Lowercased nick → the nick as it was last spelled, and when it last spoke. */
+    private val lastSpoke: Map<String, Speaker>,
+) {
 
     constructor() : this(emptyMap())
 
     constructor(speakers: List<Speaker>) : this(SpeakerMap().seed(speakers).lastSpoke)
 
     /** When `nick` last spoke here, or null if they haven't (within what we know). */
-    operator fun get(nick: String): Instant? = lastSpoke[nick.lowercase()]
+    operator fun get(nick: String): Instant? = lastSpoke[nick.lowercase()]?.lastSpoke
 
     /** Everyone in the map, lowercased — what `Consolidation` ranks its truncated name lists by. */
     val nicks: Set<String> get() = lastSpoke.keys.toSet()
 
     val isEmpty: Boolean get() = lastSpoke.isEmpty()
+
+    /**
+     * Everyone in the map as they last spelled their nick, most recent first — what nick
+     * completion leads with. A tie (one seed timestamp) falls back to the case-folded nick, so
+     * the order never depends on the map's.
+     */
+    val recent: List<Speaker>
+        get() = lastSpoke.values.sortedWith(
+            compareByDescending<Speaker> { it.lastSpoke }.thenBy { it.nick.lowercase() },
+        )
 
     /**
      * Apply the server's list, keeping any local entry it doesn't know about or that is newer.
@@ -73,8 +87,8 @@ data class SpeakerMap private constructor(private val lastSpoke: Map<String, Ins
         val key = nick.lowercase()
         if (key.isEmpty()) return this
         val known = lastSpoke[key]
-        if (known != null && known >= date) return this
-        return SpeakerMap(trim(lastSpoke + (key to date)))
+        if (known != null && known.lastSpoke >= date) return this
+        return SpeakerMap(trim(lastSpoke + (key to Speaker(nick, date))))
     }
 
     /**
@@ -86,7 +100,7 @@ data class SpeakerMap private constructor(private val lastSpoke: Map<String, Ins
         val newKey = new.lowercase()
         if (oldKey.isEmpty() || newKey.isEmpty() || oldKey == newKey) return this
         val carried = lastSpoke[oldKey] ?: return this
-        return SpeakerMap(lastSpoke - oldKey).record(nick = newKey, date = carried)
+        return SpeakerMap(lastSpoke - oldKey).record(nick = new, date = carried.lastSpoke)
     }
 
     companion object {
@@ -102,9 +116,9 @@ data class SpeakerMap private constructor(private val lastSpoke: Map<String, Ins
          * Evict the least-recent speaker once past the cap. One at a time, because entries only
          * ever arrive one at a time — `seed` records each of its own.
          */
-        private fun trim(lastSpoke: Map<String, Instant>): Map<String, Instant> {
+        private fun trim(lastSpoke: Map<String, Speaker>): Map<String, Speaker> {
             if (lastSpoke.size <= cap) return lastSpoke
-            val oldest = lastSpoke.minByOrNull { it.value }?.key ?: return lastSpoke
+            val oldest = lastSpoke.minByOrNull { it.value.lastSpoke }?.key ?: return lastSpoke
             return lastSpoke - oldest
         }
     }

@@ -120,4 +120,25 @@ class SpeakersTests {
     fun testTheCapLeavesRoomForAFullServerSeed() {
         assertTrue(SpeakerMap.cap > 20)
     }
+
+    // MARK: - Recent (nick completion)
+
+    /**
+     * Most recent first, each as they last spelled their nick — what nick completion offers.
+     * A tie falls back to the case-folded nick, so the order never rides on the map's.
+     */
+    @Test
+    fun testRecentIsNewestFirstInTheirOwnSpelling() {
+        var map = SpeakerMap(listOf(Speaker(nick = "Carol", lastSpoke = t0), Speaker(nick = "bob", lastSpoke = t0)))
+        map = map.record("ALICE", at(5.0))
+        assertEquals(listOf("ALICE", "bob", "Carol"), map.recent.map { it.nick })
+        map = map.record("alice", at(6.0))
+        assertEquals("alice", map.recent.first().nick, "a newer line respells the entry")
+    }
+
+    @Test
+    fun testARenameCarriesTheNewSpelling() {
+        val map = SpeakerMap(listOf(Speaker(nick = "alice", lastSpoke = t0))).rename("alice", "Alice_AFK")
+        assertEquals(listOf(Speaker(nick = "Alice_AFK", lastSpoke = t0)), map.recent)
+    }
 }

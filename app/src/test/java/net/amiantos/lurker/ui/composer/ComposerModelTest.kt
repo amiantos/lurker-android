@@ -16,6 +16,7 @@ import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.model.SpeakerMap
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -239,15 +240,18 @@ class ComposerModelTest {
     }
 
     @Test
-    fun `candidate sources compare by identity, so a moved nicklist or rule set refreshes the pills`() {
+    fun `candidate sources compare by identity, so a moved nicklist, rule set or speaker refreshes the pills`() {
         val members = listOf(Member(nick = "alice"))
         val buffers = mapOf("1::#a" to Buffer(networkId = 1, target = "#a", kind = BufferKind.Channel))
         val ignores = IgnoreSet.empty
-        val sources = CandidateSources(members, ignores, buffers, selfNick = "me")
-        assertTrue(CandidateSources.same(sources, CandidateSources(members, ignores, buffers, "me")))
-        assertFalse(CandidateSources.same(sources, CandidateSources(members + Member(nick = "bob"), ignores, buffers, "me")))
-        assertFalse(CandidateSources.same(sources, CandidateSources(members.toList(), ignores, buffers, "me")))
-        assertFalse(CandidateSources.same(sources, CandidateSources(members, ignores, buffers, "me_")))
+        val speakers = SpeakerMap().record("alice", Instant.ofEpochSecond(1))
+        val sources = CandidateSources(members, ignores, buffers, selfNick = "me", speakers = speakers)
+        assertTrue(CandidateSources.same(sources, CandidateSources(members, ignores, buffers, "me", speakers)))
+        assertFalse(CandidateSources.same(sources, CandidateSources(members + Member(nick = "bob"), ignores, buffers, "me", speakers)))
+        assertFalse(CandidateSources.same(sources, CandidateSources(members.toList(), ignores, buffers, "me", speakers)))
+        assertFalse(CandidateSources.same(sources, CandidateSources(members, ignores, buffers, "me_", speakers)))
+        // Someone spoke: the map is a new value, and the pills re-rank.
+        assertFalse(CandidateSources.same(sources, CandidateSources(members, ignores, buffers, "me", speakers.record("bob", Instant.ofEpochSecond(2)))))
     }
 
     // MARK: - Send
