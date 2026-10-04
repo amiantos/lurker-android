@@ -40,7 +40,7 @@ import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 
 /**
  * What kind of completion is live under the caret. The composer detects the *shape*
- * (`CommandCompletion` for a slash line, `NickCompletion` for an `@`) and reports the query; the
+ * (`CommandCompletion` for a slash line, `NickCompletion` for a nick) and reports the query; the
  * candidates come from state the field never sees — the command table, the network's channels,
  * this buffer's members. iOS's `ComposerBar.Completion`.
  */
@@ -54,7 +54,7 @@ internal sealed interface Completion {
     /** Typing a nick argument of a command — `/msg al|`, `/whois b|`. */
     data class NickArg(val query: String) : Completion
 
-    /** An `@`-mention anywhere free text is allowed, including inside `/me …`. */
+    /** A nick being typed — `@al|`, or a bare `al|` (#57) — anywhere free text is allowed, including inside `/me …`. */
     data class Mention(val query: String) : Completion
 }
 
@@ -234,8 +234,8 @@ internal object ComposerModel {
     /**
      * The completion under the caret, or null. A slash line is classified first
      * (`CommandCompletion`): a channel/nick argument or the verb itself wins, and anything else —
-     * free text, an unknown command — falls through to `@`-mention detection, so `/me @al|` still
-     * completes a nick. A selection (start ≠ end) is editing, never mid-token.
+     * free text, an unknown command — falls through to nick detection, so `/me @al|` and
+     * `/me al|` still complete a nick. A selection (start ≠ end) is editing, never mid-token.
      */
     fun completion(text: String, selectionStart: Int, selectionEnd: Int): Completion? {
         if (selectionStart != selectionEnd) return null
@@ -284,7 +284,7 @@ internal object ComposerModel {
 
     /**
      * What a pick inserts, by the context it was offered in. A command inserts its verb, a channel or
-     * nick argument inserts that value, an `@`-mention inserts the nick with its addressing suffix.
+     * nick argument inserts that value, a nick being typed inserts the nick with its addressing suffix.
      * Null when the caret has moved off the token since (the pick is stale).
      */
     fun pick(text: String, selectionStart: Int, selectionEnd: Int, completion: Completion?, value: String, punctuation: String): FieldEdit? {

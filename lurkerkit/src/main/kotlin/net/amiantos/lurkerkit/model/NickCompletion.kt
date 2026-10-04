@@ -9,8 +9,8 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * @‑mention completion: the pure logic behind the pill strip the composer floats when
- * the user types `@`. A faithful port of the web client's `nickCompletion.ts`, so the
+ * Nick completion: the pure logic behind the pill strip the composer floats when the
+ * user types `@`, or the first letters of a nick (#57). A faithful port of the web client's `nickCompletion.ts`, so the
  * two clients can't disagree about who leads the list:
  *
  *  - recent speakers first, most recent first — the people you're most likely answering;
@@ -125,11 +125,15 @@ object NickCompletion {
     // MARK: - Token
 
     /**
-     * An in-progress `@…` under the caret. Offsets are UTF-16 (a Kotlin `String`'s own
-     * indices, so the composer can hand its selection straight in).
+     * An in-progress nick under the caret — an `@…`, or a bare word long enough to ask.
+     * Offsets are UTF-16 (a Kotlin `String`'s own indices, so the composer can hand its
+     * selection straight in).
      */
     data class MentionToken(
-        /** Offset of the `@` itself. */
+        /**
+         * Offset of the token's first character: the `@`, or a bare word's first letter.
+         * Completion replaces from here, so the `@` goes and the nick stands alone.
+         */
         val start: Int,
         /**
          * One past the token's last character — the end of the whitespace-delimited
@@ -139,43 +143,56 @@ object NickCompletion {
          */
         val end: Int,
         /**
-         * What follows the `@`, up to the caret — the filter query. Deliberately not the
-         * whole word: the list should answer what's been typed so far.
+         * What's been typed of the nick, up to the caret — after the `@`, or from a bare
+         * word's start. The filter query. Deliberately not the whole word: the list should
+         * answer what's been typed so far.
          */
         val query: String,
     )
 
     /**
-     * The active mention at `caret`, or null. A token is the whitespace-delimited run the
-     * caret sits in, and it must *begin* with `@` at a word boundary — `user@host` is an
-     * email-shaped word, not a mention, exactly as the web treats it.
+     * How much of a bare word must be typed before it asks for nicks — the web's mobile
+     * strip threshold, so a one-letter word ("I", "a") never floats the pills.
+     */
+    const val BARE_WORD_MINIMUM = 2
+
+    /**
+     * The nick being typed at `caret`, or null. A token is the whitespace-delimited run the
+     * caret sits in, and it asks in one of two shapes:
+     *
+     *  - `@…`, explicit, so it asks from the first keystroke — a lone `@` lists everyone;
+     *  - a bare word with at least [BARE_WORD_MINIMUM] characters before the caret, the
+     *    web's mobile suggestion strip (#57), so a nick can be finished without the `@`.
+     *    A word that opens with `/` (a command, or `//` escaping one) or a channel sigil
+     *    is never a nick, so it never asks.
+     *
+     * An `@` anywhere but the word's start disqualifies it — `user@host` is an
+     * email-shaped word, not a mention, exactly as the web treats it. For an `@…` only the
+     * part before the caret counts (the `@` must be the nearest one behind it); a bare
+     * word may not hold one at all, because completion replaces the whole word and would
+     * take an `@host` after the caret with it.
      *
      * Port note: `caret`, `start` and `end` are UTF-16 offsets on both sides, so they carry
-     * over unchanged. The query is the units between the `@` and the caret, decoded the way
-     * LurkerKit decodes them (`String(decoding:as: UTF16.self)`): half a surrogate pair — a
-     * caret that has landed inside an emoji — reads as U+FFFD rather than as a lone surrogate.
+     * over unchanged. The query is the units up to the caret, decoded the way LurkerKit
+     * decodes them (`String(decoding:as: UTF16.self)`): half a surrogate pair — a caret that
+     * has landed inside an emoji — reads as U+FFFD rather than as a lone surrogate.
      */
     fun activeMention(text: String, caret: Int): MentionToken? {
         if (caret < 0 || caret > text.length) return null
-        var index = caret - 1
-        while (index >= 0) {
-            val unit = text[index]
-            if (isWhitespace(unit)) return null // hit the word's start without finding @
-            if (unit == '@') {
-                // The @ must open the word: start of text, or after whitespace. An @
-                // mid-word (user@host) disqualifies the whole word, so stop either way.
-                if (index != 0 && !isWhitespace(text[index - 1])) return null
-                var end = caret
-                while (end < text.length && !isWhitespace(text[end])) end += 1
-                return MentionToken(
-                    start = index,
-                    end = end,
-                    query = decoding(text, index + 1, caret),
-                )
-            }
-            index -= 1
+        var start = caret
+        while (start > 0 && !isWhitespace(text[start - 1])) start -= 1
+        var end = caret
+        while (end < text.length && !isWhitespace(text[end])) end += 1
+
+        if (start < caret && text[start] == '@') {
+            if ((start + 1 until caret).any { text[it] == '@' }) return null
+            return MentionToken(start = start, end = end, query = decoding(text, start + 1, caret))
         }
-        return null
+
+        if (caret - start < BARE_WORD_MINIMUM || (start until end).any { text[it] == '@' }) return null
+        val word = decoding(text, start, end)
+        if (word.startsWith("/") || ChannelName.isChannelTarget(word)) return null
+        return MentionToken(start = start, end = end, query = decoding(text, start, caret))
     }
 
     /**

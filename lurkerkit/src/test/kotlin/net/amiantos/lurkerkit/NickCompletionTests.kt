@@ -141,10 +141,70 @@ class NickCompletionTests {
     @Test
     fun testACaretOutsideTheTokenDeactivatesIt() {
         assertNull(
-            NickCompletion.activeMention("@al done", caret = 8),
+            NickCompletion.activeMention("@al done ", caret = 9),
             "past the token's word there is no active mention",
         )
-        assertNull(NickCompletion.activeMention("plain text", caret = 5))
+        assertNull(NickCompletion.activeMention("plain text", caret = 0))
+    }
+
+    // MARK: - Bare words (#57)
+
+    /**
+     * The web's mobile strip: two letters of a nick ask without an `@`, and completion
+     * replaces the word from its first letter.
+     */
+    @Test
+    fun testABareWordOfTwoLettersAsks() {
+        assertEquals(
+            NickCompletion.MentionToken(start = 4, end = 6, query = "al"),
+            NickCompletion.activeMention("hey al", caret = 6),
+        )
+        assertEquals(
+            NickCompletion.MentionToken(start = 0, end = 2, query = "al"),
+            NickCompletion.activeMention("al", caret = 2),
+        )
+    }
+
+    @Test
+    fun testABareWordOfOneLetterDoesNot() {
+        assertNull(NickCompletion.activeMention("hey a", caret = 5), "every \"I\" and \"a\" would float the pills")
+        assertNull(
+            NickCompletion.activeMention("hey alice", caret = 5),
+            "the threshold counts what's typed BEFORE the caret, not the word",
+        )
+    }
+
+    @Test
+    fun testABareCaretMidWordFiltersToTheCaretButSpansTheWord() {
+        assertEquals(
+            NickCompletion.MentionToken(start = 0, end = 5, query = "al"),
+            NickCompletion.activeMention("alice more", caret = 2),
+        )
+    }
+
+    /**
+     * Completion replaces the whole word, so a bare word holding an `@` anywhere — even
+     * after the caret — never asks: it would take the `@host` with it.
+     */
+    @Test
+    fun testABareWordWithAnAtAnywhereDoesNotAsk() {
+        assertNull(NickCompletion.activeMention("mail user@host", caret = 9))
+        assertNull(NickCompletion.activeMention("mail user@host", caret = 7))
+    }
+
+    @Test
+    fun testACommandOrChannelWordDoesNotAsk() {
+        assertNull(NickCompletion.activeMention("/jo", caret = 3))
+        assertNull(NickCompletion.activeMention("//jo", caret = 4), "an escaped command")
+        for (sigil in listOf("#", "&", "+", "!")) {
+            assertNull(NickCompletion.activeMention("see ${sigil}li", caret = 7), sigil)
+        }
+    }
+
+    @Test
+    fun testAnAtStillAsksFromItsFirstKeystroke() {
+        assertEquals("a", NickCompletion.activeMention("hey @a", caret = 6)?.query, "the bare threshold never applies to an @")
+        assertNull(NickCompletion.activeMention("@a@b", caret = 4), "a second @ before the caret is still email-shaped")
     }
 
     // MARK: - Addressing suffix

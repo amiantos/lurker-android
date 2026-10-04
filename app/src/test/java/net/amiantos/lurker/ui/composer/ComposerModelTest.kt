@@ -39,13 +39,20 @@ class ComposerModelTest {
     fun `free text in a command falls through to a mention`() {
         assertEquals(Completion.Mention("al"), ComposerModel.completion("/me waves at @al", 16, 16))
         assertEquals(Completion.Mention(""), ComposerModel.completion("hey @", 5, 5))
+        assertEquals(Completion.Mention("al"), ComposerModel.completion("/me waves at al", 15, 15))
     }
 
     @Test
-    fun `a selection, an email and plain text complete nothing`() {
+    fun `a bare word of two letters is a mention without the at (#57)`() {
+        assertEquals(Completion.Mention("al"), ComposerModel.completion("hey al", 6, 6))
+        assertNull(ComposerModel.completion("hey a", 5, 5))
+    }
+
+    @Test
+    fun `a selection, an email and a finished word complete nothing`() {
         assertNull(ComposerModel.completion("/jo", 1, 3))
         assertNull(ComposerModel.completion("mail me@host", 12, 12))
-        assertNull(ComposerModel.completion("hello there", 11, 11))
+        assertNull(ComposerModel.completion("hello there ", 12, 12))
         // `//` is an escaped literal, not a command.
         assertNull(ComposerModel.completion("//jo", 4, 4))
     }
