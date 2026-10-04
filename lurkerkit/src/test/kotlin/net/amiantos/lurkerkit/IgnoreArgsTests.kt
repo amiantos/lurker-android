@@ -416,6 +416,18 @@ class IgnoreArgsTests {
         assertNotNull(parse("bob -pattern ${long.dropLast(1)}"))
     }
 
+    @Test
+    fun testPatternLengthIsCountedInUTF16UnitsLikeTheServer() {
+        // lurker-ios#198: the server's limit is JavaScript's `pattern.length`. A flag emoji is
+        // one Character and four units, so 129 of them pass a Character count and are refused
+        // by the server — in silence.
+        val flag = String(Character.toChars(0x1F1EB)) + String(Character.toChars(0x1F1F7))
+        val flags = flag.repeat(IgnoreArgs.maxPatternLength / 4 + 1)
+        assertEquals(true, error("bob -pattern $flags").contains("exceeds"))
+        // `dropLast()` of a Swift `String` drops one Character: here, the last flag's four units.
+        assertNotNull(parse("bob -pattern ${flags.dropLast(4)}"))
+    }
+
     // MARK: - The wire
 
     @Test
@@ -460,8 +472,8 @@ class IgnoreArgsTests {
 
     /**
      * The limit being mirrored is the server's `pattern.length`, which counts UTF-16 units.
-     * LurkerKit counts `Character`s, so 257 emoji pass there and are then dropped by the server
-     * in silence — the very thing the check exists to prevent.
+     * LurkerKit counted `Character`s until lurker-ios#198, so 257 emoji passed there and were
+     * then dropped by the server in silence — the very thing the check exists to prevent.
      */
     @Test
     fun testThePatternLimitCountsUtf16UnitsAsTheServerDoes() {

@@ -49,12 +49,12 @@ import net.amiantos.lurker.ui.feeds.FeedList
 import net.amiantos.lurker.ui.feeds.FeedListContent
 import net.amiantos.lurker.ui.feeds.FeedModel
 import net.amiantos.lurker.ui.feeds.FeedPageState
-import net.amiantos.lurker.ui.feeds.FeedPlaceholder
 import net.amiantos.lurker.ui.feeds.FeedSnapshot
 import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.FeedCursor
+import net.amiantos.lurkerkit.model.FeedPaging
 import net.amiantos.lurkerkit.model.HighlightItem
 import net.amiantos.lurkerkit.model.HighlightsPage
 import net.amiantos.lurkerkit.session.ChatViewModel
@@ -97,6 +97,7 @@ class SearchState(private val model: ChatViewModel, seed: String, private val sc
         supersedes = true,
         visible = { items -> FeedModel.visible(items, model.state.ignores) },
         fetch = ::fetch,
+        localFirstPage = ::localFirstPage,
     )
 
     override var closedNotice by mutableStateOf<String?>(null)
@@ -111,8 +112,10 @@ class SearchState(private val model: ChatViewModel, seed: String, private val sc
     /**
      * One page — of highlights while landing, of matches once there's a real query. Both arrive as a
      * `HighlightsPage` with a real `nextBefore` cursor, which is why the list never knows which it's
-     * showing. `TooShort` is answered here, locally, and never reaches the wire — as an empty page, not
-     * null: null means "we couldn't ask", which would put an error in front of someone mid-word.
+     * showing. `TooShort` never reaches the wire — that's the point of the state — and is answered by
+     * [localFirstPage] before this is asked. The case here is only for completeness: it has no cursor, so
+     * nothing pages it. Answering it with an empty page (rather than null) matters: null means "we
+     * couldn't ask", which would put an error in front of someone mid-word.
      */
     private suspend fun fetch(cursor: FeedCursor?): HighlightsPage? {
         val before = cursor?.beforeMessage
@@ -122,6 +125,13 @@ class SearchState(private val model: ChatViewModel, seed: String, private val sc
             SearchShowing.Results -> model.searchMessages(ledger.query, before)
         }
     }
+
+    /**
+     * `TooShort` is answered on the spot, so typing into or out of it never flashes "Searching…". The
+     * landing view is not: its highlights are a server read like any search.
+     */
+    private fun localFirstPage(): HighlightsPage? =
+        if (ledger.showing == SearchShowing.TooShort) HighlightsPage(items = emptyList(), nextBefore = null) else null
 
     /**
      * The field changed. Debounced ([SearchQueryLedger.DEBOUNCE_MS]); a cursor move or selection alone
@@ -166,11 +176,11 @@ class SearchState(private val model: ChatViewModel, seed: String, private val sc
         feed.reload(newQuestion = true)
     }
 
-    fun words(placeholder: FeedPlaceholder): StateModel =
+    fun words(placeholder: FeedPaging.Placeholder): StateModel =
         when (placeholder) {
-            FeedPlaceholder.Loading -> SearchWords.loading(showing)
-            FeedPlaceholder.Empty -> SearchWords.empty(showing, shownQuery)
-            FeedPlaceholder.Error -> SearchWords.error(showing)
+            FeedPaging.Placeholder.Loading -> SearchWords.loading(showing)
+            FeedPaging.Placeholder.Empty -> SearchWords.empty(showing, shownQuery)
+            FeedPaging.Placeholder.Error -> SearchWords.error(showing)
         }
 }
 
@@ -290,7 +300,7 @@ private fun SearchPreview(dark: Boolean, text: String, words: StateModel) {
         ) { modifier ->
             FeedListContent(
                 sections = emptyList(),
-                snapshot = FeedSnapshot(placeholder = FeedPlaceholder.Empty),
+                snapshot = FeedSnapshot(placeholder = FeedPaging.Placeholder.Empty),
                 words = { words },
                 onSelect = {},
                 onRefresh = {},

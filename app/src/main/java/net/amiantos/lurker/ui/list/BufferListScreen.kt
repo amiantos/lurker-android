@@ -191,10 +191,16 @@ fun BufferListScreen(
             // would fetch the same backlog a second time. Gated on the explicit Friends-row flag,
             // not a presence proxy: presence is styling every DM row carries, not a fact about where
             // the buffer came from.
+            //
+            // ⚠ And it goes there once that row is in, not at once (lurker-ios#201). `open-buffer` only
+            // queues the write; a conversation opened before the row lands finds a settled roster
+            // without it and backs straight out to this list. The kit's landing
+            // (`AppEvent.OpenBuffer`) is the navigation.
             if (row.isFriend && model.state.buffers[row.buffer.key.id] == null) {
-                model.openBuffer(row.buffer.key)
+                model.openAndShow(row.buffer.key)
+            } else {
+                onOpen(row.buffer)
             }
-            onOpen(row.buffer)
         },
         onClose = onClose,
         menuFor = { buffer -> BufferListModel.rowMenu(model.state, buffer) },

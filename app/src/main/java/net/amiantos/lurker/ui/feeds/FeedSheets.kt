@@ -22,6 +22,7 @@ import net.amiantos.lurker.ui.search.SearchPage
 import net.amiantos.lurker.ui.search.SearchState
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.FeedCursor
+import net.amiantos.lurkerkit.model.FeedPaging
 import net.amiantos.lurkerkit.model.HighlightItem
 import net.amiantos.lurkerkit.model.HighlightsPage
 import net.amiantos.lurkerkit.session.ChatViewModel
@@ -136,11 +137,11 @@ enum class HistoryFeed(val title: String, val loading: StateModel, val empty: St
     ),
     ;
 
-    fun words(placeholder: FeedPlaceholder): StateModel =
+    fun words(placeholder: FeedPaging.Placeholder): StateModel =
         when (placeholder) {
-            FeedPlaceholder.Loading -> loading
-            FeedPlaceholder.Empty -> empty
-            FeedPlaceholder.Error -> error
+            FeedPaging.Placeholder.Loading -> loading
+            FeedPaging.Placeholder.Empty -> empty
+            FeedPaging.Placeholder.Error -> error
         }
 }
 

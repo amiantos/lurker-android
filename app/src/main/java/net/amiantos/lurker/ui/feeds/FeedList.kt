@@ -72,6 +72,7 @@ import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.PageExit
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.theme.LurkerTheme
+import net.amiantos.lurkerkit.model.FeedPaging
 import net.amiantos.lurkerkit.model.HighlightItem
 import net.amiantos.lurkerkit.session.ChatViewModel
 import java.time.Instant
@@ -123,7 +124,7 @@ internal fun HistoryFeedPage(model: ChatViewModel, state: HistoryFeedState, onCl
 internal fun FeedList(
     model: ChatViewModel,
     state: FeedPageState,
-    words: (FeedPlaceholder) -> StateModel,
+    words: (FeedPaging.Placeholder) -> StateModel,
     onSelect: (HighlightItem) -> Unit,
     modifier: Modifier = Modifier,
     onRemove: ((HighlightItem) -> Boolean)? = null,
@@ -186,7 +187,7 @@ internal fun FeedList(
 internal fun FeedListContent(
     sections: List<FeedSection>,
     snapshot: FeedSnapshot,
-    words: (FeedPlaceholder) -> StateModel,
+    words: (FeedPaging.Placeholder) -> StateModel,
     onSelect: (HighlightItem) -> Unit,
     onRefresh: () -> Unit,
     onShown: (Int) -> Unit,
@@ -241,14 +242,14 @@ internal fun FeedListContent(
         // Loading, the fetch's failure, or an empty answer — said in place of rows. A pull shows its own
         // spinner, so the page's stays away while one is out.
         val placeholder = snapshot.placeholder
-        if (placeholder != null && !(placeholder == FeedPlaceholder.Loading && snapshot.refreshing)) {
+        if (placeholder != null && !(placeholder == FeedPaging.Placeholder.Loading && snapshot.refreshing)) {
             val said = words(placeholder)
             StateView(
                 said,
                 // "Pull to try again." — a pull TalkBack can't make, so offered as an action too, as an
                 // ordinary reload: this view goes to Loading and back, rather than hiding behind the
                 // pull's spinner (see `StateView`).
-                onRetry = if (placeholder == FeedPlaceholder.Error) onReload else null,
+                onRetry = if (placeholder == FeedPaging.Placeholder.Error) onReload else null,
                 announces = announcesStates,
             )
         }

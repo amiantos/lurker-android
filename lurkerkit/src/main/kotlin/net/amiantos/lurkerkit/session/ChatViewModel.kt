@@ -36,10 +36,9 @@ import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.CertificateExport
 import net.amiantos.lurkerkit.model.CertificateResult
 import net.amiantos.lurkerkit.model.CertificateSource
+import net.amiantos.lurkerkit.model.ChannelName
 import net.amiantos.lurkerkit.model.ComposerDraft
-import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.DccChat
-import net.amiantos.lurkerkit.model.DccOpens
 import net.amiantos.lurkerkit.model.DraftSync
 import net.amiantos.lurkerkit.model.Drafts
 import net.amiantos.lurkerkit.model.FavoriteEntry
@@ -58,6 +57,7 @@ import net.amiantos.lurkerkit.model.NetworkPresets
 import net.amiantos.lurkerkit.model.NetworkSaveResult
 import net.amiantos.lurkerkit.model.OutgoingModeChange
 import net.amiantos.lurkerkit.model.PendingJoins
+import net.amiantos.lurkerkit.model.PendingOpens
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.PreviewSelection
 import net.amiantos.lurkerkit.model.Reactions
@@ -217,16 +217,18 @@ class ChatViewModel(
     var onJoinNotice: ((notice: JoinNotice) -> Unit)? = null
 
     /**
-     * A DCC chat this device opened or accepted has a buffer to go to (lurker#270). The app
+     * A buffer this device opened has a row to go to: a DCC chat opened or accepted
+     * (lurker#270), or a DM from a profile, a Friends row or `/msg` (lurker-ios#201). The app
      * navigates, the same move as `onJoinOpened`. Fired with the stored row's key.
      */
-    var onDccChatOpened: ((key: BufferKey) -> Unit)? = null
+    var onBufferOpened: ((key: BufferKey) -> Unit)? = null
 
     /**
-     * The DCC chat we just opened, until its `=nick` row exists — see `DccOpens`. Giving up is
-     * quiet: the chat's notices say what happened, in a buffer the list will show.
+     * The buffer we just opened, until its row exists — see `PendingOpens`. Giving up is quiet.
+     * A DCC chat's notices say what happened, in a buffer the list will show; a DM's refused
+     * `open-buffer` comes back as the server's `error` frame, which already says so.
      */
-    private val dccOpens = DccOpens()
+    private val pendingOpens = PendingOpens()
 
     /** The joins waiting on an answer — see `PendingJoins`, where the rules live and can be tested. */
     private val pendingJoins = PendingJoins()
@@ -450,7 +452,7 @@ class ChatViewModel(
         // Joins too: a pending one names a channel the next account never asked for, and its timer
         // would otherwise toast "No response" over the sign-in screen (lurker-ios#57).
         pendingJoins.removeAll()
-        dccOpens.reset()
+        pendingOpens.cancel()
         loadingOlder.clear()
         loadingNewer.clear()
         lastMarked.clear()
@@ -532,9 +534,100 @@ class ChatViewModel(
      * Open a buffer for real: reopen, mint, or JOIN. Deliberate user intent only — this is a
      * write, and the user's other devices are told about it. Filling in a shell is
      * `hydrate(_:)`.
+     *
+     * Returns whether it was handed to a socket. That alone isn't "it went out" — a dropped socket
+     * isn't nulled — so a caller that tells the user asks `ChatState.canWrite` first.
      */
-    fun openBuffer(key: BufferKey) {
-        client.openBuffer(networkId = key.networkId, target = key.target, countBy = historyCountBy)
+    fun openBuffer(key: BufferKey): Boolean {
+        openBufferSeam?.let { return it(key) }
+        return client.openBuffer(networkId = key.networkId, target = key.target, countBy = historyCountBy)
+    }
+
+    /** Test seam: stands in for the socket `openBuffer` writes to, which no test has. */
+    internal var openBufferSeam: ((BufferKey) -> Boolean)? = null
+
+    /**
+     * Test seam: stands in for the socket a command's PRIVMSG goes out on (`/msg bob hi`), so a
+     * test can have a line that went — target and text in, whether it went out.
+     */
+    internal var sendMessageSeam: ((String, String) -> Boolean)? = null
+
+    /**
+     * Open a DM and go there once its row exists (lurker-ios#201): Send Message on a profile, a
+     * Friends row whose DM is closed. The app is taken there through `onBufferOpened` — at once if
+     * the row is already here, else as soon as the server's answer mints it, and not at all if that
+     * hasn't happened within `PendingOpen.patience`. If the `open-buffer` couldn't go out, nothing
+     * waits and `onJoinNotice` says so.
+     *
+     * ⚠⚠ Never `openBuffer` and then navigate. `open-buffer` only queues a write, and the row it
+     * mints comes back later on the socket. A chat screen that opens first finds no row while the
+     * roster is settled, which the screen's buffer-gone check (`handleBufferDisappeared` on iOS,
+     * the app's `BufferWatch` here) reads as "this buffer isn't coming" — and it backs out to the
+     * list. The DCC chat had the same race and the same cure (lurker#270), so the two share one
+     * wait: the buffer asked for last is the one to land on.
+     *
+     * ⚠ DMs only. The server's `open-buffer` mints a row only for a nick: for a channel it JOINs,
+     * and only a `#` one, so a wait on `&local` or an invite-only channel would never be met.
+     */
+    fun openAndShow(key: BufferKey) {
+        if (!openThenShow(key)) sayDmNotConnected(key)
+    }
+
+    /**
+     * The DM's `open-buffer` couldn't go out, so nothing waits: tell the user rather than leave
+     * them tapping a row that does nothing.
+     */
+    private fun sayDmNotConnected(key: BufferKey) {
+        val networkId = key.networkId ?: return
+        val network = store.state.networks[networkId]?.displayName ?: "the network"
+        onJoinNotice?.invoke(JoinNotice.DmNotConnected(nick = key.target, network = network))
+    }
+
+    /**
+     * `openAndShow`, for a caller that tells the user its own way when it fails — `/query` gives
+     * the line back to the composer. False when the `open-buffer` couldn't go out; nothing waits
+     * then.
+     */
+    private fun openThenShow(key: BufferKey): Boolean {
+        val now = Instant.now()
+        val plan = pendingOpens.plan(key, held = store.state.buffers[key.id] != null, now = now)
+        if (plan == PendingOpens.Plan.AlreadyWaiting) return true
+        // ⚠ Before the write, not after it worked. This is the newest ask to be taken somewhere,
+        // and one that fails is still newer: left standing, the older DM, DCC chat or join landed
+        // after the "can't message" toast and took the user somewhere they'd stopped asking for.
+        supersedeLandings()
+        // The rule `/join` uses, so a reconnect can't make the two disagree.
+        if (plan == PendingOpens.Plan.Write && !(store.state.canWrite(networkId = key.networkId) && openBuffer(key))) {
+            return false
+        }
+        pendingOpens.waitFor(key, now = now)
+        settlePendingOpen()
+        return true
+    }
+
+    /**
+     * Hand a buffer this device opened to the app once its row exists, or let go once it's clearly
+     * not coming. Run after every frame, and straight after a wait goes in, so a row that's
+     * already here is gone to without waiting for one.
+     */
+    private fun settlePendingOpen() {
+        val key = pendingOpens.settle(buffers = store.state.buffers, now = Instant.now()) ?: return
+        onBufferOpened?.invoke(key)
+    }
+
+    /**
+     * Nothing asked for so far may land: something newer has the user's attention. Called for
+     * every new ask to be taken somewhere — a DM, a DCC chat, a join that opens — and by the app
+     * whenever a buffer goes on screen, since landing later would pull the user off what they
+     * chose (lurker-ios#201). A landing calling it cancels nothing: its own wait has already ended.
+     *
+     * ⚠ Joins wait in `PendingJoins` and opens in `PendingOpens`, so "the latest ask wins" holds
+     * only if each kind stands the other down: `/join #slow` and then Send Message to bob landed
+     * on bob, then yanked the user to #slow when its join came back.
+     */
+    fun supersedeLandings() {
+        pendingOpens.cancel()
+        pendingJoins.stopOpening()
     }
 
     /**
@@ -883,9 +976,11 @@ class ChatViewModel(
     suspend fun deleteUpload(id: Int): String? = client.deleteUpload(id = id)
 
     /**
-     * What the UI should do after a line of input — almost always nothing, but `/msg` and
-     * `/query` ask the composer's owner to switch to the DM they opened. `/join` asks nothing
-     * of the screen: it goes through `requestJoin`, which opens the channel once we're in it.
+     * What the UI should do after a line of input — almost always nothing. `/msg` and `/query`
+     * to a channel ask the composer's owner to switch to it. To a nick they ask nothing of the
+     * screen: the DM opens once its row exists (`openAndShow`), which a screen switching at once
+     * would race (lurker-ios#201). `/join` goes through `requestJoin`, which opens the channel
+     * once we're in it.
      */
     sealed interface SendOutcome {
         data object None : SendOutcome
@@ -1115,7 +1210,7 @@ class ChatViewModel(
 
     /**
      * Carry out a command's effects in order against `key`'s buffer, returning the last UI
-     * follow-up (an `activate`, for `/msg`). Wire effects run on `key`'s network, `away`/
+     * follow-up (an `activate`, for `/msg` to a channel). Wire effects run on `key`'s network, `away`/
      * `back` too, which the server may widen to every network (lurker#994); `info` prints a
      * local line.
      */
@@ -1142,10 +1237,12 @@ class ChatViewModel(
         var wentNowhere = false
         for (effect in effects) {
             when (effect) {
-                is CommandEffect.Send ->
-                    wentNowhere = !client.sendMessage(
-                        networkId = networkId, target = effect.target, text = effect.text, clientId = correlator(),
-                    ) || wentNowhere
+                is CommandEffect.Send -> {
+                    val clientId = correlator()
+                    val went = sendMessageSeam?.invoke(effect.target, effect.text)
+                        ?: client.sendMessage(networkId = networkId, target = effect.target, text = effect.text, clientId = clientId)
+                    wentNowhere = !went || wentNowhere
+                }
                 is CommandEffect.Action ->
                     // A `/me` can be the reply — `reply` is null for every other command (see `send`).
                     wentNowhere = !client.sendAction(
@@ -1172,8 +1269,11 @@ class ChatViewModel(
                     }
                 is CommandEffect.Part ->
                     client.part(networkId = networkId, channel = effect.channel, reason = effect.reason)
-                is CommandEffect.Close ->
+                is CommandEffect.Close -> {
+                    // As `closeBuffer` does: a `/close` stands down a pending open for that buffer.
+                    pendingOpens.closing(BufferKey(networkId = networkId, target = effect.target))
                     client.closeBuffer(networkId = networkId, target = effect.target)
+                }
                 is CommandEffect.Clear ->
                     // Nothing is written locally, deliberately. The server picks the exact boundary
                     // id (the current tail) and fans a `buffer-cleared` back to every device
@@ -1190,13 +1290,39 @@ class ChatViewModel(
                         networkId = networkId, target = effect.target, issuingTarget = key.target,
                         ctcpType = effect.type, args = effect.args,
                     )
-                is CommandEffect.Activate -> {
-                    // Mint/hydrate the DM row so the buffer exists to switch to. A brand-new
-                    // /query target isn't in `state.buffers` yet, so the destination screen's own
-                    // hydrate wouldn't fire — this `open-buffer` is what brings the row (and its
-                    // backlog) into being.
-                    client.openBuffer(networkId = networkId, target = effect.target, countBy = historyCountBy)
-                    outcome = SendOutcome.Activate(BufferKey(networkId = networkId, target = effect.target))
+                is CommandEffect.Activate -> if (networkId != null) {
+                    val to = BufferKey(networkId = networkId, target = effect.target)
+                    if (wentNowhere) {
+                        // `/msg … hi`'s line went nowhere: it is coming back to this composer to be
+                        // sent again, and going anywhere would take the user away from it — a
+                        // channel as much as a nick.
+                    } else if (ChannelName.isChannelTarget(effect.target)) {
+                        // A channel: switch at once, as before lurker-ios#201. `open-buffer` JOINs
+                        // only a `#` channel and mints no row for the rest, so there is no row to
+                        // wait for.
+                        client.openBuffer(networkId = networkId, target = effect.target, countBy = historyCountBy)
+                        outcome = SendOutcome.Activate(to)
+                    } else {
+                        // A nick: mint/hydrate the DM row and switch to it once it's here. A
+                        // brand-new /query target isn't in `state.buffers` yet, so the destination
+                        // screen's own hydrate wouldn't fire — this `open-buffer` is what brings
+                        // the row (and its backlog) into being, and going there before it lands
+                        // bounces off a settled roster (lurker-ios#201). See `openAndShow`.
+                        //
+                        // An `open-buffer` that couldn't go out refuses a bare `/query`, as a send
+                        // that went nowhere does — it comes back to the composer. Minted here
+                        // because nothing else in a bare `/query` would have. Never `/msg bob hi`'s:
+                        // its line already went, and handing it back would have it sent twice — so
+                        // say why the screen stayed put instead, as Send Message does.
+                        if (!openThenShow(to)) {
+                            if (lineId == null) {
+                                correlator()
+                                wentNowhere = true
+                            } else {
+                                sayDmNotConnected(to)
+                            }
+                        }
+                    }
                 }
                 is CommandEffect.AddIgnore ->
                     // `scope`, not `networkId`: null is a global rule, which is the default and the
@@ -1330,18 +1456,21 @@ class ChatViewModel(
      * Offer a DCC chat to `nick`, or accept the one they offered (lurker#270). Null on success, a
      * message otherwise.
      *
-     * On success the app is taken to the chat's `=nick` buffer through `onDccChatOpened` — at
-     * once if the row exists, else as soon as the server mints it (see `DccOpens`).
+     * On success the app is taken to the chat's `=nick` buffer through `onBufferOpened` — at
+     * once if the row exists, else as soon as the server mints it (see `PendingOpens`).
      */
     suspend fun openDccChat(networkId: Int, nick: String, passive: Boolean = false): String? {
+        // The newest ask to be taken somewhere: what was waiting before it stands down
+        // (lurker-ios#201).
+        supersedeLandings()
         // Taken before the request goes out, so a later open, a close or a sign-out that lands
-        // while it's in flight can make its reply stale — see `DccOpens`.
-        val ticket = dccOpens.begin(networkId = networkId, nick = nick)
+        // while it's in flight can make its reply stale — see `PendingOpens`.
+        val ticket = pendingOpens.begin(DccChat.key(networkId = networkId, nick = nick))
         client.openDccChat(networkId = networkId, nick = nick, passive = passive)?.let { refusal ->
             return refusal
         }
-        dccOpens.opened(ticket, now = Instant.now())
-        settlePendingDccOpen()
+        pendingOpens.opened(ticket, now = Instant.now())
+        settlePendingOpen()
         return null
     }
 
@@ -1355,16 +1484,10 @@ class ChatViewModel(
      * ended nothing, so it puts the wait back.
      */
     suspend fun closeDccChat(networkId: Int, nick: String): String? {
-        val mark = dccOpens.closing(networkId = networkId, nick = nick)
+        val mark = pendingOpens.closing(DccChat.key(networkId = networkId, nick = nick))
         val refusal = client.closeDccChat(networkId = networkId, nick = nick)
-        if (refusal != null) dccOpens.closeRefused(mark)
+        if (refusal != null) pendingOpens.closeRefused(mark)
         return refusal
-    }
-
-    /** Hand a DCC chat's buffer to the app once it exists, or let go once it's clearly not coming. */
-    private fun settlePendingDccOpen() {
-        val key = dccOpens.settle(buffers = store.state.buffers, now = Instant.now()) ?: return
-        onDccChatOpened?.invoke(key)
     }
 
     /**
@@ -1667,15 +1790,17 @@ class ChatViewModel(
         // row outlives a socket drop, and opening it needs nothing sent.
         if (opens) {
             val row = store.state.buffers[first.id]
-            if (row != null && row.joined) onJoinOpened?.invoke(row.key)
+            if (row != null && row.joined) {
+                supersedeLandings()
+                onJoinOpened?.invoke(row.key)
+            }
         }
-        // ⚠ All three, not just the network's row. After a drop `connection` reads `.reconnecting`
-        // while the network row still says `.connected`, and the client keeps the closed socket
-        // until it reconnects — so a send there "succeeds" and nothing ever answers.
+        // ⚠ All three, not just the network's row — see `canWrite`.
         val network = store.state.networks[networkId]
-        val connected = store.state.reachable && store.state.connection == SocketStatus.Connected &&
-            network?.state == ConnectionState.Connected
-        if (!(connected && client.joinChannel(networkId = networkId, channel = name, key = joinKey))) {
+        // A join that will open is the newest ask to be taken somewhere (lurker-ios#201) — before
+        // it is sent, so one that can't be still stands the older ones down (see `openThenShow`).
+        if (opens && toJoin.contains(first)) supersedeLandings()
+        if (!(store.state.canWrite(networkId = networkId) && client.joinChannel(networkId = networkId, channel = name, key = joinKey))) {
             // Nothing to say when every channel was already open: that was `/join` for a channel
             // you're in, and it opened.
             if (toJoin.isNotEmpty()) {
@@ -1712,6 +1837,9 @@ class ChatViewModel(
 
     /** Close a buffer (part a channel / drop a DM) and remove its row immediately. */
     fun closeBuffer(key: BufferKey) {
+        // A close stands down a wait for the same buffer: a DM closed while its open is pending
+        // would otherwise be minted again by the late backlog and taken back into (lurker-ios#201).
+        pendingOpens.closing(key)
         client.closeBuffer(networkId = key.networkId, target = key.target)
         dropDraft(key)
         store.removeBuffer(key)
@@ -2303,7 +2431,7 @@ class ChatViewModel(
                 store.apply(frame)
         }
 
-        settlePendingDccOpen()
+        settlePendingOpen()
 
         // ⚠⚠ AFTER `store.apply`, never before. `primePreviews` reads the settings out of the
         // store to decide whether either feature is on — so running it first meant a
@@ -2454,7 +2582,7 @@ class ChatViewModel(
         // Joins too: a pending one names a channel the next account never asked for, and its timer
         // would otherwise toast "No response" over the sign-in screen (lurker-ios#57).
         pendingJoins.removeAll()
-        dccOpens.reset()
+        pendingOpens.cancel()
         loadingOlder.clear()
         loadingNewer.clear()
         lastMarked.clear()

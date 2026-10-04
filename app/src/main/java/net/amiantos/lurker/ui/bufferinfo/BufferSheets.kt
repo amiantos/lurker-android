@@ -289,16 +289,15 @@ internal class BufferFlow(private val model: ChatViewModel, request: BufferSheet
 /**
  * Draws whichever buffer dialog [sheets] has open.
  *
- * @param onOpenBuffer go to a conversation — a profile's Send Message. The dialog has closed by the
- *   time this runs, as iOS dismisses before navigating: a screen arriving under a dialog still on its
- *   way out is an animation fighting itself. ⚠ The DM may not be listed yet — `open-buffer` is only a
- *   request — so the caller must wait for its row before navigating (`MainScaffold.openWhenListed`),
- *   or the conversation reads the missing row as a close and bounces back to the list.
+ * A profile's Send Message goes nowhere from here: the kit lands on the DM once its row is in
+ * (`ChatViewModel.openAndShow`, lurker-ios#201), and the landing (`AppEvent.OpenBuffer`) closes this
+ * dialog before it navigates, as a join from a whois channel row does.
+ *
  * @param onSearch open search seeded with a buffer's scope — the info page's "Search This
  *   Conversation" (U7). Closed first too, as iOS dismisses the sheet before presenting search.
  */
 @Composable
-fun BufferSheetsHost(sheets: BufferSheets, model: ChatViewModel, onOpenBuffer: (BufferKey) -> Unit, onSearch: (String) -> Unit = {}) {
+fun BufferSheetsHost(sheets: BufferSheets, model: ChatViewModel, onSearch: (String) -> Unit = {}) {
     val request = sheets.current ?: return
     val context = LocalContext.current
     val moments = remember(context) { MomentText(context) }
@@ -312,10 +311,6 @@ fun BufferSheetsHost(sheets: BufferSheets, model: ChatViewModel, onOpenBuffer: (
         flow = flow,
         moments = moments,
         onDismiss = sheets::dismiss,
-        onOpenBuffer = { key ->
-            sheets.dismiss()
-            onOpenBuffer(key)
-        },
         onSearch = { scope ->
             sheets.dismiss()
             onSearch(scope)
@@ -330,7 +325,6 @@ private fun BufferDialog(
     flow: BufferFlow,
     moments: MomentText,
     onDismiss: () -> Unit,
-    onOpenBuffer: (BufferKey) -> Unit,
     onSearch: (String) -> Unit,
 ) {
     // An empty stack — a profile request with no network, which nothing sends — has nothing to draw.
@@ -379,12 +373,13 @@ private fun BufferDialog(
                     onExit = onExit,
                     onEditNote = { flow.pushNickNote(state.networkId, state.nick) },
                     onSendMessage = {
-                        // Mint or reopen the DM row first — the server refuses to activate a buffer
-                        // that doesn't exist, and the same socket delivers the row before we ask to
-                        // show it. ⚠ A WRITE (the DM appears on every device).
-                        val dm = BufferKey(networkId = state.networkId, target = state.nick)
-                        model.openBuffer(dm)
-                        onOpenBuffer(dm)
+                        // Mint or reopen the DM row, and go there once it's in the store — the way a
+                        // channel row below goes once we're in it. ⚠ Not at once: `open-buffer` only
+                        // queues a write, and a conversation that beat the row there found a settled
+                        // roster without it and backed straight out to the list (lurker-ios#201).
+                        // Going takes this dialog down first (`AppEvent.OpenBuffer`). ⚠ A WRITE when
+                        // the row isn't held (the DM appears on every device).
+                        model.openAndShow(BufferKey(networkId = state.networkId, target = state.nick))
                     },
                     onJoinChannel = { channel -> model.requestJoin(networkId = state.networkId, channel = channel, opens = true) },
                 )

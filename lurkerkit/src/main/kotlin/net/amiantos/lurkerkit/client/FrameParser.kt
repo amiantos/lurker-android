@@ -57,6 +57,8 @@ import net.amiantos.lurkerkit.model.UploadsPage
 import net.amiantos.lurkerkit.model.WhoisResult
 import net.amiantos.lurkerkit.support.graphemeBoundaries
 import net.amiantos.lurkerkit.support.swiftInt
+import net.amiantos.lurkerkit.support.utf8OrNull
+import okio.ByteString
 import java.time.Instant
 
 /**
@@ -575,12 +577,14 @@ internal object FrameParser {
      * Foundation answer there taken from the real Swift over the same text:
      *
      * - ⚠ A lone surrogate written as an escape (`"\ud83d"`, which is what `JSON.stringify`
-     *   writes for half an emoji left by a `slice`): Foundation fails the whole document, so on
-     *   iOS the frame is dropped. Here the string keeps the lone unit and the frame is read.
-     * - ⚠ Foundation drops one leading U+FEFF from every string it decodes, so on iOS a message
-     *   that begins with one arrives without it. Here it is kept, as the web and the server's
-     *   database keep it. That is the decoder's artefact, not LurkerKit's rule — nothing in
-     *   LurkerKit could fix it and send the fix here with a pin — so it is not reproduced.
+     *   writes for half an emoji left by a `slice`): Foundation fails the whole document, so
+     *   LurkerKit's `JSONTextRepair` rewrites the escape to `\ufffd` first (lurker-ios#195), and
+     *   on iOS the frame is read with a U+FFFD in place of the half. Here the frame is read and
+     *   the string keeps the lone unit the server sent.
+     * - Foundation drops one leading U+FEFF from every string it decodes, so `JSONTextRepair`
+     *   writes a second one for it to eat (lurker-ios#196). kotlinx keeps it, so here, as on iOS,
+     *   the web and the server's database, a message that begins with one keeps it.
+     *   `JSONTextRepair` is a workaround for Foundation's decoder alone, so it is not ported.
      * - A byte-order mark before the document: Foundation steps over one; kotlinx fails it.
      * - A trailing comma (`[1,]`): Foundation reads past it; kotlinx fails the document.
      * - A repeated key: Foundation keeps the first value, kotlinx the last.
@@ -942,6 +946,16 @@ internal object FrameParser {
      * the JSON decoder stays behind the one type that knows the wire format.
      */
     fun jsonObject(text: String): JsonObject? = `object`(text)
+
+    /**
+     * `jsonObject(text)` for a body that arrives as bytes.
+     *
+     * Port note: LurkerKit routes these bytes through `JSONTextRepair` first, a workaround for
+     * `JSONSerialization` (a lone surrogate escape, a leading U+FEFF); kotlinx needs neither,
+     * so they are read as they came (see `object`). A body that is not UTF-8 is no object here;
+     * `JSONSerialization` would also try UTF-16 and UTF-32.
+     */
+    fun jsonObject(data: ByteString): JsonObject? = data.utf8OrNull()?.let { `object`(it) }
 
     /**
      * The `error` string from a REST failure body (`{error, key}`), when there is one. Lives

@@ -872,10 +872,12 @@ internal class LurkerClient(
      * made merely *opening a screen* reopen a buffer on every device the user owns, and,
      * because the server's paused-account gate correctly classes writes as writes, made a
      * paused account unable to read its own history at all.
+     *
+     * Returns whether it was handed to a socket — see `send`.
      */
-    fun openBuffer(networkId: Int?, target: String, countBy: HistoryCountBy) {
-        if (networkId == null) return
-        send(
+    fun openBuffer(networkId: Int?, target: String, countBy: HistoryCountBy): Boolean {
+        if (networkId == null) return false
+        return send(
             buildJsonObject {
                 put("type", "open-buffer")
                 put("networkId", networkId)
@@ -1697,7 +1699,7 @@ internal class LurkerClient(
             return null
         }
         if (code !in 200..<300) return null
-        val body = json(data) ?: return null
+        val body = FrameParser.jsonObject(data) ?: return null
         return body.strings("transports") ?: emptyList()
     }
 
@@ -2371,12 +2373,12 @@ internal class LurkerClient(
                 }
                 if (code == 413) throw UploadError.TooLarge
                 if (code !in 200..<300) {
-                    val message = json(data)?.get("error").asString()
+                    val message = FrameParser.jsonObject(data)?.get("error").asString()
                     throw UploadError.Server(message ?: "Upload failed (HTTP $code)")
                 }
 
                 val unreadable = UploadError.Server("The server accepted the upload but its reply was unreadable.")
-                val obj = json(data) ?: throw unreadable
+                val obj = FrameParser.jsonObject(data) ?: throw unreadable
                 val id = obj.intOrNull("id") ?: throw unreadable
                 val storedURL = obj["url"].asString() ?: throw unreadable
                 return UploadResponse(
@@ -2695,7 +2697,7 @@ internal class LurkerClient(
          */
         fun parseConfig(data: ByteString, code: Int): InstanceConfig? {
             if (code !in 200..<300) return null
-            val body = json(data) ?: return null
+            val body = FrameParser.jsonObject(data) ?: return null
             val features = body["features"] as? JsonObject
             return InstanceConfig(
                 features = InstanceFeatures(linkPreviews = features?.bool("linkPreviews") == true),
@@ -2730,10 +2732,13 @@ internal class LurkerClient(
          * so.
          *
          * Port note: the envelope is read by `FrameParser`, which bounds its nesting, and each
-         * element by `Json.decodeEach` (LurkerKit's `FailableDecodable`).
+         * element by `Json.decodeEach` (LurkerKit's `FailableDecodable`). LurkerKit repairs the
+         * bytes first, because `JSONDecoder` refuses the whole document for a description the
+         * server capped mid-emoji (a lone surrogate escape); kotlinx reads one, so nothing is
+         * repaired here and the lone half stays in the description (PORTING.md, JSON).
          */
         fun decodePreviews(data: ByteString): List<LinkPreview> {
-            val envelope = json(data) ?: return emptyList()
+            val envelope = FrameParser.jsonObject(data) ?: return emptyList()
             val previews = envelope["previews"] as? JsonArray ?: return emptyList()
             return previewJson.decodeEach(LinkPreview.serializer(), previews)
         }
@@ -2837,12 +2842,6 @@ internal class LurkerClient(
          */
         private fun jsonBody(body: JsonObject, mediaType: String = "application/json"): RequestBody =
             Json.encodeToString(JsonObject.serializer(), body).encodeToByteArray().toRequestBody(mediaType.toMediaType())
-
-        /**
-         * A body read as a JSON object, as `JSONSerialization` reads one: through `FrameParser`
-         * (PORTING.md, JSON), and from UTF-8 only.
-         */
-        private fun json(data: ByteString): JsonObject? = data.utf8OrNull()?.let { FrameParser.jsonObject(it) }
     }
 }
 

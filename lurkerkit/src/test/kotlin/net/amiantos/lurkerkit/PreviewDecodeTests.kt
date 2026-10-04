@@ -345,4 +345,31 @@ class PreviewDecodeTests {
         signOutMidFlight = true
         assertNull(client.fetchConfig())
     }
+
+    // Port-only: LurkerKit's `loneSurrogateDoesNotDiscardTheBatch` over the same document.
+
+    /**
+     * a description capped mid-emoji costs nothing: the batch survives on both sides, and the
+     * description ends in U+FFFD on iOS (`JSONTextRepair`) and in the lone high half the server
+     * sent here
+     */
+    @Test
+    fun loneSurrogateDoesNotDiscardTheBatchAndKeepsTheLoneHalf() {
+        // A JSON escape, as six characters of JSON text.
+        val loneHigh = "\\" + "u" + "d83d"
+        val got = decodeShipped(
+            """
+            {"previews":[
+              {"url":"https://e.test/a","status":"ok","kind":"page","description":"fun $loneHigh"},
+              {"url":"https://e.test/b","status":"ok","kind":"page"}
+            ]}
+            """,
+        )
+        assertEquals(listOf("https://e.test/a", "https://e.test/b"), got.map { it.url })
+        assertEquals("fun ${0xD83D.toChar()}", got.firstOrNull()?.description)
+    }
+
+    // Not ported: loneSurrogateDoesNotDiscardTheBatch — it pins `JSONTextRepair`'s output (the
+    // lone half read as U+FFFD), a workaround for `JSONDecoder` that kotlinx does not need;
+    // `loneSurrogateDoesNotDiscardTheBatchAndKeepsTheLoneHalf` pins what is read here instead.
 }
