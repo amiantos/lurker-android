@@ -485,9 +485,14 @@ object CommandRegistry {
             listOf("whois"), CommandCategory.Channels, "Look up a user",
             args = listOf(ArgSpec("nick", ArgKind.Nick, optional = true)),
         ),
+        // Channel-first too, as /kick takes it. Completion follows the first form: nothing in a
+        // form can say "this token is a channel", so the second is for `/commands` to show.
         CommandSpec(
             listOf("invite"), CommandCategory.Channels, "Invite a user to a channel",
-            args = listOf(ArgSpec("nick", ArgKind.Nick), ArgSpec("channel", ArgKind.Channel, optional = true)),
+            forms = listOf(
+                listOf(ArgSpec("nick", ArgKind.Nick), ArgSpec("channel", ArgKind.Channel, optional = true)),
+                listOf(ArgSpec("channel", ArgKind.Channel), ArgSpec("nick", ArgKind.Nick)),
+            ),
         ),
 
         // Moderation

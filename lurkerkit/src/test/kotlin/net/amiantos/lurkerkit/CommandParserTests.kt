@@ -1120,9 +1120,16 @@ class CommandParserTests {
     }
 
     @Test
-    fun testInviteIgnoresASecondWordThatIsNotAChannel() {
-        assertEquals(raws("INVITE bob #chan"), effects("/invite bob notachan"))
-        assertTrue(isInfo(effects("/invite bob notachan", target = "alice")))
+    fun testInviteRefusesASecondWordThatIsNotAChannel() {
+        // `/invite bob rust` meant #rust: inviting bob to the current channel instead is worse
+        // than saying so. (The web falls back to the current channel here.)
+        assertEquals(
+            listOf<CommandEffect>(
+                CommandEffect.Info("/invite: \"rust\" isn't a channel — usage: /invite <nick> [#channel]")
+            ),
+            effects("/invite bob rust"),
+        )
+        assertTrue(isInfo(effects("/invite bob rust", target = "alice")))
     }
 
     @Test
@@ -1154,6 +1161,34 @@ class CommandParserTests {
         val open = { name: String -> name == "+local" }
         assertEquals(raws("MODE +local +m"), context("/mode +local +m", hasBuffer = open))
         assertEquals(raws("MODE #chan +m"), context("/mode +m", hasBuffer = open))
+    }
+
+    @Test
+    fun testModeShortcutsSplitAtTheByteBudgetBeforeModes() {
+        // Long masks reach the web's 400-byte budget before a generous MODES does.
+        val masks = (1..8).map { "*!*@" + "h".repeat(60) + "$it.example" }
+        val lines = context("/ban " + masks.joinToString(" "), modeSpec = spec(maxModes = 20))
+        assertTrue(lines.size > 1)
+        val sent = mutableListOf<String>()
+        for (effect in lines) {
+            if (effect !is CommandEffect.Raw) fail("expected raw lines")
+            assertTrue(effect.line.toByteArray(Charsets.UTF_8).size <= 400)
+            val words = effect.line.split(" ")
+            assertEquals(words.size - 3, words[2].length - 1, "one letter per mask")
+            sent += words.drop(3)
+        }
+        assertEquals(masks, sent)
+    }
+
+    @Test
+    fun testAppCommandsAnswerInTheSystemBufferToo() {
+        // Nothing about these is per-network, so "needs an active network" would send someone to
+        // a channel only to be told the same thing there.
+        for (line in listOf("/set foo", "/get foo", "/theme dark", "/hilight word", "/network add", "/net", "/server x")) {
+            val answer = effects(line, networkId = null, target = ":system:")
+            val info = answer.singleOrNull() as? CommandEffect.Info ?: fail("$line should be answered")
+            assertFalse(info.text.contains("needs an active network"), line)
+        }
     }
 
     @Test
@@ -1197,8 +1232,11 @@ class CommandParserTests {
     fun testReactRefusesAnEmojiNameItCannotResolve() {
         assertTrue(isInfo(effects("/react :tada:")))
         assertTrue(isInfo(effects("/react :+1:")))
+        // The web resolves the unclosed form too.
+        assertTrue(isInfo(effects("/react :tada")))
         // Emoticons and the emoji itself still go out.
         assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":D")), effects("/react :D"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":P")), effects("/react :P"))
         assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":-)")), effects("/react :-)"))
         assertEquals(listOf<CommandEffect>(CommandEffect.React(value = "🎉")), effects("/react 🎉"))
     }
