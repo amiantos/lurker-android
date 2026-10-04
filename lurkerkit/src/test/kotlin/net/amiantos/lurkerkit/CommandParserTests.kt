@@ -9,6 +9,8 @@ import net.amiantos.lurkerkit.commands.CommandRegistry
 import net.amiantos.lurkerkit.commands.ParsedInput
 import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.model.IgnoreSet
+import net.amiantos.lurkerkit.model.ModeSpec
+import net.amiantos.lurkerkit.model.PrefixMode
 import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -39,6 +41,36 @@ class CommandParserTests {
         if (parsed !is ParsedInput.Command) fail("expected a command from $input")
         return parsed.effects
     }
+
+    /**
+     * The effects of a command typed in #chan on network 1, with the context the call site
+     * supplies: the network's mode vocabulary and which buffers it has open.
+     */
+    private fun context(
+        input: String,
+        target: String = "#chan",
+        modeSpec: ModeSpec? = null,
+        hasBuffer: (String) -> Boolean = { false },
+    ): List<CommandEffect> {
+        val parsed = CommandParser.parse(
+            input, networkId = 1, target = target, modeSpec = modeSpec, hasBuffer = hasBuffer, formatted = formatted,
+        )
+        if (parsed !is ParsedInput.Command) fail("expected a command from $input")
+        return parsed.effects
+    }
+
+    /** A network's vocabulary with the given list modes and MODES limit. */
+    private fun spec(list: String = "beI", maxModes: Int? = 3): ModeSpec =
+        ModeSpec(
+            list = list, always = "k", onSet = "l", flags = "imnst",
+            prefix = listOf(PrefixMode(mode = "o", symbol = "@"), PrefixMode(mode = "v", symbol = "+")),
+            maxModes = maxModes, topicLen = null,
+        )
+
+    private fun isInfo(effects: List<CommandEffect>): Boolean =
+        effects.size == 1 && effects[0] is CommandEffect.Info
+
+    private fun raws(vararg lines: String): List<CommandEffect> = lines.map { CommandEffect.Raw(line = it) }
 
     // MARK: - Plain text vs commands
 
@@ -311,11 +343,17 @@ class CommandParserTests {
         // `&` is a valid channel sigil (BufferKind.of), so it must be honored as an explicit
         // channel argument, not folded into a nick/reason/topic.
         assertEquals(listOf<CommandEffect>(CommandEffect.Raw(line = "KICK &local bob")), effects("/kick &local bob"))
-        assertEquals(listOf<CommandEffect>(CommandEffect.Raw(line = "TOPIC &local :hi")), effects("/topic &local hi"))
         assertEquals(listOf<CommandEffect>(CommandEffect.Raw(line = "MODE &local +o alice")), effects("/op &local alice"))
+        // `/topic` and `/part` take free text first, so there `&local` is a channel only while
+        // it's open (see the sigil tests below).
+        val open = { name: String -> name == "&local" }
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Raw(line = "TOPIC &local :hi")),
+            context("/topic &local hi", hasBuffer = open),
+        )
         assertEquals(
             listOf<CommandEffect>(CommandEffect.Part(channel = "&local", reason = "bye")),
-            effects("/part &local bye"),
+            context("/part &local bye", hasBuffer = open),
         )
     }
 
@@ -1033,5 +1071,135 @@ class CommandParserTests {
             listOf<CommandEffect>(CommandEffect.Away(message = "\u0301x", all = true)),
             effects("/away -all \u0301x"),
         )
+    }
+
+    // MARK: - Client sweep: the web's guards (L01, L03, L04, L18, L19, L34)
+
+    @Test
+    fun testQuietIsRefusedWhereQIsNotAListMode() {
+        // InspIRCd and Unreal: +q is the owner rank, so /quiet would make the target an owner.
+        val inspircd = spec(list = "beI")
+        val refusal = listOf<CommandEffect>(CommandEffect.Info("this network has no +q quiet list"))
+        assertEquals(refusal, context("/quiet troll", modeSpec = inspircd))
+        assertEquals(refusal, context("/unquiet troll", modeSpec = inspircd))
+    }
+
+    @Test
+    fun testQuietGoesThroughOnAQuietListOrAnUnknownSpec() {
+        assertEquals(raws("MODE #chan +q troll"), context("/quiet troll", modeSpec = spec(list = "eIbq")))
+        assertEquals(raws("MODE #chan -q troll"), context("/unquiet troll", modeSpec = spec(list = "eIbq")))
+        // Before the burst ends there's nothing to check against, as on the web.
+        assertEquals(raws("MODE #chan +q troll"), context("/quiet troll"))
+    }
+
+    @Test
+    fun testModeShortcutsSplitAtTheNetworksModesLimit() {
+        assertEquals(
+            raws("MODE #chan +ooo a b c", "MODE #chan +oo d e"),
+            context("/op a b c d e", modeSpec = spec(maxModes = 3)),
+        )
+        assertEquals(
+            raws("MODE #other -vvvv a b c d", "MODE #other -v e"),
+            context("/devoice #other a b c d e", modeSpec = spec(maxModes = 4)),
+        )
+    }
+
+    @Test
+    fun testModeShortcutsDefaultToThreeAndHonourNoLimit() {
+        // Unknown vocabulary: the web's DEFAULT_MAX_MODES.
+        assertEquals(raws("MODE #chan +bbb a b c", "MODE #chan +b d"), context("/ban a b c d"))
+        // A known spec without MODES is no limit.
+        assertEquals(raws("MODE #chan +ooooo a b c d e"), context("/op a b c d e", modeSpec = spec(maxModes = null)))
+    }
+
+    @Test
+    fun testInviteTakesTheChannelFirstAsKickDoes() {
+        assertEquals(raws("INVITE bob #other"), effects("/invite #other bob"))
+        assertEquals(raws("INVITE bob &local"), effects("/invite &local bob", target = "alice"))
+        assertTrue(isInfo(effects("/invite #other")))
+    }
+
+    @Test
+    fun testInviteIgnoresASecondWordThatIsNotAChannel() {
+        assertEquals(raws("INVITE bob #chan"), effects("/invite bob notachan"))
+        assertTrue(isInfo(effects("/invite bob notachan", target = "alice")))
+    }
+
+    @Test
+    fun testPartAndTopicReadAPunctuatedFirstWordAsText() {
+        assertEquals(listOf<CommandEffect>(CommandEffect.Part(channel = "#chan", reason = "+brb")), effects("/part +brb"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.Part(channel = "#chan", reason = "!gone")), effects("/p !gone"))
+        assertEquals(raws("TOPIC #chan :!!! maintenance !!!"), effects("/topic !!! maintenance !!!"))
+        assertEquals(raws("TOPIC #chan :&more to come"), effects("/topic &more to come"))
+    }
+
+    @Test
+    fun testPartAndTopicTakeAPunctuatedChannelThatIsOpen() {
+        val open = { name: String -> name == "+local" || name == "!ABCDEsafe" }
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Part(channel = "+local", reason = "bye")),
+            context("/part +local bye", hasBuffer = open),
+        )
+        assertEquals(raws("TOPIC !ABCDEsafe :hi"), context("/topic !ABCDEsafe hi", hasBuffer = open))
+        // `#` needs no buffer: a sentence effectively never starts with one.
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Part(channel = "#elsewhere", reason = null)),
+            effects("/part #elsewhere"),
+        )
+    }
+
+    @Test
+    fun testModeAimsAtAnOpenPlusChannelRatherThanReadingItAsFlags() {
+        // lurker#724: `+local` is both a flag string and a channel name.
+        val open = { name: String -> name == "+local" }
+        assertEquals(raws("MODE +local +m"), context("/mode +local +m", hasBuffer = open))
+        assertEquals(raws("MODE #chan +m"), context("/mode +m", hasBuffer = open))
+    }
+
+    @Test
+    fun testJoinAndPartShortAliases() {
+        assertEquals(listOf<CommandEffect>(CommandEffect.Join(channel = "#rust", key = null)), effects("/j #rust"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.Part(channel = "#chan", reason = "see ya")), effects("/p see ya"))
+        assertEquals("join", CommandRegistry.spec("j")?.name)
+        assertEquals("part", CommandRegistry.spec("p")?.name)
+    }
+
+    @Test
+    fun testShrugSaysTheKaomojiAfterAnyText() {
+        assertEquals(listOf<CommandEffect>(CommandEffect.Send(target = "#chan", text = "¯\\_(ツ)_/¯")), effects("/shrug"))
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Send(target = "bob", text = "no idea ¯\\_(ツ)_/¯")),
+            effects("/shrug no idea", target = "bob"),
+        )
+        assertTrue(isInfo(effects("/shrug", target = ":server:")))
+    }
+
+    @Test
+    fun testKickbanBansThenKicks() {
+        assertEquals(raws("MODE #chan +b troll", "KICK #chan troll :spam"), effects("/kickban troll spam"))
+        assertEquals(raws("MODE #other +b troll", "KICK #other troll"), effects("/kickban #other troll", target = "alice"))
+        assertTrue(isInfo(effects("/kickban troll", target = "alice")))
+        assertTrue(isInfo(effects("/kickban")))
+    }
+
+    @Test
+    fun testWebOnlyCommandsAreAnsweredRatherThanSentRaw() {
+        for (line in listOf(
+            "/list", "/list rust", "/set foo", "/get foo", "/theme dark", "/hilight word",
+            "/dehilight word", "/highlight", "/unhighlight x", "/retention 30d", "/jitsi",
+            "/talk", "/e2e on", "/network add", "/net list",
+        )) {
+            assertTrue(isInfo(effects(line)), "$line should be intercepted")
+        }
+    }
+
+    @Test
+    fun testReactRefusesAnEmojiNameItCannotResolve() {
+        assertTrue(isInfo(effects("/react :tada:")))
+        assertTrue(isInfo(effects("/react :+1:")))
+        // Emoticons and the emoji itself still go out.
+        assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":D")), effects("/react :D"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":-)")), effects("/react :-)"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.React(value = "🎉")), effects("/react 🎉"))
     }
 }

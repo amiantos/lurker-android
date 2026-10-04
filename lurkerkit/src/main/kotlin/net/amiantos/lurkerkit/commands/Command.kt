@@ -422,6 +422,10 @@ object CommandRegistry {
             args = listOf(ArgSpec("nick", ArgKind.Nick)),
         ),
         CommandSpec(
+            listOf("shrug"), CommandCategory.Messaging, "Say ¯\\_(ツ)_/¯, after your own text if any",
+            args = listOf(ArgSpec("text", ArgKind.Text, optional = true, rest = true)),
+        ),
+        CommandSpec(
             listOf("ctcp"), CommandCategory.Messaging, "Send a CTCP request",
             args = listOf(
                 ArgSpec("target", ArgKind.Nick), ArgSpec("type", ArgKind.Word),
@@ -447,11 +451,11 @@ object CommandRegistry {
 
         // Channels
         CommandSpec(
-            listOf("join"), CommandCategory.Channels, "Join a channel",
+            listOf("join", "j"), CommandCategory.Channels, "Join a channel",
             args = listOf(ArgSpec("channel", ArgKind.Channel), ArgSpec("key", ArgKind.Word, optional = true)),
         ),
         CommandSpec(
-            listOf("part", "leave"), CommandCategory.Channels, "Leave a channel (keeps the buffer)",
+            listOf("part", "leave", "p"), CommandCategory.Channels, "Leave a channel (keeps the buffer)",
             args = listOf(
                 ArgSpec("channel", ArgKind.Channel, optional = true),
                 ArgSpec("reason", ArgKind.Text, optional = true, rest = true),
@@ -489,6 +493,10 @@ object CommandRegistry {
         // Moderation
         CommandSpec(
             listOf("kick"), CommandCategory.Moderation, "Kick a user from this channel",
+            args = listOf(ArgSpec("nick", ArgKind.Nick), ArgSpec("reason", ArgKind.Text, optional = true, rest = true)),
+        ),
+        CommandSpec(
+            listOf("kickban"), CommandCategory.Moderation, "Ban a user from this channel, then kick them",
             args = listOf(ArgSpec("nick", ArgKind.Nick), ArgSpec("reason", ArgKind.Text, optional = true, rest = true)),
         ),
         CommandSpec(
