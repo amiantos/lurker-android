@@ -44,7 +44,11 @@ object NickCompletion {
      *
      * A member's userhost is reconstructed from the member row when the server sent both
      * halves; a speaker carries only a nick, so a hostmask-only rule can't suppress a speaker
-     * who has left (matching the web, which has the same information at the same point).
+     * who isn't a member: one who has left a channel, or a DM's peer, since a DM has no
+     * member list. The web has the same information at the same point and the same gap.
+     * Closing it would mean rescanning the loaded history on every keystroke, which is the
+     * cost `speakers` exists to avoid, all to hide a pill naming the one person whose DM is
+     * already open.
      *
      * Port note: nicks and the query fold with `lowercase()` and the prefix test is
      * `startsWith`, where LurkerKit folds with `lowercased()` and tests with `hasPrefix`. On
