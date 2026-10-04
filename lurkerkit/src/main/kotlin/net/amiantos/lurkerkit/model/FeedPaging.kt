@@ -253,23 +253,19 @@ class FeedPaging(
      * list the user just cleared.
      *
      * Pages in only when the removal leaves `prefetchWindow` rows or fewer — the point at which a
-     * scroll would have asked anyway, so pass the screen's own prefetch threshold. And a removal
-     * spends no skip-ahead hop: a swipe is not a page an ignore rule emptied. Settling it like
-     * one fetched a page on every bookmark removed from a long list, and ten swipes spent the
-     * whole budget, so a later page an ignore rule emptied stopped the feed dead on a live cursor.
+     * scroll would have asked anyway. And a removal spends no skip-ahead hop: a swipe is not a
+     * page an ignore rule emptied. Settling it like one fetched a page on every bookmark removed
+     * from a long list, and ten swipes spent the whole budget, so a later page an ignore rule
+     * emptied stopped the feed dead on a live cursor.
      */
-    fun remove(messageId: Long, prefetchWindow: Int): Landing? {
+    fun remove(messageId: Long): Landing? {
         val index = items.indexOfFirst { it.message.id == messageId }
         if (index < 0) return null
         items = items.filterIndexed { i, _ -> i != index }
         if (items.isEmpty()) loadFailed = false
-        // `loadMore` declines while a page is already in flight; that page settles the list.
         if (items.size <= prefetchWindow) {
-            val next = loadMore()
-            if (next != null) {
-                if (items.isEmpty()) placeholder = Placeholder.Loading
-                return Landing(rowsChanged = true, next = next)
-            }
+            val next = pageIn()
+            if (next != null) return Landing(rowsChanged = true, next = next)
         }
         settlePlaceholder()
         return Landing(rowsChanged = true, next = null)
@@ -290,17 +286,26 @@ class FeedPaging(
         // already in flight — `remove` can get here mid-load — and that page will settle the list
         // itself when it lands.
         if (stalled && fruitlessHops < maxFruitlessHops) {
-            val hop = loadMore()
+            val hop = pageIn()
             if (hop != null) {
                 fruitlessHops += 1
-                // Only claim to be loading when there's nothing to look at. Topping up beneath a
-                // list the user is already reading should be silent.
-                if (items.isEmpty()) placeholder = Placeholder.Loading
                 return hop
             }
         }
         settlePlaceholder()
         return null
+    }
+
+    /**
+     * Ask for the next page beneath the rows, if one can be asked for. `loadMore` declines while a
+     * page is already in flight; that page settles the list when it lands.
+     */
+    private fun pageIn(): Fetch? {
+        val fetch = loadMore() ?: return null
+        // Only claim to be loading when there's nothing to look at. Topping up beneath a list the
+        // user is already reading should be silent.
+        if (items.isEmpty()) placeholder = Placeholder.Loading
+        return fetch
     }
 
     /**
@@ -317,5 +322,13 @@ class FeedPaging(
 
     companion object {
         internal const val maxFruitlessHops = 10
+
+        /**
+         * How near the end of the rows a screen asks for the next page: a row drawn within this
+         * many of the last one pages in. Here rather than in each screen because `remove` pages by
+         * the same rule — "where a scroll would have asked anyway" — and the two must not drift
+         * apart.
+         */
+        const val prefetchWindow = 8
     }
 }

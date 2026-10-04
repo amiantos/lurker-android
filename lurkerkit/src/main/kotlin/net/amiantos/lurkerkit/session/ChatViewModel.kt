@@ -547,6 +547,12 @@ class ChatViewModel(
     internal var openBufferSeam: ((BufferKey) -> Boolean)? = null
 
     /**
+     * Test seam: stands in for the socket a command's PRIVMSG goes out on (`/msg bob hi`), so a
+     * test can have a line that went — target and text in, whether it went out.
+     */
+    internal var sendMessageSeam: ((String, String) -> Boolean)? = null
+
+    /**
      * Open a DM and go there once its row exists (lurker-ios#201): Send Message on a profile, a
      * Friends row whose DM is closed. The app is taken there through `onBufferOpened` — at once if
      * the row is already here, else as soon as the server's answer mints it, and not at all if that
@@ -564,7 +570,14 @@ class ChatViewModel(
      * and only a `#` one, so a wait on `&local` or an invite-only channel would never be met.
      */
     fun openAndShow(key: BufferKey) {
-        if (openThenShow(key)) return
+        if (!openThenShow(key)) sayDmNotConnected(key)
+    }
+
+    /**
+     * The DM's `open-buffer` couldn't go out, so nothing waits: tell the user rather than leave
+     * them tapping a row that does nothing.
+     */
+    private fun sayDmNotConnected(key: BufferKey) {
         val networkId = key.networkId ?: return
         val network = store.state.networks[networkId]?.displayName ?: "the network"
         onJoinNotice?.invoke(JoinNotice.DmNotConnected(nick = key.target, network = network))
@@ -1224,10 +1237,12 @@ class ChatViewModel(
         var wentNowhere = false
         for (effect in effects) {
             when (effect) {
-                is CommandEffect.Send ->
-                    wentNowhere = !client.sendMessage(
-                        networkId = networkId, target = effect.target, text = effect.text, clientId = correlator(),
-                    ) || wentNowhere
+                is CommandEffect.Send -> {
+                    val clientId = correlator()
+                    val went = sendMessageSeam?.invoke(effect.target, effect.text)
+                        ?: client.sendMessage(networkId = networkId, target = effect.target, text = effect.text, clientId = clientId)
+                    wentNowhere = !went || wentNowhere
+                }
                 is CommandEffect.Action ->
                     // A `/me` can be the reply — `reply` is null for every other command (see `send`).
                     wentNowhere = !client.sendAction(
@@ -1254,8 +1269,11 @@ class ChatViewModel(
                     }
                 is CommandEffect.Part ->
                     client.part(networkId = networkId, channel = effect.channel, reason = effect.reason)
-                is CommandEffect.Close ->
+                is CommandEffect.Close -> {
+                    // As `closeBuffer` does: a `/close` stands down a pending open for that buffer.
+                    pendingOpens.closing(BufferKey(networkId = networkId, target = effect.target))
                     client.closeBuffer(networkId = networkId, target = effect.target)
+                }
                 is CommandEffect.Clear ->
                     // Nothing is written locally, deliberately. The server picks the exact boundary
                     // id (the current tail) and fans a `buffer-cleared` back to every device
@@ -1284,12 +1302,6 @@ class ChatViewModel(
                         // wait for.
                         client.openBuffer(networkId = networkId, target = effect.target, countBy = historyCountBy)
                         outcome = SendOutcome.Activate(to)
-                    } else if (DccChat.isTarget(effect.target)) {
-                        // A DCC chat (`=nick`): `open-buffer` never mints one, so a wait could never
-                        // be met — it would only stand every other landing down and expire in
-                        // silence. Go if the row is held; a chat that isn't open is `/dcc chat`'s
-                        // to start.
-                        if (store.state.buffers[to.id] != null) outcome = SendOutcome.Activate(to)
                     } else {
                         // A nick: mint/hydrate the DM row and switch to it once it's here. A
                         // brand-new /query target isn't in `state.buffers` yet, so the destination
@@ -1300,10 +1312,15 @@ class ChatViewModel(
                         // An `open-buffer` that couldn't go out refuses a bare `/query`, as a send
                         // that went nowhere does — it comes back to the composer. Minted here
                         // because nothing else in a bare `/query` would have. Never `/msg bob hi`'s:
-                        // its line already went, and handing it back would have it sent twice.
-                        if (!openThenShow(to) && lineId == null) {
-                            correlator()
-                            wentNowhere = true
+                        // its line already went, and handing it back would have it sent twice — so
+                        // say why the screen stayed put instead, as Send Message does.
+                        if (!openThenShow(to)) {
+                            if (lineId == null) {
+                                correlator()
+                                wentNowhere = true
+                            } else {
+                                sayDmNotConnected(to)
+                            }
                         }
                     }
                 }

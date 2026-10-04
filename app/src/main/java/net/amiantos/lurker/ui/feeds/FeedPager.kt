@@ -147,11 +147,11 @@ class FeedPager(
     /**
      * Drop one row — a bookmark swiped away — [FeedPaging.remove], by message id. Remembered against a
      * reload in flight ([removed]). Pages in only when the removal leaves the list inside the prefetch
-     * window, and spends no skip-ahead hop: LurkerKit's rule, given [PREFETCH].
+     * window, and spends no skip-ahead hop: LurkerKit's rule.
      */
     fun remove(messageId: Long): FeedPaging.Fetch? {
         removed[messageId] = reloadGeneration
-        val landing = paging.remove(messageId, prefetchWindow = PREFETCH) ?: return null
+        val landing = paging.remove(messageId) ?: return null
         return issued(landing.next)
     }
 
@@ -162,7 +162,7 @@ class FeedPager(
     }
 
     companion object {
-        /** Fetch the next page once a scroll comes within this many rows of the end. */
-        const val PREFETCH = 8
+        /** Fetch the next page once a scroll comes within this many rows of the end — the kit's window. */
+        const val PREFETCH = FeedPaging.prefetchWindow
     }
 }
