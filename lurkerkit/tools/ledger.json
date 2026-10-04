@@ -1,5 +1,5 @@
 {
-  "pin": "63255a5bcfc2b2b764bd086d87b5e9d7d584982e",
+  "pin": "1a8889b5f63d292e25822cef1c5764e9e610d67e",
   "tranches": [
     {
       "id": "T1",
@@ -53,7 +53,7 @@
         "Model/WhoisResult.swift",
         "Model/ProfileStatus.swift",
         "Model/PendingJoins.swift",
-        "Model/PendingDccOpen.swift",
+        "Model/PendingOpen.swift",
         "Model/BufferOrder.swift",
         "Model/UnsentCorrelator.swift",
         "Model/Highlight.swift",
@@ -70,7 +70,8 @@
         "Model/NetworkProxy.swift",
         "Model/NetworkPreset.swift",
         "Model/LinkPreview.swift",
-        "Model/ChannelModes.swift"
+        "Model/ChannelModes.swift",
+        "Model/FeedPaging.swift"
       ]
     },
     {
@@ -105,7 +106,8 @@
       "about": "Frames and the parser that produces them.",
       "files": [
         "Client/ServerFrame.swift",
-        "Client/FrameParser.swift"
+        "Client/FrameParser.swift",
+        "Client/JSONTextRepair.swift"
       ]
     },
     {
@@ -154,18 +156,18 @@
   "notes": {
     "Client/JSON.swift": "→ `client/Json.kt`. `FailableDecodable` is `Json.decodeEach`. The reads bridge numbers and booleans the way `NSNumber` does.",
     "Model/ISOTime.swift": "One ISO parser covers both of LurkerKit's; no lock.",
-    "Client/OAuth.swift": "An `object`. `Registration`/`Callback`/`TokenGrant` are sealed interfaces (payloads named `message`, `code`, `token`); `PKCE` a data class over `MessageDigest` + `SecureRandom`. `callback` reads the query by hand (`support.removingPercentEncoding`, shared with `PreviewSelection`; the fragment is found first, so a `?` inside it opens no query) so `+` stays `+` and `%2B` decodes to `+`, as `URLComponents` does.",
+    "Client/OAuth.swift": "An `object`. `Registration`/`Callback`/`TokenGrant` are sealed interfaces (payloads named `message`, `code`, `token`); `PKCE` a data class over `MessageDigest` + `SecureRandom`. `callback` reads the query by hand (`support.removingPercentEncoding`, shared with `PreviewSelection`; the fragment is found first, so a `?` inside it opens no query) so `+` stays `+` and `%2B` decodes to `+`, as `URLComponents` does. JSON bodies read through `FrameParser.jsonObject(data)`.",
     "Session/SessionStore.swift": "Keychain → `SecureStorage` (`read`/`write`/`delete` by account; implementations never throw), implemented by `:app` over the Keystore — readable after first unlock, excluded from backup and transfer, as the Swift’s accessibility attribute asked. `account`/`legacyAccount` keep their values; `service` has no counterpart. `save` is one replacing `write`. `SessionCodec` is kotlinx with `ignoreUnknownKeys`.",
     "Session/OAuthClients.swift": "`UserDefaults` → the kit’s `DefaultsStorage` (shared with `SettingsCache`); the client ids travel as a `JsonObject` of strings, read all-or-nothing. `key` keeps its value and must survive sign-out.",
     "Store/SettingsCache.swift": "`UserDefaults` → `DefaultsStorage` (`dictionary`, `set`, `removeObject`, mirroring the three calls), implemented by `:app`; no default storage. Values travel as `JsonObject`.",
     "Client/Uploads.swift": "`UploadProgressDelegate` keeps its name and whole-percent coalescing; `UploadProgressBody` is the counting OkHttp `RequestBody` (a `ForwardingSink`) that feeds it. `upload` streams the already-assembled multipart file, as the Swift does. `assemble` deletes its partial file on failure, which LurkerKit leaves to iOS. `UploadLimits.maxUploadBytes` is `Long` (a byte count).",
-    "Model/Typing.swift": "`OutgoingTyping` is a mutable class (PORTING.md, structs that mutate, case 3). No Kotlin test until `TypingTests` can run against the store.",
+    "Model/Typing.swift": "`OutgoingTyping` is a mutable class (PORTING.md, structs that mutate, case 3). Composing is judged on the trimmed draft and a `//`-escaped line counts as a message (lurker-ios#202).",
     "Session/NewestAnswer.swift": "A mutable class (case 3).",
     "Model/UploadContentTypes.swift": "`[UTType]` → MIME patterns. Adds `application/json`, which `text/*` cannot reach and `.text` does by conformance.",
     "Model/ServerAddress.swift": "Parses by hand to match `URLComponents`, then also requires that OkHttp can load the address — stricter than iOS at a few edges, pinned by a port-only test.",
     "Model/NetworkAbbreviation.swift": "Grows by code point where Swift grows by grapheme cluster; differs only for names with combining marks.",
     "Commands/SpoilerMarkup.swift": "Checked against the Swift over a corpus; differs only when a combining mark follows a `|`.",
-    "Rendering/NickColor.swift": "`lowercase()` applies final-sigma like the web; Swift does not, so a nick ending in `Σ` colours differently on iOS.",
+    "Rendering/NickColor.swift": "`lowercasedLikeTheWeb` is written out (Final_Sigma with case-ignorable skipping), not `lowercase()`, whose JDK rule disagreed with node on 204 of 6,026 random strings; the port agrees on all but 8 (U+10D4E, unassigned in JDK 21's Unicode). Case_Ignorable comes from Java's general categories plus a Word_Break list, so it follows the runtime's Unicode version. `trimForColor` walks code points.",
     "Rendering/NickHighlighter.swift": "Case-insensitive matching of non-ASCII nicks is engine-dependent; verify on a device.",
     "Rendering/URLMatcher.swift": "A word boundary beside a combining mark is engine-dependent; verify on a device.",
     "Rendering/IRCFormatting.swift": "`rawIndex` is tested from `RelayEnvelopeTests` (T3); checked against the Swift meanwhile.",
@@ -179,10 +181,9 @@
     "Model/SearchRequest.swift": "The query is encoded by `support.percentEncodedQuery`, to `URLComponents`' rule.",
     "Model/LinkPreview.swift": "`isViewable` parses with `HttpUrl`, which can read a different host than Foundation when a backslash sits in the authority: the player must be handed `HttpUrl.toString()`, never the raw string (T6). Numeric fields decode slightly more strictly than `JSONDecoder`.",
     "Model/NetworkPreset.swift": "The catalogue is a byte-for-byte copy of LurkerKit's, itself a copy of the web's.",
-    "Model/PendingJoins.swift": "A mutable class (case 3).",
-    "Model/PendingDccOpen.swift": "`DccOpens` is a mutable class (case 3); `PendingDccOpen` itself is immutable.",
+    "Model/PendingJoins.swift": "A mutable class (case 3). `stopOpening` rewrites each immutable `Request` through `setValue`, keeping the order.",
     "Model/UnsentCorrelator.swift": "A mutable class (case 3). Mints `android-N` client ids where LurkerKit mints `ios-N`.",
-    "Model/HighlightGrouping.swift": "\"The day before\" is ported from ICU's wall-time rule, not `minusDays`. Depends on time-zone data; verify on a device.",
+    "Model/HighlightGrouping.swift": "\"The day before\" is ported from ICU's wall-time rule, not `minusDays`; Yesterday is a same-calendar-day check (lurker-ios#200), matched against the Swift for every day 2000–2030 in all 443 zones. Depends on time-zone data; verify on a device.",
     "Model/MessageActions.swift": "`MessageAction.symbol` keeps the SF Symbol names; the app maps them to its own icons.",
     "Model/WhoisResult.swift": "A plain value; the string-or-number reading is FrameParser's (T4).",
     "Model/Modes.swift": "No Swift test of its own; checked against the Swift over a corpus.",
@@ -191,30 +192,34 @@
     "Model/IgnoreRule.swift": "`summary` takes the expiry formatter from the app; the private `ExpiryText` is not ported.",
     "Model/IgnoreMatch.swift": "Literal masks compare through `FoldedLiteral`, not `equals(ignoreCase)`. Case-insensitive matching of non-ASCII is engine-dependent; verify on a device.",
     "Model/IgnoreSet.swift": "Value equality over the rules, where LurkerKit's class has identity.",
-    "Commands/IgnoreArgs.swift": "`parse` returns `support.Result`. ⚠ The pattern length limit counts UTF-16 units, the server's own rule, where LurkerKit counts characters and lets through a pattern the server then drops. To fix in LurkerKit.",
+    "Commands/IgnoreArgs.swift": "`parse` returns `support.Result`. The pattern length limit counts UTF-16 units, the server's own rule, as LurkerKit now does too (lurker-ios#198).",
     "Model/RelayEnvelope.swift": "`RelayTemplate` is a plain class (it holds a compiled regex). `.` is spelled out so the host JVM stops where ICU does.",
     "Model/RelayBotSet.swift": "Value equality, where LurkerKit's class has identity.",
     "Model/PreviewText.swift": "`stripHiddenUrls` takes an `AttributedBody` interface for `:app` to implement, where LurkerKit takes an `NSMutableAttributedString`.",
     "Model/Consolidation.swift": "Returns structure, not sentences: the wording is the app's renderer's.",
     "Model/MessageRows.swift": "`AwayDivider`'s reason is `awayMessage`. Day boundaries depend on time-zone data; verify on a device.",
-    "Commands/CommandParser.swift": "`parse` takes the app's date formatter, for the `/ignore` listing. Lines are cut by UTF-16 unit; differs from Swift only where a combining mark follows a slash, a space or a sigil. ⚠ Reproduces a LurkerKit bug: a line break straight after the verb (`/topic⏎text`) cuts into the first word, because the argument line is trimmed of spaces but not newlines. Pinned by a port-only test; to fix in LurkerKit, then re-port. `awayFlag` (lurker#994): a space wearing a combining mark leaves the mark behind here, where Swift drops it with the separator — Port note + port-only test.",
+    "Commands/CommandParser.swift": "`parse` takes the app's date formatter, for the `/ignore` listing. Lines are cut by UTF-16 unit; differs from Swift only where a combining mark follows a slash, a space or a sigil. `argLine` and `body()` trim newlines too (lurker-ios#197). `awayFlag` (lurker#994): a space wearing a combining mark leaves the mark behind here, where Swift drops it with the separator — Port note + port-only test.",
     "Commands/Command.swift": "`CommandEffect` is a sealed interface of 23 cases in Swift order.",
     "Model/NickCompletion.swift": "`spokenPunctuation` and `isMarkScalar` read the JDK's Unicode tables; verify on a device.",
     "Model/Drafts.swift": "`DraftSync` is a mutable class (case 3).",
     "Model/PreviewSelection.swift": "`looksLikeMedia` reads the path by hand to Foundation's rules rather than through `HttpUrl`; pinned by a port-only test.",
     "Model/AwayStrip.swift": "Chooses how much of the date to show (`Since`, carrying the ICU skeleton); the app formats it. \"This year\" is the ISO year, where LurkerKit asks the user's calendar.",
     "Client/ServerFrame.swift": "`ServerFrame` is a sealed interface of 50 cases, Swift order. Three cases share a name with a model type (`AwayState`, `WhoisResult`, `ModeSpec`); the model type is written fully qualified there. Every type is an immutable data class.",
-    "Client/FrameParser.swift": "Reads through kotlinx.serialization where LurkerKit reads through `JSONSerialization`; kotlinx’s answer is kept and every difference is pinned port-only in `FrameParserTests` — see `object`’s Port note (PORTING.md, JSON). Reachable from the wire: a lone-surrogate escape drops the frame on iOS and reads here; a string beginning with U+FEFF loses it on iOS and keeps it here. The parser never throws and bounds nesting at Foundation’s 512 containers (kotlinx would overflow the stack). `channelKeys` and `peerPresence` fold nicks with `lowercase()`, which applies final sigma. `WhoisResult.signedOn` beyond `Instant` is null.",
-    "Store/LurkerStore.swift": "`ChatState` is an immutable data class (case 2): its thirteen mutators return the updated copy, and it compares all its state. `LurkerStore` publishes through a replaying `SharedFlow` with an unbounded buffer, not a `StateFlow`: `CurrentValueSubject` republishes equal states and a subscriber sees every value in order, and `AppBadge` writes on the settled EDGE of a burst (lurker-ios#134), which a conflating flow would skip. One assignment per method. `clock: () -> Instant` is injected for the tests. Port-only mechanics: `dropBuffers` folds the bulk drops into one subtraction per map; `noteBookmarks` copies the set only on a change; `applyBufferRenamed` is lifted out of `reduce`, body unchanged. `visibleMembers` matches your nick with `IgnoreMatch.FoldedLiteral` in place of `caseInsensitiveCompare`; `typists` tie-breaks by UTF-16 unit, Swift by scalar. ⚠ `ChatState`’s internal fields are settable through the public `copy`; nothing outside the kit should.",
+    "Client/FrameParser.swift": "Reads through kotlinx.serialization where LurkerKit reads through `JSONSerialization` (behind `JSONTextRepair`); kotlinx’s answer is kept and every difference is pinned port-only in `FrameParserTests` — see `object`’s Port note (PORTING.md, JSON). A lone-surrogate escape reads on both sides, as U+FFFD on iOS and the lone unit here; a leading U+FEFF is kept on both. `jsonObject(data:)` reads UTF-8 only. The parser never throws and bounds nesting at Foundation’s 512 containers (kotlinx would overflow the stack). `channelKeys` and `peerPresence` fold nicks with `lowercase()`, which applies final sigma. `WhoisResult.signedOn` beyond `Instant` is null.",
+    "Store/LurkerStore.swift": "`ChatState` is an immutable data class (case 2): its thirteen mutators return the updated copy, and it compares all its state. `LurkerStore` publishes through a replaying `SharedFlow` with an unbounded buffer, not a `StateFlow`: `CurrentValueSubject` republishes equal states and a subscriber sees every value in order, and `AppBadge` writes on the settled EDGE of a burst (lurker-ios#134), which a conflating flow would skip. One assignment per method. `clock: () -> Instant` is injected for the tests. Port-only mechanics: `dropBuffers` folds the bulk drops into one subtraction per map; `noteBookmarks` copies the set only on a change; `applyBufferRenamed` is lifted out of `reduce`, body unchanged. `visibleMembers` matches your nick with `IgnoreMatch.FoldedLiteral` in place of `caseInsensitiveCompare`; `typists` tie-breaks by UTF-16 unit, Swift by scalar. ⚠ `ChatState`’s internal fields are settable through the public `copy`; nothing outside the kit should. `ChatState.canWrite` is the one can-it-go-out rule; `canReact` is built on it.",
     "Session/AppBadge.swift": "The badge write is an injected `(Int) -> Unit`, as the Swift’s `write` closure. `follow(states: Flow<ChatState>, scope)` collects in the given scope; calling it again cancels the previous collection, as replacing the `AnyCancellable` does. No `[weak self]`.",
     "Model/NetworkRow.swift": "`NetworkRow` and `NetworkAction`.",
     "Model/StatusLight.swift": "A plain value.",
     "Model/ConnectionBannerState.swift": "`incompatible`’s unlabelled value is named `incompatibility`.",
-    "Client/LurkerClient.swift": "`LurkerClient(scope, onFrame, httpClient = bearerOnlyConfiguration(), mediaCacheDirectory = null, ioDispatcher = Dispatchers.IO)`, main-confined. `async` → `suspend`; every `Task {}` from main-confined code → `support.task` (a `launch` that yields first, so a stored `Job` is assigned before its body runs under `Main.immediate`); listener callbacks hop to main with `scope.launch`. One suspending `OkHttpClient.await` over `enqueue`; per-request timeouts travel as a tag; JSON bodies written as bytes so Content-Type is exactly `application/json`. `URLSessionWebSocketTask` → `okhttp3.WebSocket`: first of `onClosing`/`onClosed`/`onFailure` wins; `onClosing` answers `close(1000)`; `.goingAway` → `close(1001)`; stale sockets ignored by identity. `send`: `onComplete` means queued; `onFlush` fires a turn later once `queueSize` drains (`awaitWritten`, 2 s bound) — the nearest OkHttp comes to \"written\". Reply continuations are resumed a turn later (`resumeLater`), as `CheckedContinuation` does, so a waiter never runs inline in `openSocket`/`close` under `Main.immediate`. The media client has its own `Dispatcher` (the shared five-per-host cap would queue REST and the upgrade behind image bodies); `clearMediaCache` swallows `IOException`. ⚠ Receive has no backpressure; a replaced socket finishes its upgrade before closing. `registerDevice` sends `transport: \"fcm\"` (server rule). Cleartext refusal has its own user-visible text. `[weak self]` dropped: a cancelled scope stops the work. `playableMediaURL`/`socketURL` return `String?`. Logging via `java.util.logging`. `upload` assembles (and later deletes) the multipart body on `ioDispatcher` (U8), everything else on the caller's thread; `evictAll` stays on the calling thread, and `ChatViewModel` calls it off main.",
+    "Client/LurkerClient.swift": "`LurkerClient(scope, onFrame, httpClient = bearerOnlyConfiguration(), mediaCacheDirectory = null, ioDispatcher = Dispatchers.IO)`, main-confined. `async` → `suspend`; every `Task {}` from main-confined code → `support.task` (a `launch` that yields first, so a stored `Job` is assigned before its body runs under `Main.immediate`); listener callbacks hop to main with `scope.launch`. One suspending `OkHttpClient.await` over `enqueue`; per-request timeouts travel as a tag; JSON bodies written as bytes so Content-Type is exactly `application/json`. `URLSessionWebSocketTask` → `okhttp3.WebSocket`: first of `onClosing`/`onClosed`/`onFailure` wins; `onClosing` answers `close(1000)`; `.goingAway` → `close(1001)`; stale sockets ignored by identity. `send`: `onComplete` means queued; `onFlush` fires a turn later once `queueSize` drains (`awaitWritten`, 2 s bound) — the nearest OkHttp comes to \"written\". Reply continuations are resumed a turn later (`resumeLater`), as `CheckedContinuation` does, so a waiter never runs inline in `openSocket`/`close` under `Main.immediate`. The media client has its own `Dispatcher` (the shared five-per-host cap would queue REST and the upgrade behind image bodies); `clearMediaCache` swallows `IOException`. ⚠ Receive has no backpressure; a replaced socket finishes its upgrade before closing. `registerDevice` sends `transport: \"fcm\"` (server rule). Cleartext refusal has its own user-visible text. `[weak self]` dropped: a cancelled scope stops the work. `playableMediaURL`/`socketURL` return `String?`. Logging via `java.util.logging`. `upload` assembles (and later deletes) the multipart body on `ioDispatcher` (U8), everything else on the caller's thread; `evictAll` stays on the calling thread, and `ChatViewModel` calls it off main. REST bodies read through `FrameParser.jsonObject(data)` (no `JSONTextRepair`). `openBuffer` reports whether it went out (lurker-ios#201).",
     "Client/LinkPreviews.swift": "`LinkPreviewStore(scope, now = Instant::now, jitter, resolve: suspend (List<String>) -> List<LinkPreview>)`; its tasks go through `support.task`. `retry` is insertion-ordered where Swift’s dictionary is not; the re-ask delay rounds up to the millisecond.",
     "Client/InstanceConfig.swift": "An internal data class.",
-    "Session/ChatViewModel.swift": "`ChatViewModel(scope, sessions, settingsCache, oauthClients, formatExpiry, httpClient = LurkerClient.bearerOnlyConfiguration(), mediaCacheDirectory = null)`, main-confined; the stores have no defaults because each needs platform storage the kit does not have. `sessionSubject`/`statusSubject` are `support.CurrentValueSubject`; `channelEvents` is a `SharedFlow` with an unbounded buffer (its two consumers patch open lists from every live MODE row and a burst lands before a collector runs). Every `Task` → `support.task`; stored ones (`reconnectTask`, `draftFlushes`) → `Job`; `[weak self]` dropped (the scope’s cancellation ends the work). `authorize` is `suspend (HttpUrl) -> String?`. `formatExpiry` is port-only: the kit never formats a date, so the app hands in the ignore-expiry formatter once and `send` passes it to `CommandParser`. `serverSupportsAPNs` checks for `fcm` (the server rule), name kept to grep across repos. `init` sits at the bottom so every property has initialised first. ⚠ Not exercised in Kotlin: `signIn` (needs HTTP), `logout`/`onAuthLost`, the 500 ms draft flush over a live socket, `enterBackground`’s drafts-plus-presence path. `upload` is safe to call from main (the client moves its disk work); `logout`/`onAuthLost` purge the media cache and staged media on `Dispatchers.IO` (`purgeMedia`, U8) — a held Job that `signIn` and `playableMediaURL` join, re-run by a sessionless launch.",
-    "Client/ImageShrink.swift": "UTIs → MIME types (PORTING.md): `Source.typeIdentifier` and `Format.typeIdentifier` keep their names and hold MIME strings (`Format.typeIdentifier == Format.mime`); the mapping table, `com.adobe.raw-image` → `image/x-adobe-dng`, is the Port note on `Source.typeIdentifier`. Exact, case-sensitive comparison, as the Swift. The measuring and redraw are app-side (iOS `ImageConverter`; Android U8 fills `Source` from `ImageDecoder`/`BitmapFactory`)."
+    "Session/ChatViewModel.swift": "`ChatViewModel(scope, sessions, settingsCache, oauthClients, formatExpiry, httpClient = LurkerClient.bearerOnlyConfiguration(), mediaCacheDirectory = null)`, main-confined; the stores have no defaults because each needs platform storage the kit does not have. `sessionSubject`/`statusSubject` are `support.CurrentValueSubject`; `channelEvents` is a `SharedFlow` with an unbounded buffer (its two consumers patch open lists from every live MODE row and a burst lands before a collector runs). Every `Task` → `support.task`; stored ones (`reconnectTask`, `draftFlushes`) → `Job`; `[weak self]` dropped (the scope’s cancellation ends the work). `authorize` is `suspend (HttpUrl) -> String?`. `formatExpiry` is port-only: the kit never formats a date, so the app hands in the ignore-expiry formatter once and `send` passes it to `CommandParser`. `serverSupportsAPNs` checks for `fcm` (the server rule), name kept to grep across repos. `init` sits at the bottom so every property has initialised first. ⚠ Not exercised in Kotlin: `signIn` (needs HTTP), `logout`/`onAuthLost`, the 500 ms draft flush over a live socket, `enterBackground`’s drafts-plus-presence path. `upload` is safe to call from main (the client moves its disk work); `logout`/`onAuthLost` purge the media cache and staged media on `Dispatchers.IO` (`purgeMedia`, U8) — a held Job that `signIn` and `playableMediaURL` join, re-run by a sessionless launch. DMs wait for their row (lurker-ios#201): `openAndShow`/`supersedeLandings`, landings through `onBufferOpened` → the app's `AppEvents`; `openBuffer` returns `Boolean` with an internal `openBufferSeam` for tests.",
+    "Client/ImageShrink.swift": "UTIs → MIME types (PORTING.md): `Source.typeIdentifier` and `Format.typeIdentifier` keep their names and hold MIME strings (`Format.typeIdentifier == Format.mime`); the mapping table, `com.adobe.raw-image` → `image/x-adobe-dng`, is the Port note on `Source.typeIdentifier`. Exact, case-sensitive comparison, as the Swift. The measuring and redraw are app-side (iOS `ImageConverter`; Android U8 fills `Source` from `ImageDecoder`/`BitmapFactory`).",
+    "Model/PendingOpen.swift": "Was `PendingDccOpen` (lurker-ios#201): DMs and DCC chats share one wait, keyed by `BufferKey`. `PendingOpen` is immutable; its `init(key:now:)` is a companion `invoke` (a second constructor clashes with the private primary one on the JVM). `PendingOpens` is a mutable class (case 3), owned by the view model alone.",
+    "Model/FeedPaging.swift": "A mutable class (case 3), one owner (the app's `FeedPager`); `items` is replaced, never edited in place, so a snapshot holding an earlier list stays valid. `Fetch`/`Landing` constructors internal. Differentially checked against the Swift over 24,400 random ops: identical. The app keeps two removal rules the kit lacks (a removed row stays out of a reload in flight; a removal pages only when it leaves ≤8 rows) — candidates to upstream.",
+    "Client/JSONTextRepair.swift": "Not ported: a workaround for Foundation's `JSONSerialization` (it refuses a lone surrogate escape and strips a leading U+FEFF), and kotlinx does neither (PORTING.md, JSON). The one visible difference: a lone surrogate the server sent reads as U+FFFD on iOS and as the lone unit here.",
+    "Model/Speakers.swift": "Entries keep each nick as last spelled, for nick completion (`recent`, newest first, case-folded tiebreak)."
   },
   "testNotes": {
     "NotificationTapTests.swift": {
@@ -239,6 +244,21 @@
         "testUppercaseSchemeIsStillRecognisedAsAbsolute"
       ],
       "note": "`playableMediaURL` hands the player an `HttpUrl.toString()` (the T2 ruling), which lower-cases the scheme; the test asserts the input comes back verbatim. A port-only test pins that an uppercase scheme is still recognised as absolute."
+    },
+    "FrameParserTests.swift": {
+      "dropped": [
+        "testBacklogWithALoneSurrogateKeepsEveryRow"
+      ],
+      "note": "Pins `JSONTextRepair`'s U+FFFD, which is not ported; the port-only `testBacklogWithALoneSurrogateKeepsEveryRowAndTheLoneHalf` pins what kotlinx keeps."
+    },
+    "PreviewDecodeTests.swift": {
+      "dropped": [
+        "loneSurrogateDoesNotDiscardTheBatch"
+      ],
+      "note": "Pins `JSONTextRepair`'s U+FFFD; the port-only `loneSurrogateDoesNotDiscardTheBatchAndKeepsTheLoneHalf` pins what kotlinx keeps."
+    },
+    "JSONTextRepairTests.swift": {
+      "note": "`JSONTextRepair` is not ported (a Foundation workaround)."
     }
   },
   "partial": {}
