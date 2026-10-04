@@ -352,6 +352,7 @@ class ChatViewModel(
                 client.restore(server = server, token = grant.token)
                 sessionSubject.value = SessionState.LoggedIn
                 scope.task { loadConfig() }
+                socketOpening = true
                 client.start()
                 return true
             }
@@ -769,7 +770,7 @@ class ChatViewModel(
             // The server takes this build again: it was rolled back, or updated.
             store.clearIncompatible()
             if (!isForeground) return
-            client.reconnect(since = store.state.maxEventId)
+            reconnectSocket()
         }
     }
 
@@ -906,7 +907,17 @@ class ChatViewModel(
      *   connect burst — and loses them if the attempt fails. Connected waits for its first frame;
      * - airplane mode flips `reachable` while the old socket still reads Connected.
      */
-    private val canWrite: Boolean get() = store.state.reachable && store.state.connection == SocketStatus.Connected
+    private val canWrite: Boolean
+        get() = store.state.reachable && store.state.connection == SocketStatus.Connected && !socketOpening
+
+    /**
+     * A socket is being opened and hasn't sent its first frame. ⚠ Needed beside Connected: a forced
+     * reconnect (the foreground's stale-socket check) replaces the socket without the state ever
+     * leaving Connected, and OkHttp queues writes on the new one during its upgrade and loses them
+     * if the attempt fails. The client's own connect burst writes through regardless; this gates
+     * only the user's writes, through [canWrite].
+     */
+    private var socketOpening = false
 
     /**
      * React with `value` on a line, or take ours back when it's already there (lurker-ios#183).
@@ -2171,6 +2182,7 @@ class ChatViewModel(
         sessionSubject.value = SessionState.LoggedIn
         client.restore(server = saved.server, token = saved.token)
         scope.task { loadConfig() }
+        socketOpening = true
         scope.task { client.start() }
     }
 
@@ -2327,6 +2339,7 @@ class ChatViewModel(
                 onIncompatible(frame.incompatibility)
             }
             ServerFrame.SocketOpen -> {
+                socketOpening = false
                 // A socket that opens after the server was found not to take this build (its config
                 // answered first) is closed rather than used.
                 if (store.state.connection.incompatibility != null) {
@@ -2592,6 +2605,16 @@ class ChatViewModel(
         // Every attempt re-reads the config, not only while it's unanswered: it carries the
         // server's version, which moves exactly when a deploy drops the socket. See `loadConfig`.
         scope.task { loadConfig() }
+        reconnectSocket()
+    }
+
+    /**
+     * Open a new socket in place of the old one, resuming from the last event. The one door every
+     * reconnect goes through, so user writes wait for the new socket ([socketOpening]) — a forced
+     * one included, which replaces a stale socket while the state still reads Connected.
+     */
+    internal fun reconnectSocket() {
+        socketOpening = true
         client.reconnect(since = store.state.maxEventId)
     }
 

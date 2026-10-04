@@ -11,6 +11,7 @@ import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.NickNote
 import net.amiantos.lurkerkit.session.ChatViewModel
+import net.amiantos.lurkerkit.store.SocketStatus
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -87,6 +88,29 @@ class OfflineWritesTests {
         online.sendMessageSeam = { _, _ -> true }
         online.send(channel, text = "/msg bob hi")
         assertNull(online.takeUnsent(channel), "connected and reachable: it went")
+    }
+
+    /**
+     * A forced reconnect — the foreground's stale-socket check — replaces the socket while the
+     * state still reads Connected. The new socket takes writes during its upgrade and loses them
+     * if the attempt fails, so the user's writes wait for its first frame.
+     */
+    @Test
+    fun testAForcedReconnectHoldsWritesUntilTheNewSocketOpens() {
+        val model = viewModel()
+        model.sendMessageSeam = { _, _ -> true }
+        assertEquals(SocketStatus.Connected, model.state.connection)
+        model.reconnectSocket()
+        assertEquals(SocketStatus.Connected, model.state.connection, "the state hasn't moved; only the socket has")
+        model.send(channel, text = "/msg bob hi")
+        assertEquals("/msg bob hi", model.takeUnsent(channel)?.text, "the new socket hasn't opened")
+        assertFalse(model.setNickNote(networkId = 1, nick = "bob", note = "lives in Berlin"))
+        assertFalse(model.closeBuffer(channel))
+        assertNotNull(model.state.buffers[channel.id])
+
+        model.handle(ServerFrame.SocketOpen)
+        model.send(channel, text = "/msg bob hi")
+        assertNull(model.takeUnsent(channel), "open: it went")
     }
 
     /** A command that puts nothing on the wire holds nothing: there is nothing to have lost. */
