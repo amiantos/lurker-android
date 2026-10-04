@@ -221,6 +221,10 @@ class NickCompletionTests {
         )
         assertEquals("al", NickCompletion.activeMention("/me waves at al", caret = 15)?.query)
         assertEquals("al", NickCompletion.activeMention("/ME waves at al", caret = 15)?.query)
+        assertEquals(
+            "al", NickCompletion.activeMention("/shrug ask al", caret = 13)?.query,
+            "/shrug's argument is speech too",
+        )
         assertNull(NickCompletion.activeMention("/meow al", caret = 8), "a verb, not a prefix")
         assertEquals("al", NickCompletion.activeMention("//x al", caret = 6)?.query)
         assertEquals("al", NickCompletion.activeMention("/topic hi @al", caret = 13)?.query)

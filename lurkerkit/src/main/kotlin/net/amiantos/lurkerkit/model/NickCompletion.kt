@@ -209,10 +209,11 @@ object NickCompletion {
     /**
      * Whether the draft is a command whose arguments a bare word must stay out of: it opens
      * (after any whitespace, which the composer trims before sending) with `/` and a verb
-     * other than `me`. `//` escapes a command, so that line is text.
+     * other than `me` or `shrug`, whose arguments are chat text. `//` escapes a command, so
+     * that line is text.
      *
      * Port note: the verb is folded with `lowercase()` where LurkerKit uses `lowercased()`;
-     * the one case they differ (a final sigma) can't spell `me`.
+     * the one case they differ (a final sigma) can't spell `me` or `shrug`.
      */
     private fun isCommandLine(text: String): Boolean {
         var index = 0
@@ -222,7 +223,7 @@ object NickCompletion {
         while (verbEnd < text.length && !isWhitespace(text[verbEnd])) verbEnd += 1
         val verb = decoding(text, index + 1, verbEnd)
         if (verb.startsWith("/")) return false
-        return verb.lowercase() != "me"
+        return verb.lowercase() !in listOf("me", "shrug")
     }
 
     /**

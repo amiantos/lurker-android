@@ -8,6 +8,7 @@ import net.amiantos.lurkerkit.model.ChannelName
 import net.amiantos.lurkerkit.model.DccChat
 import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.model.IgnoreSet
+import net.amiantos.lurkerkit.model.ModeSpec
 import net.amiantos.lurkerkit.model.Reactions
 import net.amiantos.lurkerkit.model.RelayBot
 import net.amiantos.lurkerkit.model.RelayBotSet
@@ -71,6 +72,14 @@ object CommandParser {
      * with no arguments prints the marks on this network, and null means "they haven't arrived
      * yet", so the listing says so rather than claiming there are none.
      *
+     * `modeSpec` is the network's mode vocabulary, null while it's unknown: `/quiet` reads it to
+     * tell a quiet list from an owner rank, and the mode shortcuts read its MODES limit.
+     *
+     * `hasBuffer` answers whether this network has a buffer by that name open. `/part`, `/topic`
+     * and `/mode` ask it about a leading `&`, `+` or `!` word, which is a channel only when one by
+     * that name exists (see `leadsWithChannel`). It defaults to "none", which reads every such
+     * word as text.
+     *
      * `now` is likewise injected, for `/ignore -time` and for lapsed rules.
      *
      * Port note: `formatted` is here and not in LurkerKit. It is the expiry formatter
@@ -105,6 +114,8 @@ object CommandParser {
         target: String,
         ignores: IgnoreSet? = IgnoreSet.empty,
         relayBots: RelayBotSet? = RelayBotSet.empty,
+        modeSpec: ModeSpec? = null,
+        hasBuffer: (String) -> Boolean = { false },
         now: Instant = Instant.now(),
         formatted: (Instant) -> String,
     ): ParsedInput {
@@ -137,8 +148,8 @@ object CommandParser {
         return ParsedInput.Command(
             resolve(
                 verb = verb, fullBody = body, argLine = argLine, rest = rest,
-                networkId = networkId, target = target, ignores = ignores, relayBots = relayBots, now = now,
-                formatted = formatted,
+                networkId = networkId, target = target, ignores = ignores, relayBots = relayBots,
+                modeSpec = modeSpec, hasBuffer = hasBuffer, now = now, formatted = formatted,
             )
         )
     }
@@ -154,6 +165,8 @@ object CommandParser {
         target: String,
         ignores: IgnoreSet?,
         relayBots: RelayBotSet?,
+        modeSpec: ModeSpec?,
+        hasBuffer: (String) -> Boolean,
         now: Instant,
         formatted: (Instant) -> String,
     ): List<CommandEffect> {
@@ -193,6 +206,16 @@ object CommandParser {
                 return resolveUnignore(
                     argLine = argLine, networkId = networkId, ignores = ignores, now = now, formatted = formatted,
                 )
+            // Intercepted rather than rawed, and above the gate because none of them is about a
+            // network: `SERVER` is a server-to-server command, and what people mean by it (and by the
+            // web's `/network` verbs) is a form on this client. The rest are the web's app commands,
+            // with no screen here; raw, each would come back as a 421 in the server log.
+            "server", "network", "net" ->
+                return listOf(CommandEffect.Info("Networks are added and edited in Settings → Networks."))
+            "set", "get", "theme" ->
+                return listOf(CommandEffect.Info("/$verb is web-only — the app's own options are in Settings."))
+            "highlight", "hilight", "unhighlight", "dehilight" ->
+                return listOf(CommandEffect.Info("Highlight words are edited in the web client for now."))
             else -> {}
         }
 
@@ -229,6 +252,16 @@ object CommandParser {
             "react" -> {
                 val value = argLine.trimmingWhitespaces()
                 if (value.isEmpty()) return listOf(CommandEffect.Info("usage: /react <emoji|text> — e.g. /react 👍"))
+                // The web turns `:tada:` (or `:tada`) into 🎉 from its emoji table. This client has no
+                // table, and sending the name would react with the literal text, so it refuses
+                // instead. `:D` and `:P` are reactions people type on purpose, and still go out.
+                if (isShortcode(value)) {
+                    return listOf(
+                        CommandEffect.Info(
+                            "/react: emoji names like $value aren't supported here — use the emoji itself, e.g. /react 👍"
+                        )
+                    )
+                }
                 if (!Reactions.isValidValue(value)) {
                     return listOf(
                         CommandEffect.Info("a reaction can be at most ${Reactions.maxGraphemes} characters")
@@ -241,6 +274,14 @@ object CommandParser {
                 return listOf(
                     CommandEffect.Action(target = target, text = "slaps $who around a bit with a large trout")
                 )
+            }
+            "shrug" -> {
+                // A message, not an action: `/shrug no idea` says "no idea ¯\_(ツ)_/¯", as on the web.
+                if (!ChannelName.isChannelTarget(target) && !isNickTarget(target)) {
+                    return listOf(CommandEffect.Info("usage: /shrug [text] — run inside a channel or DM"))
+                }
+                val shrugText = if (argLine.isEmpty()) shrug else "$argLine $shrug"
+                return listOf(CommandEffect.Send(target = target, text = chatBody(shrugText)))
             }
             "msg", "query" -> {
                 val who = rest.firstOrNull() ?: return listOf(CommandEffect.Info("usage: /msg <nick> [message]"))
@@ -271,21 +312,21 @@ object CommandParser {
             }
 
             // Channels & buffers
-            "join" -> {
+            "join", "j" -> {
                 // A bare `/join` is a no-op, like the web (it just keeps the buffer you're in).
                 val first = rest.firstOrNull() ?: return emptyList()
                 val key = if (rest.size > 1) rest[1] else null
                 return listOf(CommandEffect.Join(channel = ChannelName.ensurePrefix(first), key = key))
             }
-            "part", "leave" -> {
+            "part", "leave", "p" -> {
                 // `/part [reason]` leaves the current channel; `/part <#chan> [reason]` leaves a
-                // named one. Consistent with /kick and /topic: a leading channel sigil (`#`/`&`)
-                // marks a channel, anything else is a parting reason for the current channel — so
-                // `/part heading out` says goodbye here rather than parting a channel "heading".
+                // named one. A leading channel word marks a channel (see `leadsWithChannel`), anything
+                // else is a parting reason for the current channel — so `/part heading out` and
+                // `/part +brb` say goodbye here rather than parting a channel "heading" or "+brb".
                 val partChannel: String?
                 val partReason: String
                 val first = rest.firstOrNull()
-                if (first != null && ChannelName.isChannelTarget(first)) {
+                if (first != null && leadsWithChannel(first, hasBuffer)) {
                     partChannel = first
                     partReason = body(first, argLine)
                 } else {
@@ -326,11 +367,12 @@ object CommandParser {
             }
             "topic" -> {
                 // `/topic` reads the current channel's topic; `/topic text` sets it; a leading
-                // `#chan` retargets. Interior spacing of the body is preserved by slicing.
+                // channel word retargets (see `leadsWithChannel`, which keeps `/topic !!! down !!!` a
+                // topic). Interior spacing of the body is preserved by slicing.
                 val channel: String
                 val bodyText: String
                 val first = rest.firstOrNull()
-                if (first != null && ChannelName.isChannelTarget(first)) {
+                if (first != null && leadsWithChannel(first, hasBuffer)) {
                     channel = first
                     bodyText = body(first, argLine)
                 } else {
@@ -354,59 +396,93 @@ object CommandParser {
                 return listOf(CommandEffect.ShowProfile(nick = who))
             }
             "invite" -> {
-                val who = rest.firstOrNull() ?: return listOf(CommandEffect.Info("usage: /invite <nick> [channel]"))
+                // `/invite <nick> [#chan]`, or channel-first as /kick takes it: `/invite #chan <nick>`.
                 // The channel defaults to the current buffer, but only if that's a channel — an
                 // /invite from a DM with no explicit channel would otherwise aim at the peer nick.
-                val channel = if (rest.size > 1) rest[1] else (if (ChannelName.isChannelTarget(target)) target else null)
-                if (channel == null) {
-                    return listOf(CommandEffect.Info("usage: /invite <nick> [channel] — no channel context"))
+                //
+                // ⚠ A second word that isn't a channel is refused, where the web falls back to the
+                // current channel: `/invite bob rust` meant #rust, and inviting bob to the channel
+                // you're in instead — maybe a private one — is the worse of the two mistakes.
+                val who: String?
+                val channel: String?
+                val first = rest.firstOrNull()
+                if (first != null && ChannelName.isChannelTarget(first)) {
+                    channel = first
+                    who = if (rest.size > 1) rest[1] else null
+                } else {
+                    who = first
+                    if (rest.size > 1 && !ChannelName.isChannelTarget(rest[1])) {
+                        return listOf(
+                            CommandEffect.Info("/invite: \"${rest[1]}\" isn't a channel — usage: /invite <nick> [#channel]")
+                        )
+                    }
+                    channel = if (rest.size > 1) rest[1] else if (ChannelName.isChannelTarget(target)) target else null
                 }
+                if (who == null) return listOf(CommandEffect.Info("usage: /invite <nick> [#channel]"))
+                if (channel == null) {
+                    return listOf(CommandEffect.Info("usage: /invite <nick> [#channel] — no channel context"))
+                }
+                // Wire order is nick first, whichever way round it was typed.
                 return listOf(CommandEffect.Raw(line = "INVITE $who $channel"))
             }
 
             // Moderation
             "kick" -> {
                 // `/kick <nick> [reason]` in a channel, or `/kick <#chan> <nick> [reason]` anywhere.
-                val channel: String?
-                val who: String?
-                val reason: String
-                val first = rest.firstOrNull()
-                if (first != null && ChannelName.isChannelTarget(first)) {
-                    channel = first
-                    who = if (rest.size > 1) rest[1] else null
-                    reason = rest.drop(2).joinToString(" ")
-                } else {
-                    channel = if (ChannelName.isChannelTarget(target)) target else null
-                    who = rest.firstOrNull()
-                    reason = rest.drop(1).joinToString(" ")
-                }
+                val (channel, args) = leadingChannel(rest, target)
                 if (channel == null) {
                     return listOf(CommandEffect.Info("usage: /kick [#chan] <nick> [reason] — no channel context"))
                 }
-                if (who == null) return listOf(CommandEffect.Info("usage: /kick [#chan] <nick> [reason]"))
+                val who = args.firstOrNull()
+                    ?: return listOf(CommandEffect.Info("usage: /kick [#chan] <nick> [reason]"))
+                val reason = args.drop(1).joinToString(" ")
                 val trailer = if (reason.isEmpty()) "" else " :$reason"
                 return listOf(CommandEffect.Raw(line = "KICK $channel $who$trailer"))
             }
             "mode" -> {
                 // `/mode <flags>` applies to the current channel; `/mode <target> <flags…>` is
-                // explicit. A leading `+`/`-` in a channel buffer is the flags-only form.
+                // explicit. A leading `+`/`-` in a channel buffer is the flags-only form — unless it
+                // names an open `+channel`, so `/mode +local +m` reaches +local (lurker#724).
                 val first = rest.firstOrNull()
                     ?: return listOf(CommandEffect.Info("usage: /mode [target] <flags> [args]"))
-                if ((first.startsWith("+") || first.startsWith("-")) && ChannelName.isChannelTarget(target)) {
+                if ((first.startsWith("+") || first.startsWith("-")) && !leadsWithChannel(first, hasBuffer) &&
+                    ChannelName.isChannelTarget(target)
+                ) {
                     return listOf(CommandEffect.Raw(line = "MODE $target ${rest.joinToString(" ")}"))
                 }
                 return listOf(CommandEffect.Raw(line = "MODE $argLine"))
             }
-            "op" -> return modeShortcut(verb, letter = 'o', adding = true, rest = rest, target = target)
-            "deop" -> return modeShortcut(verb, letter = 'o', adding = false, rest = rest, target = target)
-            "voice" -> return modeShortcut(verb, letter = 'v', adding = true, rest = rest, target = target)
-            "devoice" -> return modeShortcut(verb, letter = 'v', adding = false, rest = rest, target = target)
-            "halfop" -> return modeShortcut(verb, letter = 'h', adding = true, rest = rest, target = target)
-            "dehalfop" -> return modeShortcut(verb, letter = 'h', adding = false, rest = rest, target = target)
-            "ban" -> return modeShortcut(verb, letter = 'b', adding = true, rest = rest, target = target)
-            "unban" -> return modeShortcut(verb, letter = 'b', adding = false, rest = rest, target = target)
-            "quiet" -> return modeShortcut(verb, letter = 'q', adding = true, rest = rest, target = target)
-            "unquiet" -> return modeShortcut(verb, letter = 'q', adding = false, rest = rest, target = target)
+            "op" -> return modeShortcut(verb, letter = 'o', adding = true, rest = rest, target = target, spec = modeSpec)
+            "deop" -> return modeShortcut(verb, letter = 'o', adding = false, rest = rest, target = target, spec = modeSpec)
+            "voice" -> return modeShortcut(verb, letter = 'v', adding = true, rest = rest, target = target, spec = modeSpec)
+            "devoice" -> return modeShortcut(verb, letter = 'v', adding = false, rest = rest, target = target, spec = modeSpec)
+            "halfop" -> return modeShortcut(verb, letter = 'h', adding = true, rest = rest, target = target, spec = modeSpec)
+            "dehalfop" -> return modeShortcut(verb, letter = 'h', adding = false, rest = rest, target = target, spec = modeSpec)
+            "ban" -> return modeShortcut(verb, letter = 'b', adding = true, rest = rest, target = target, spec = modeSpec)
+            "unban" -> return modeShortcut(verb, letter = 'b', adding = false, rest = rest, target = target, spec = modeSpec)
+            // `/quiet` speaks solanum's +q quiet LIST. On InspIRCd and Unreal +q is the owner rank,
+            // so `/quiet bob` would make bob an owner — refused unless the network lists q among its
+            // list modes. Before the vocabulary arrives there's nothing to check, so it goes through,
+            // as on the web.
+            "quiet", "unquiet" -> {
+                if (noQuietList(modeSpec)) return listOf(CommandEffect.Info("this network has no +q quiet list"))
+                return modeShortcut(verb, letter = 'q', adding = verb == "quiet", rest = rest, target = target, spec = modeSpec)
+            }
+            "kickban" -> {
+                // Ban first, so they can't rejoin in the gap, then kick. A leading channel is optional.
+                val (channel, args) = leadingChannel(rest, target)
+                if (channel == null) {
+                    return listOf(CommandEffect.Info("usage: /kickban [#chan] <nick> [reason] — no channel context"))
+                }
+                val who = args.firstOrNull()
+                    ?: return listOf(CommandEffect.Info("usage: /kickban [#chan] <nick> [reason]"))
+                val reason = args.drop(1).joinToString(" ")
+                val trailer = if (reason.isEmpty()) "" else " :$reason"
+                return listOf(
+                    CommandEffect.Raw(line = "MODE $channel +b $who"),
+                    CommandEffect.Raw(line = "KICK $channel $who$trailer"),
+                )
+            }
 
             // Server / services
             "raw", "quote" -> {
@@ -457,10 +533,16 @@ object CommandParser {
             }
             "reconnect" ->
                 return listOf(CommandEffect.Reconnect)
-            "server" ->
-                // Intercepted rather than rawed: `SERVER` is a server-to-server command, and the
-                // thing people mean by it is a form on this client.
-                return listOf(CommandEffect.Info("Networks are added and edited in Settings → Networks."))
+
+            // The web's network-scoped commands this client has no screen for. Each would otherwise go
+            // out raw and come back as a 421 in the server log — or, for `/list`, as a LIST that only
+            // refreshes the server's cache and shows nothing.
+            "list" ->
+                return listOf(
+                    CommandEffect.Info("The channel list isn't in the app yet — /join #channel if you know its name.")
+                )
+            "retention", "jitsi", "talk", "e2e" ->
+                return listOf(CommandEffect.Info("/$verb is web-only for now."))
 
             else ->
                 // Anything unrecognized goes raw, exactly as the web's `default`. The original
@@ -938,11 +1020,74 @@ object CommandParser {
 
     // MARK: - Helpers
 
+    /** `¯\_(ツ)_/¯`, as the web's `/shrug` says it. */
+    private const val shrug = "¯\\_(ツ)_/¯"
+
+    /**
+     * Whether a command's leading word names a channel, for the commands whose first argument
+     * may instead be free text: `/part [reason]`, `/topic [text]`, `/mode`. The web's
+     * `isChannelArgAmbiguous`.
+     *
+     * ⚠ `#` always does: a sentence effectively never starts with one. The other three sigils do
+     * only when this network has a buffer by that name, because `+` and `!` absolutely start
+     * sentences — `/part +brb` would part a channel "+brb", `/topic !!! down !!!` would set the
+     * topic of a channel "!!!". Commands whose first argument is never text (`/kick`, `/invite`,
+     * the mode shortcuts) ask `ChannelName.isChannelTarget` instead.
+     */
+    private fun leadsWithChannel(token: String, hasBuffer: (String) -> Boolean): Boolean {
+        if (!ChannelName.isChannelTarget(token)) return false
+        return token.startsWith("#") || hasBuffer(token)
+    }
+
+    /**
+     * A whole `:name:` in the gemoji character set — what the web's `reactionFromInput` would
+     * look up, closing colon optional. Left open, an emoticon isn't a name: `:D` and `:P` are
+     * too short to be one, and a nose and a letter (`:-D`, `:-p`) is a face. `:-1` and `:+1`
+     * stay names — the web turns them into 👎 and 👍.
+     */
+    private fun isShortcode(text: String): Boolean {
+        if (!text.startsWith(":")) return false
+        val closed = text.length > 1 && text.endsWith(":")
+        val name = text.substring(1, if (closed) text.length - 1 else text.length)
+        if (!closed && name.length == 2 && name[0] == '-' && (name[1] in 'a'..'z' || name[1] in 'A'..'Z')) return false
+        return name.length >= (if (closed) 1 else 2) &&
+            name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it in "_+-" }
+    }
+
+    /** Whether the network is known to have no +q quiet list — an unknown spec isn't. */
+    private fun noQuietList(spec: ModeSpec?): Boolean =
+        spec != null && !spec.list.contains("q")
+
+    /**
+     * How many param-taking changes one MODE line may carry before the network's 005 says: the
+     * web's `DEFAULT_MAX_MODES`, and RFC 2812's floor.
+     */
+    private const val defaultMaxModes = 3
+
+    /**
+     * The longest MODE line the shortcuts build, in bytes: the web's `MODE_LINE_BUDGET`, which
+     * leaves room under IRC's 512 for the prefix the server relays it with. Long ban masks reach
+     * it before MODES does, and a server truncates what's past it.
+     */
+    private const val modeLineBudget = 400
+
+    /**
+     * The channel a moderation command acts on and the arguments after it: a leading channel
+     * word (any sigil — none of these commands takes free text first), else the current buffer
+     * when it's a channel, else null.
+     */
+    private fun leadingChannel(rest: List<String>, target: String): Pair<String?, List<String>> {
+        val first = rest.firstOrNull()
+        if (first != null && ChannelName.isChannelTarget(first)) return Pair(first, rest.drop(1))
+        return Pair(if (ChannelName.isChannelTarget(target)) target else null, rest)
+    }
+
     /**
      * The mode-shortcut family (`/op`, `/ban`, …): one mode letter repeated once per target,
-     * against a leading channel arg (`#`/`&`) or the current channel buffer. `/op a b` →
-     * `MODE #chan +oo a b`. Refuses outside a channel, rather than aiming a channel mode at
-     * a DM peer.
+     * against a leading channel arg (any sigil) or the current channel buffer. `/op a b` →
+     * `MODE #chan +oo a b`, split into as many lines as the network's MODES allows — a server
+     * drops the changes past its limit without a word. Refuses outside a channel, rather than
+     * aiming a channel mode at a DM peer.
      */
     private fun modeShortcut(
         verb: String,
@@ -950,14 +1095,9 @@ object CommandParser {
         adding: Boolean,
         rest: List<String>,
         target: String,
+        spec: ModeSpec?,
     ): List<CommandEffect> {
-        var channel: String? = if (ChannelName.isChannelTarget(target)) target else null
-        var args = rest
-        val first = args.firstOrNull()
-        if (first != null && ChannelName.isChannelTarget(first)) {
-            channel = first
-            args = args.drop(1)
-        }
+        val (channel, args) = leadingChannel(rest, target)
         if (channel == null) {
             return listOf(CommandEffect.Info("usage: /$verb [#chan] <nick>… — no channel context"))
         }
@@ -965,8 +1105,27 @@ object CommandParser {
             return listOf(CommandEffect.Info("usage: /$verb [#chan] <nick>…"))
         }
         val sign = if (adding) "+" else "-"
-        val letters = letter.toString().repeat(args.size)
-        return listOf(CommandEffect.Raw(line = "MODE $channel $sign$letters ${args.joinToString(" ")}"))
+        fun line(params: List<String>): String =
+            "MODE $channel $sign${letter.toString().repeat(params.size)} ${params.joinToString(" ")}"
+        // One mask too long for a line of its own can't be split, and sending the rest without it
+        // would half-apply the command — so the whole command is refused.
+        if (args.any { line(listOf(it)).toByteArray(Charsets.UTF_8).size > modeLineBudget }) {
+            return listOf(CommandEffect.Info("/$verb: one of those is too long for a MODE line"))
+        }
+        // A known spec with no MODES is no limit; an unknown spec is the default, as the web.
+        val limit: Int? = if (spec != null) spec.maxModes else defaultMaxModes
+        val lines = mutableListOf<List<String>>()
+        var batch = listOf<String>()
+        for (arg in args) {
+            val full = limit != null && batch.size >= limit
+            if (batch.isNotEmpty() && (full || line(batch + arg).toByteArray(Charsets.UTF_8).size > modeLineBudget)) {
+                lines.add(batch)
+                batch = emptyList()
+            }
+            batch = batch + arg
+        }
+        lines.add(batch)
+        return lines.map { CommandEffect.Raw(line = line(it)) }
     }
 
     /**

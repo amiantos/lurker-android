@@ -1178,6 +1178,12 @@ class ChatViewModel(
             // Same latch, same reason: `/relay` with no arguments is a claim about which bots are
             // marked, and an empty set mid-burst would answer "none" for a network that has some.
             relayBots = if (store.state.backlogComplete) store.state.relayBots else null,
+            // `/quiet` and the mode shortcuts read the network's vocabulary; null until its burst
+            // ends, which the parser reads as unknown rather than as the RFC defaults.
+            modeSpec = key.networkId?.let { store.state.networks[it]?.modeSpec },
+            // Whether `/part &local` names a channel or gives a reason: a buffer by that name on
+            // this network says channel.
+            hasBuffer = { name -> store.state.buffers[BufferKey(networkId = key.networkId, target = name).id] != null },
             formatted = formatExpiry,
         )
         when (parsed) {
