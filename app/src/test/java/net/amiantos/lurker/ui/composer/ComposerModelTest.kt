@@ -46,6 +46,7 @@ class ComposerModelTest {
     fun `a bare word of two letters is a mention without the at (#57)`() {
         assertEquals(Completion.Mention("al"), ComposerModel.completion("hey al", 6, 6))
         assertNull(ComposerModel.completion("hey a", 5, 5))
+        assertNull("a command's argument is not a nick slot", ComposerModel.completion("/nick al", 8, 8))
     }
 
     @Test
@@ -123,6 +124,8 @@ class ComposerModelTest {
     @Test
     fun `a stale pick inserts nothing`() {
         assertNull(ComposerModel.pick("hello ", 6, 6, Completion.Mention("al"), "alice", ":"))
+        // Pills built for `al`, picked after the caret moved to the end of another word.
+        assertNull(ComposerModel.pick("hello al", 5, 5, Completion.Mention("al"), "alice", ":"))
         assertNull(ComposerModel.pick("@al", 0, 3, Completion.Mention("al"), "alice", ":"))
         assertNull(ComposerModel.pick("@al", 3, 3, null, "alice", ":"))
     }

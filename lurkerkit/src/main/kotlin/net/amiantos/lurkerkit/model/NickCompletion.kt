@@ -10,8 +10,8 @@ import kotlin.math.min
 
 /**
  * Nick completion: the pure logic behind the pill strip the composer floats when the
- * user types `@`, or the first letters of a nick (#57). A faithful port of the web client's `nickCompletion.ts`, so the
- * two clients can't disagree about who leads the list:
+ * user types `@`, or the first letters of a nick (#57). A faithful port of the web
+ * client's `nickCompletion.ts`, so the two clients can't disagree about who leads the list:
  *
  *  - recent speakers first, most recent first — the people you're most likely answering;
  *  - then the rest of the member list alphabetically, so someone who hasn't spoken is
@@ -30,9 +30,9 @@ object NickCompletion {
     // MARK: - Candidates
 
     /**
-     * Who `@query` offers, best first, capped at `limit`. `messages` supplies recency
-     * (newest last, as buffers hold them); `members` supplies the fallback pool and the
-     * still-here check.
+     * Who a nick query offers — after an `@`, or a bare word — best first, capped at
+     * `limit`. `messages` supplies recency (newest last, as buffers hold them); `members`
+     * supplies the fallback pool and the still-here check.
      *
      * `ignores`/`networkId` strip ignored candidates. Taken as the shared type rather than an
      * injected predicate: `IgnoreSet` lives in this module, is immutable, and already carries
@@ -110,11 +110,14 @@ object NickCompletion {
 
         // Then everyone else who's here, in case-folded alphabetical order — the same
         // nick tiebreaker MemberPrefix's sort uses (rank doesn't apply here: completion
-        // is about who you're addressing, not who has ops).
-        for (member in members.sortedWith { lhs, rhs -> lhs.nick.lowercase().compareTo(rhs.nick.lowercase()) }) {
+        // is about who you're addressing, not who has ops). Filtered before the sort: a
+        // bare word asks on most keystrokes, and a big channel's whole member list
+        // shouldn't be sorted for the handful that match.
+        val matching = members.filter { it.nick.lowercase().startsWith(prefix) }
+        for (member in matching.sortedWith { lhs, rhs -> lhs.nick.lowercase().compareTo(rhs.nick.lowercase()) }) {
             if (out.size >= limit) return out
             val lc = member.nick.lowercase()
-            if (seen.contains(lc) || !lc.startsWith(prefix)) continue
+            if (seen.contains(lc)) continue
             seen.add(lc)
             if (isIgnored(member.nick, member.userhost)) continue
             out.add(member.nick)
@@ -152,7 +155,8 @@ object NickCompletion {
 
     /**
      * How much of a bare word must be typed before it asks for nicks — the web's mobile
-     * strip threshold, so a one-letter word ("I", "a") never floats the pills.
+     * strip threshold, so a one-letter word ("I", "a") never floats the pills. Counted in
+     * code points (LurkerKit: Unicode scalars), so one emoji is one, not its two UTF-16 units.
      */
     const val BARE_WORD_MINIMUM = 2
 
@@ -160,17 +164,19 @@ object NickCompletion {
      * The nick being typed at `caret`, or null. A token is the whitespace-delimited run the
      * caret sits in, and it asks in one of two shapes:
      *
-     *  - `@…`, explicit, so it asks from the first keystroke — a lone `@` lists everyone;
-     *  - a bare word with at least [BARE_WORD_MINIMUM] characters before the caret, the
-     *    web's mobile suggestion strip (#57), so a nick can be finished without the `@`.
-     *    A word that opens with `/` (a command, or `//` escaping one) or a channel sigil
-     *    is never a nick, so it never asks.
+     *  - `@…`, explicit, so it asks from the first keystroke — a lone `@` lists everyone —
+     *    on any line, and with the caret anywhere in the word;
+     *  - a bare word of at least [BARE_WORD_MINIMUM] characters, the web's mobile suggestion
+     *    strip (#57), so a nick can be finished without the `@`. Narrower than the `@`,
+     *    because it fires on words the user never meant as nicks: only with the caret at the
+     *    word's END (a caret placed inside a word is editing it, and a pick would replace the
+     *    rest of it), never in a word opening with `/` or a channel sigil, and never on a
+     *    command line but `/me` — a command's arguments are keys, passwords and new nicks,
+     *    where a nick pick is only ever a mistake.
      *
-     * An `@` anywhere but the word's start disqualifies it — `user@host` is an
-     * email-shaped word, not a mention, exactly as the web treats it. For an `@…` only the
-     * part before the caret counts (the `@` must be the nearest one behind it); a bare
-     * word may not hold one at all, because completion replaces the whole word and would
-     * take an `@host` after the caret with it.
+     * An `@` anywhere but the word's start disqualifies the word in both shapes: `user@host`
+     * is an email-shaped word, not a mention, exactly as the web treats it — and completion
+     * replaces the whole word, so it would take an `@host` after the caret with it.
      *
      * Port note: `caret`, `start` and `end` are UTF-16 offsets on both sides, so they carry
      * over unchanged. The query is the units up to the caret, decoded the way LurkerKit
@@ -183,16 +189,36 @@ object NickCompletion {
         while (start > 0 && !isWhitespace(text[start - 1])) start -= 1
         var end = caret
         while (end < text.length && !isWhitespace(text[end])) end += 1
+        if (start >= caret || (start + 1 until end).any { text[it] == '@' }) return null
 
-        if (start < caret && text[start] == '@') {
-            if ((start + 1 until caret).any { text[it] == '@' }) return null
+        if (text[start] == '@') {
             return MentionToken(start = start, end = end, query = decoding(text, start + 1, caret))
         }
 
-        if (caret - start < BARE_WORD_MINIMUM || (start until end).any { text[it] == '@' }) return null
+        if (caret != end || isCommandLine(text)) return null
         val word = decoding(text, start, end)
+        if (word.codePointCount(0, word.length) < BARE_WORD_MINIMUM) return null
         if (word.startsWith("/") || ChannelName.isChannelTarget(word)) return null
-        return MentionToken(start = start, end = end, query = decoding(text, start, caret))
+        return MentionToken(start = start, end = end, query = word)
+    }
+
+    /**
+     * Whether the draft is a command whose arguments a bare word must stay out of: it opens
+     * (after any whitespace, which the composer trims before sending) with `/` and a verb
+     * other than `me`. `//` escapes a command, so that line is text.
+     *
+     * Port note: the verb is folded with `lowercase()` where LurkerKit uses `lowercased()`;
+     * the one case they differ (a final sigma) can't spell `me`.
+     */
+    private fun isCommandLine(text: String): Boolean {
+        var index = 0
+        while (index < text.length && isWhitespace(text[index])) index += 1
+        if (index >= text.length || text[index] != '/') return false
+        var verbEnd = index + 1
+        while (verbEnd < text.length && !isWhitespace(text[verbEnd])) verbEnd += 1
+        val verb = decoding(text, index + 1, verbEnd)
+        if (verb.startsWith("/")) return false
+        return verb.lowercase() != "me"
     }
 
     /**

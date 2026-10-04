@@ -163,33 +163,37 @@ class NickCompletionTests {
             NickCompletion.MentionToken(start = 0, end = 2, query = "al"),
             NickCompletion.activeMention("al", caret = 2),
         )
+        assertEquals("al", NickCompletion.activeMention("al more", caret = 2)?.query, "the end of a word, not of the text")
     }
 
     @Test
-    fun testABareWordOfOneLetterDoesNot() {
+    fun testABareWordOfOneCharacterDoesNot() {
         assertNull(NickCompletion.activeMention("hey a", caret = 5), "every \"I\" and \"a\" would float the pills")
         assertNull(
-            NickCompletion.activeMention("hey alice", caret = 5),
-            "the threshold counts what's typed BEFORE the caret, not the word",
-        )
-    }
-
-    @Test
-    fun testABareCaretMidWordFiltersToTheCaretButSpansTheWord() {
-        assertEquals(
-            NickCompletion.MentionToken(start = 0, end = 5, query = "al"),
-            NickCompletion.activeMention("alice more", caret = 2),
+            NickCompletion.activeMention("hey \uD83D\uDC4D", caret = 6),
+            "one emoji is one character, not its two UTF-16 units",
         )
     }
 
     /**
-     * Completion replaces the whole word, so a bare word holding an `@` anywhere — even
-     * after the caret — never asks: it would take the `@host` with it.
+     * A caret placed inside a word is editing it: pills there would float over every typo
+     * fix, and a pick would replace the rest of the word ("al|ready" → "alice ").
      */
     @Test
-    fun testABareWordWithAnAtAnywhereDoesNotAsk() {
-        assertNull(NickCompletion.activeMention("mail user@host", caret = 9))
-        assertNull(NickCompletion.activeMention("mail user@host", caret = 7))
+    fun testABareCaretInsideAWordDoesNotAsk() {
+        assertNull(NickCompletion.activeMention("I already said", caret = 4))
+        assertNull(NickCompletion.activeMention("thanks alice's idea", caret = 9))
+    }
+
+    /**
+     * Completion replaces the whole word, so a word holding an `@` past its start never
+     * asks, in either shape: it would take the `@host` with it.
+     */
+    @Test
+    fun testAWordWithAnAtPastItsStartDoesNotAsk() {
+        assertNull(NickCompletion.activeMention("mail user@host", caret = 14))
+        assertNull(NickCompletion.activeMention("@alice@host.com", caret = 3), "even after the caret, an @… would lose its tail")
+        assertNull(NickCompletion.activeMention("@a@b", caret = 4))
     }
 
     @Test
@@ -201,10 +205,28 @@ class NickCompletionTests {
         }
     }
 
+    /**
+     * A command's arguments are keys, passwords and new nicks: a bare word stays out of them.
+     * `/me`'s argument is speech, `//` escapes a command, and an `@` asks anywhere.
+     */
     @Test
-    fun testAnAtStillAsksFromItsFirstKeystroke() {
+    fun testACommandLineAsksOnlyForMeOrAnAt() {
+        assertNull(NickCompletion.activeMention("/msg NickServ IDENTIFY hu", caret = 25))
+        assertNull(
+            NickCompletion.activeMention("  /nick al", caret = 10),
+            "the composer trims, so leading whitespace is still a command",
+        )
+        assertEquals("al", NickCompletion.activeMention("/me waves at al", caret = 15)?.query)
+        assertEquals("al", NickCompletion.activeMention("/ME waves at al", caret = 15)?.query)
+        assertNull(NickCompletion.activeMention("/meow al", caret = 8), "a verb, not a prefix")
+        assertEquals("al", NickCompletion.activeMention("//x al", caret = 6)?.query)
+        assertEquals("al", NickCompletion.activeMention("/topic hi @al", caret = 13)?.query)
+    }
+
+    @Test
+    fun testAnAtStillAsksFromItsFirstKeystrokeAnywhereInTheWord() {
         assertEquals("a", NickCompletion.activeMention("hey @a", caret = 6)?.query, "the bare threshold never applies to an @")
-        assertNull(NickCompletion.activeMention("@a@b", caret = 4), "a second @ before the caret is still email-shaped")
+        assertEquals("al", NickCompletion.activeMention("@alice", caret = 3)?.query)
     }
 
     // MARK: - Addressing suffix

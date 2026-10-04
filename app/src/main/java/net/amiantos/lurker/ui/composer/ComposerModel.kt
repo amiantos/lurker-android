@@ -298,16 +298,21 @@ internal object ComposerModel {
     }
 
     /**
-     * Replace the active `@token` with [nick] plus its addressing suffix — the web picker's exact
-     * insertion, so both clients send the same line. The `@` itself goes: IRC addresses by bare
-     * nick, and the sent line highlights by containing it. The whole word, not just up to the caret:
-     * completing `@al|ice` must swallow the tail, not weld the pick onto it.
+     * Replace the nick being typed — an `@…` or a bare word — with [nick] plus its addressing
+     * suffix: the web picker's exact insertion, so both clients send the same line. An `@` goes: IRC
+     * addresses by bare nick, and the sent line highlights by containing it. The whole word, not just
+     * up to the caret: completing `@al|ice` must swallow the tail, not weld the pick onto it.
+     *
+     * A pick the word under the caret no longer leads to is stale and inserts nothing. A bare word
+     * makes nearly any word a token, so "is there one" no longer tells a pick made for this word from
+     * one made for the word the caret just left.
      *
      * [punctuation] is the resolved `input.completion.nick_suffix` — PUNCTUATION only, the space is
      * always ours to add (`NickCompletion.addressPunctuation`).
      */
     fun completeMention(text: String, caret: Int, nick: String, punctuation: String): FieldEdit? {
         val token = NickCompletion.activeMention(text, caret) ?: return null
+        if (!nick.lowercase().startsWith(token.query.lowercase())) return null
         val replacement = nick + NickCompletion.addressingSuffix(beforeTokenAt = token.start, text = text, punctuation = punctuation)
         return replace(text, TextRange(token.start, token.end), replacement)
     }

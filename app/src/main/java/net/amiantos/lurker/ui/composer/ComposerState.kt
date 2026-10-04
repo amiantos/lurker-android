@@ -181,7 +181,14 @@ internal class ComposerState(
         reportEdit(now)
     }
 
-    /** Recompute the completion under the caret, and the pills, only when it changed. */
+    /**
+     * Recompute the completion under the caret, and the pills, only when it changed.
+     *
+     * Not gated on [Snapshot.composing], unlike iOS's marked text: Gboard and most Latin keyboards
+     * hold the word being typed as the composing region, so the gate would switch bare-word nicks
+     * (#57) off for nearly everyone. The text is in the field either way, and a pick ends the
+     * composition the way any edit does.
+     */
     private fun emitCompletion(now: Snapshot) {
         val computed = ComposerModel.completion(now.text, now.selection.min, now.selection.max)
         val last = lastCompletion
