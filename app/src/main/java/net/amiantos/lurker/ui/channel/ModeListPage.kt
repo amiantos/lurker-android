@@ -53,6 +53,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import net.amiantos.lurker.platform.LocalAppEvents
+import net.amiantos.lurker.platform.confirmCopy
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormInset
 import net.amiantos.lurker.ui.networks.PageExit
@@ -206,6 +208,7 @@ class ModeListState(
 internal fun ModeListPage(state: ModeListState, dateTime: (Instant) -> String, onBack: () -> Unit) {
     val canEdit = state.slice.canEdit
     val clipboard = LocalClipboard.current
+    val events = LocalAppEvents.current
     val scope = rememberCoroutineScope()
     ModeListContent(
         title = state.name,
@@ -220,7 +223,12 @@ internal fun ModeListPage(state: ModeListState, dateTime: (Instant) -> String, o
         onRefresh = { state.load(byPull = true) },
         onReload = { state.load() },
         onAdd = { state.adding = "" },
-        onCopy = { mask -> scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(state.name, mask))) } },
+        onCopy = { mask ->
+            scope.launch {
+                clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(state.name, mask)))
+                events.confirmCopy()
+            }
+        },
         onRemove = { mask -> state.change('-', mask) },
     )
     val adding = state.adding

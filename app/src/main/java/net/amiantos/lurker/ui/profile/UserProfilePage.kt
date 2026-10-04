@@ -37,7 +37,9 @@ import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import net.amiantos.lurker.platform.LocalAppEvents
 import net.amiantos.lurker.platform.MomentText
+import net.amiantos.lurker.platform.confirmCopy
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormSectionFooter
 import net.amiantos.lurker.ui.networks.FormSectionHeader
@@ -110,6 +112,7 @@ internal fun UserProfilePage(
     val moments = remember(context) { MomentText(context) }
     val sections = UserProfileModel.sections(inputs, state.nick, canOpenBuffers = onSendMessage != null, dateTime = moments::dateTime)
     val clipboard = LocalClipboard.current
+    val events = LocalAppEvents.current
     val scope = rememberCoroutineScope()
     UserProfileContent(
         title = state.nick,
@@ -120,7 +123,10 @@ internal fun UserProfilePage(
         onRow = { row ->
             when (row) {
                 is ProfileRow.Detail -> if (row.copyable) {
-                    scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(row.title, row.value))) }
+                    scope.launch {
+                        clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(row.title, row.value)))
+                        events.confirmCopy()
+                    }
                 }
                 // Through the one join path: a channel you're in opens at once, one you aren't opens
                 // when the server says you're in, and a refusal shows over this dialog rather than
