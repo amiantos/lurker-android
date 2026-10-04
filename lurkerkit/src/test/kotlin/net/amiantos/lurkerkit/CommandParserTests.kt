@@ -89,6 +89,23 @@ class CommandParserTests {
     }
 
     @Test
+    fun testMeFollowedByANewlineSendsOnlyTheText() {
+        // lurker-ios#197: a multi-line paste or a shift-return can put a newline, not a space,
+        // after the verb. The web's `trim()` drops it; the action must not start with it.
+        assertEquals(listOf<CommandEffect>(CommandEffect.Action(target = "#chan", text = "waves")), effects("/me\nwaves"))
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Action(target = "#chan", text = "waves  slowly")),
+            effects("/me\n waves  slowly\n"),
+        )
+    }
+
+    @Test
+    fun testABodyAfterAFirstArgumentDropsALeadingNewline() {
+        // The same trim, one token in: `/notice bob⏎hi` must not send "\nhi".
+        assertEquals(effects("/notice bob hi"), effects("/notice bob\nhi"))
+    }
+
+    @Test
     fun testEmptyMeIsANoOp() {
         assertEquals(emptyList(), effects("/me"))
     }
@@ -929,7 +946,7 @@ class CommandParserTests {
         // The verb and the tokens split on `Character.isWhitespace`, which a zero-width space is
         // not: it stays on the verb, and an unknown verb goes raw.
         assertEquals(listOf<CommandEffect>(CommandEffect.Raw(line = "me\u200B hi")), effects("/me\u200B hi"))
-        // The argument line is trimmed with `CharacterSet.whitespaces`, which it is.
+        // The argument line is trimmed with `CharacterSet.whitespacesAndNewlines`, which it is in.
         assertEquals(
             listOf<CommandEffect>(CommandEffect.Action(target = "#chan", text = "hi")),
             effects("/me \u200Bhi\u200B"),
@@ -950,26 +967,36 @@ class CommandParserTests {
     }
 
     @Test
-    fun testALineBreakAfterTheVerbCutsTheBodyWhereLurkerKitCutsIt() {
-        // `argLine` keeps the break (only spaces and tabs are trimmed off it) while the tokens
-        // are split past it, so "the body after the first token" is cut one `Character` early —
-        // into the token. LurkerKit's behaviour, kept; what matters here is that the cut is
-        // counted in its units: a CR-LF is one, and so is an emoji.
+    fun testALineBreakAfterTheVerbIsTrimmedOffTheBody() {
+        // Until lurker-ios#197, `argLine` kept the break (only spaces and tabs were trimmed off
+        // it) while the tokens were split past it, so "the body after the first token" was cut
+        // one `Character` early, into the token. Now the break is trimmed with the spaces and
+        // the body is cut after the token, whatever its units: a CR-LF, an emoji.
         assertEquals(
-            listOf<CommandEffect>(CommandEffect.Notice(target = "bob", text = "b hi")),
+            listOf<CommandEffect>(CommandEffect.Notice(target = "bob", text = "hi")),
             effects("/notice\nbob hi"),
         )
         assertEquals(
-            listOf<CommandEffect>(CommandEffect.Notice(target = "bob", text = "b hi")),
+            listOf<CommandEffect>(CommandEffect.Notice(target = "bob", text = "hi")),
             effects("/notice\r\nbob hi"),
         )
         assertEquals(
-            listOf<CommandEffect>(CommandEffect.Notice(target = "👍bob", text = "b hi")),
+            listOf<CommandEffect>(CommandEffect.Notice(target = "👍bob", text = "hi")),
             effects("/notice\n👍bob hi"),
         )
         assertEquals(
-            listOf<CommandEffect>(CommandEffect.Raw(line = "TOPIC #other :r new")),
+            listOf<CommandEffect>(CommandEffect.Raw(line = "TOPIC #other :new")),
             effects("/topic\r\n#other new"),
+        )
+        // A mark after the break starts the token; it fuses with nothing.
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Notice(target = "${0x0301.toChar()}bob", text = "hi")),
+            effects("/notice\n${0x0301.toChar()}bob hi"),
+        )
+        // The body's own trim takes every line break Swift calls a newline.
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Notice(target = "bob", text = "hi")),
+            effects("/notice bob\r\n\u2028hi\u0085"),
         )
     }
 

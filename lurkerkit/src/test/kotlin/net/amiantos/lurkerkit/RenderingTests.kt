@@ -216,6 +216,34 @@ class RenderingTests {
     }
 
     @Test
+    fun testNickColorLowersAFinalSigmaLikeTheWeb() {
+        // lurker-ios#199: JavaScript's `toLowerCase()` (and Java's) applies Final_Sigma and
+        // Swift's `lowercased()` doesn't, so `ΑΛΕΞΗΣ` hashed to a different colour on iOS.
+        // Expected values are what `toLowerCase()` returns in node.
+        fun text(vararg codePoints: Int): String = String(codePoints, 0, codePoints.size)
+        fun scalars(s: String): List<Int> = NickColor.lowercasedLikeTheWeb(s).codePoints().toArray().toList()
+        assertEquals(listOf(0x3B1, 0x3BB, 0x3B5, 0x3BE, 0x3B7, 0x3C2), scalars(text(0x0391, 0x039B, 0x0395, 0x039E, 0x0397, 0x03A3)))
+        assertEquals(listOf(0x3C3), scalars(text(0x03A3)), "no cased letter before it: not final")
+        assertEquals(listOf(0x3C3, 0x3B1, 0x3C2), scalars(text(0x03A3, 0x0391, 0x03A3)))
+        assertEquals(listOf(0x3B1, 0x3C2, 0x2E), scalars(text(0x0391, 0x03A3, 0x2E)), "a case-ignorable after it is skipped")
+        assertEquals(listOf(0x3B1, 0x3C3, 0x27, 0x3B1), scalars(text(0x0391, 0x03A3, 0x27, 0x0391)), "a letter after the apostrophe")
+        assertEquals(listOf(0x3B1, 0x3C2, 0x31), scalars(text(0x0391, 0x03A3, 0x31)))
+        assertEquals(
+            NickColor.index(text(0x03B1, 0x03BB, 0x03B5, 0x03BE, 0x03B7, 0x03C2)),
+            NickColor.index(text(0x0391, 0x039B, 0x0395, 0x039E, 0x0397, 0x03A3)),
+        )
+    }
+
+    @Test
+    fun testNickColorStopCharsAreCodePointsLikeTheWeb() {
+        // A combining mark on the `_` makes `_` + U+0301 one Character; the web's `for…of`
+        // walks code points and still stops at the `_`.
+        val marked = "bob_" + 0x0301.toChar()
+        assertEquals("bob", NickColor.trimForColor(marked))
+        assertEquals(NickColor.index("bob"), NickColor.index(marked))
+    }
+
+    @Test
     fun testNickColorIndexInRange() {
         for (nick in listOf("a", "somebody", "🙂user", "___", "z9")) {
             val index = NickColor.index(nick)

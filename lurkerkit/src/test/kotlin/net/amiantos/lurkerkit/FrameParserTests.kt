@@ -171,6 +171,18 @@ class FrameParserTests {
     }
 
     @Test
+    fun testMessageTextKeepsALeadingByteOrderMark() {
+        // lurker-ios#196: Foundation strips one leading U+FEFF from every string; the web and
+        // the server keep it.
+        val frame = FrameParser.parseWs(
+            "{\"kind\":\"backlog\",\"networkId\":1,\"target\":\"#lurker\",\"hasMoreOlder\":false,\"events\":[{\"id\":1,\"type\":\"message\",\"nick\":\"alice\",\"text\":\"${0xFEFF.toChar()}pasted\"}]}",
+        )
+        if (frame !is ServerFrame.Backlog) fail("expected backlog, got $frame")
+        val messages = frame.messages
+        assertEquals(0xFEFF.toChar(), messages.firstOrNull()?.text?.firstOrNull())
+    }
+
+    @Test
     fun testLiveIrcFrameReadsTheEventSpreadFlatOnTheFrame() {
         val frame = FrameParser.parseWs(
             """{"kind":"irc","id":7,"networkId":1,"target":"#lurker","type":"message","nick":"carol","text":"yo","self":false,"matched":true}""",
@@ -647,7 +659,9 @@ class FrameParserTests {
     // LurkerKit's `FrameParser` over the same text. kotlinx's answer is the one kept (see
     // `FrameParser.object`'s Port note), and this is where each difference is written down. None
     // of these inputs can come from `JSON.stringify`, bar the lone surrogate and the string that
-    // begins with U+FEFF.
+    // begins with U+FEFF — the two LurkerKit's `JSONTextRepair` now works around on iOS
+    // (lurker-ios#195, #196), which is not ported. With it, a leading U+FEFF reads the same on
+    // both sides, and a lone surrogate is read on both, as U+FFFD on iOS and as itself here.
 
     /** U+FEFF, built from its number so no editor can quietly lose it from the source. */
     private val mark = 0xFEFF.toChar().toString()
@@ -666,9 +680,10 @@ class FrameParserTests {
     }
 
     /**
-     * differs: ⚠ Foundation drops one leading U+FEFF from every string it decodes — a value or a
-     * key, raw or escaped, at any depth — so on iOS a message that begins with one arrives
-     * without it. Here the string is what the server sent.
+     * Agrees since lurker-ios#196. Foundation drops one leading U+FEFF from every string it
+     * decodes — a value or a key, raw or escaped, at any depth — so LurkerKit's
+     * `JSONTextRepair` writes a second for it to eat, and iOS gives these answers too. kotlinx
+     * keeps the string as the server sent it, with nothing to repair.
      */
     @Test
     fun testALeadingBomInAStringIsKept() {
@@ -676,7 +691,7 @@ class FrameParserTests {
         assertEquals(ServerFrame.ServerError("${mark}bom"), FrameParser.parseWs("""{"kind":"error","text":"${escaped("feff")}bom"}"""))
         assertEquals(ServerFrame.ServerError(mark), FrameParser.parseWs("""{"kind":"error","text":"$mark"}"""))
         assertEquals(ServerFrame.ServerError("mid${mark}bom"), FrameParser.parseWs("""{"kind":"error","text":"mid${mark}bom"}"""))
-        // A key too: on iOS `\ufeffkind` is `kind`; here it is a key nothing reads.
+        // A key too: it is a key nothing reads.
         assertEquals(ServerFrame.Ignored, FrameParser.parseWs("""{"${mark}kind":"error","text":"key"}"""))
         assertEquals(ServerFrame.Ignored, FrameParser.parseWs("""{"kind":"${mark}error","text":"kind"}"""))
         // Deep inside a frame: the nick, not just the text.
@@ -767,9 +782,10 @@ class FrameParserTests {
 
     /**
      * differs: ⚠ a lone surrogate written as an escape — which is what `JSON.stringify` writes
-     * for half an emoji a `slice` left behind — fails the whole document in Foundation, so iOS
-     * drops the frame. Here the frame is read and the string keeps the lone unit. A valid pair
-     * reads on both.
+     * for half an emoji a `slice` left behind — fails the whole document in Foundation, so
+     * LurkerKit's `JSONTextRepair` rewrites it to U+FFFD first and iOS reads the frame with a
+     * U+FFFD in its place (lurker-ios#195). Here the frame is read and the string keeps the lone
+     * unit. A valid pair reads the same on both.
      */
     @Test
     fun testALoneSurrogateEscapeIsReadNotDropped() {
@@ -806,8 +822,8 @@ class FrameParserTests {
     fun testARepeatedKeyKeepsTheLastValue() {
         assertEquals(ServerFrame.ServerError("b"), FrameParser.parseWs("""{"kind":"error","text":"a","text":"b"}"""))
         assertEquals(ServerFrame.BacklogComplete, FrameParser.parseWs("""{"kind":"error","kind":"backlog-complete","text":"dup"}"""))
-        // Two keys that differ only by a leading mark are two keys here; Foundation strips the
-        // mark and keeps the first.
+        // Two keys that differ only by a leading mark are two keys, on both sides since
+        // lurker-ios#196 (LurkerKit doubles the mark for Foundation to strip).
         assertEquals(ServerFrame.ServerError("a"), FrameParser.parseWs("""{"text":"a","${mark}text":"b","kind":"error"}"""))
     }
 
@@ -985,4 +1001,23 @@ class FrameParserTests {
         assertEquals(setOf("values"), FrameParser.jsonObject("""{"values":{"a":1}}""")?.keys)
         assertNull(FrameParser.jsonObject("""["values"]"""))
     }
+
+    /**
+     * LurkerKit's `testBacklogWithALoneSurrogateKeepsEveryRow`, over the same frame: every row
+     * survives on both sides, and the cut row ends in U+FFFD on iOS (`JSONTextRepair`) and in
+     * the lone high half the server sent here.
+     */
+    @Test
+    fun testBacklogWithALoneSurrogateKeepsEveryRowAndTheLoneHalf() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"backlog","networkId":1,"target":"#lurker","hasMoreOlder":false,"events":[{"id":1,"type":"message","nick":"alice","text":"cut ${escaped("d83d")}"},{"id":2,"type":"message","nick":"bob","text":"fine"}]}""",
+        )
+        if (frame !is ServerFrame.Backlog) fail("expected backlog, got $frame")
+        assertEquals(listOf("cut ${0xD83D.toChar()}", "fine"), frame.messages.map { it.text })
+    }
+
+    // Not ported: testBacklogWithALoneSurrogateKeepsEveryRow — it pins `JSONTextRepair`'s
+    // output (the lone half read as U+FFFD), a workaround for Foundation's decoder that kotlinx
+    // does not need; `testBacklogWithALoneSurrogateKeepsEveryRowAndTheLoneHalf` pins what is read
+    // here instead.
 }

@@ -93,15 +93,87 @@ object NickColor {
     /**
      * The index into `IRCPalette.nick` for `nick`. Trims trailing stop chars, lowercases,
      * then hashes with weechat's djb2 variant.
-     *
-     * Port note: `lowercase()` applies Unicode's final-sigma rule, as the web's `toLowerCase()`
-     * does and Swift's `lowercased()` does not. A nick ending in a capital `Σ` therefore gets
-     * the web's colour here, and a different one on iOS.
      */
     fun index(nick: String, paletteCount: Int = IRCPalette.nick.size): Int {
-        val key = trimForColor(nick).lowercase()
+        val key = lowercasedLikeTheWeb(trimForColor(nick))
         return (djb2(key) % maxOf(paletteCount, 1).toUInt()).toInt()
     }
+
+    /**
+     * `lowercased()` plus the one rule it leaves out and JavaScript's `toLowerCase()` applies:
+     * a capital sigma that ends a word lowers to final `ς`, not `σ` (Unicode's Final_Sigma).
+     * The palette is keyed on the lowered nick, so `ΑΛΕΞΗΣ` hashed to a different colour on iOS
+     * than on the web (lurker-ios#199).
+     *
+     * Port note: written out rather than left to `lowercase()`, which applies a Final_Sigma
+     * rule of its own: the JDK's disagreed with node's `toLowerCase()` on 204 of 6,026 random
+     * strings of Greek, marks, apostrophes and punctuation (this function and the Swift agreed
+     * with node on all but the eight below), and Android's runtime has its own implementation,
+     * not measured. Spelled out, it is the Swift's rule on every runtime. The lowercase mapping
+     * of each other code point is `lowercase()` of that code point alone, which is its full
+     * (unconditional) mapping, as `lowercaseMapping` is.
+     */
+    internal fun lowercasedLikeTheWeb(string: String): String {
+        if (string.indexOf(CAPITAL_SIGMA.toChar()) < 0) return string.lowercase()
+        val scalars = string.codePoints().toArray()
+        val out = StringBuilder()
+        for ((index, scalar) in scalars.withIndex()) {
+            if (scalar == CAPITAL_SIGMA && isFinalSigma(index, scalars)) {
+                out.append(0x03C2.toChar())
+            } else {
+                out.append(String(Character.toChars(scalar)).lowercase())
+            }
+        }
+        return out.toString()
+    }
+
+    private const val CAPITAL_SIGMA = 0x03A3
+
+    /**
+     * Final_Sigma: after a cased letter and not before one, skipping case-ignorables
+     * (apostrophes, combining marks) on both sides.
+     */
+    private fun isFinalSigma(index: Int, scalars: IntArray): Boolean {
+        val before = (index - 1 downTo 0).map { scalars[it] }.firstOrNull { !isCaseIgnorable(it) }
+        val after = (index + 1 until scalars.size).map { scalars[it] }.firstOrNull { !isCaseIgnorable(it) }
+        return before != null && isCased(before) && !(after != null && isCased(after))
+    }
+
+    /**
+     * Unicode's `Cased`: `Lowercase`, `Uppercase` or a titlecase letter. Port-only — Swift asks
+     * `Unicode.Scalar.Properties.isCased`. `Character.isLowerCase`/`isUpperCase` include
+     * `Other_Lowercase`/`Other_Uppercase`, as `Lowercase`/`Uppercase` do.
+     */
+    private fun isCased(scalar: Int): Boolean =
+        Character.isLowerCase(scalar) || Character.isUpperCase(scalar) || Character.isTitleCase(scalar)
+
+    /**
+     * Unicode's `Case_Ignorable`: a mark (Mn, Me), a format character (Cf), a modifier (Lm,
+     * Sk), or a `Word_Break` of `MidLetter`, `MidNumLet` or `Single_Quote`. Port-only — Swift
+     * asks `Unicode.Scalar.Properties.isCaseIgnorable`; Java has no such property, so it is
+     * built from the general category and the `Word_Break` code points listed in
+     * `WordBreakProperty.txt`. Port note: each runtime's general categories follow its own
+     * Unicode version, so a code point assigned since can answer differently: JDK 21 has
+     * Unicode 15, where U+10D4E (Garay, new in 16) is unassigned and so not case-ignorable,
+     * which was the whole of the eight differences above.
+     */
+    private fun isCaseIgnorable(scalar: Int): Boolean =
+        when (Character.getType(scalar).toByte()) {
+            Character.NON_SPACING_MARK, Character.ENCLOSING_MARK, Character.FORMAT,
+            Character.MODIFIER_LETTER, Character.MODIFIER_SYMBOL,
+            -> true
+            else -> scalar in wordBreakCaseIgnorables
+        }
+
+    /** `Word_Break` = `MidLetter`, `MidNumLet` or `Single_Quote`. Port-only. */
+    private val wordBreakCaseIgnorables: Set<Int> = setOf(
+        // MidLetter
+        0x003A, 0x00B7, 0x0387, 0x055F, 0x05F4, 0x2027, 0xFE13, 0xFE55, 0xFF1A,
+        // MidNumLet
+        0x002E, 0x2018, 0x2019, 0x2024, 0xFE52, 0xFF07, 0xFF0E,
+        // Single_Quote
+        0x0027,
+    )
 
     /**
      * weechat `gui_color_get_custom`: `h = h ^ ((h << 5) + (h >> 2) + cp)` per code point,
@@ -125,23 +197,22 @@ object NickColor {
     /**
      * Trim trailing "away/alt" stop chars: keep leading stop chars, but once a real char
      * has been seen, stop at the next stop char (`amiantos__` / `amiantos|` → `amiantos`).
-     *
-     * Port note: the Swift walks grapheme clusters and this walks UTF-16 units. Both stop
-     * chars are ASCII, so the two agree unless a `_` or `|` carries a combining mark — one
-     * cluster to Swift, and so not a stop char there, where here the `_` still is one. The
-     * web walks code points, so on that nick this agrees with the web.
+     * Walks code points, as the web's `for…of` does, not grapheme clusters: `bob_` plus a
+     * combining mark is one cluster whose `_` would otherwise never read as a stop.
      */
-    internal fun trimForColor(nick: String, stopChars: Set<Char> = setOf('_', '|')): String {
+    internal fun trimForColor(nick: String, stopChars: Set<Int> = setOf('_'.code, '|'.code)): String {
         val result = StringBuilder()
         var seenNonStop = false
-        for (character in nick) {
-            if (character in stopChars) {
+        var i = 0
+        while (i < nick.length) {
+            val scalar = nick.codePointAt(i)
+            if (scalar in stopChars) {
                 if (seenNonStop) break
-                result.append(character)
             } else {
                 seenNonStop = true
-                result.append(character)
             }
+            result.appendCodePoint(scalar)
+            i += Character.charCount(scalar)
         }
         return result.toString()
     }

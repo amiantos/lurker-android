@@ -365,11 +365,8 @@ object IgnoreArgs {
         // was typed in. Its rejection arrives as silence — `wsHub`'s `add-ignore` drops a
         // failed validation with a bare `break` and sends nothing back — so anything caught
         // there and not here is confirmed as added and simply never exists.
-        //
-        // Port note: `length` — UTF-16 units — where LurkerKit counts `Character`s. The limit
-        // being mirrored is the server's `pattern.length`, which is units too, so a pattern of
-        // emoji or combining marks that iOS lets through at 512 graphemes (and the server then
-        // drops in silence, the very thing this check is for) is refused here.
+        // UTF-16 units, as the server's `pattern.length` counts them: 400 flag emoji are 400
+        // Characters and 1,600 units, which the server refuses.
         if (pattern != null && pattern.length > maxPatternLength) {
             return fail("pattern exceeds $maxPatternLength chars")
         }

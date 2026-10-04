@@ -10,7 +10,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import net.amiantos.lurkerkit.support.removingPercentEncoding
-import net.amiantos.lurkerkit.support.utf8OrNull
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -267,11 +266,7 @@ object OAuth {
             .build()
     }
 
-    /**
-     * Port note: a body that is not UTF-8 is no object here; `JSONSerialization` would also try
-     * UTF-16 and UTF-32. The JSON is read by `FrameParser`, as every body is (PORTING.md, JSON).
-     */
-    private fun json(data: ByteString): JsonObject? = data.utf8OrNull()?.let { FrameParser.jsonObject(it) }
+    private fun json(data: ByteString): JsonObject? = FrameParser.jsonObject(data)
 
     /**
      * `URLComponents(url:resolvingAgainstBaseURL:)?.queryItems`, by hand: the query is what lies
