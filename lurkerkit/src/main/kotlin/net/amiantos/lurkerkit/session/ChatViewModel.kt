@@ -1241,9 +1241,10 @@ class ChatViewModel(
         // Recorded rather than acted on inline so the remaining effects still run: a command that
         // is half machinery should not stop halfway because one send found no socket.
         var wentNowhere = false
-        // The verbs with no `send-result` of their own — `/topic`, `/nick`, `/part`, `/away` and
-        // the rest. Nothing is in flight when one goes out, so the correlator is minted only for a
-        // failure, to carry the line back; before sweep L02 they were dropped without a word.
+        // Every wire effect reports here. The message verbs mint their correlator before sending,
+        // since it rides the verb; the rest — `/topic`, `/nick`, `/part`, `/away` — have no
+        // `send-result`, so theirs is minted only for a failure, to carry the line back. Before
+        // sweep L02 those were dropped without a word.
         fun wire(went: Boolean) {
             if (went) return
             correlator()
@@ -1253,20 +1254,25 @@ class ChatViewModel(
             when (effect) {
                 is CommandEffect.Send -> {
                     val clientId = correlator()
-                    val went = sendMessageSeam?.invoke(effect.target, effect.text)
-                        ?: client.sendMessage(networkId = networkId, target = effect.target, text = effect.text, clientId = clientId)
-                    wentNowhere = !went || wentNowhere
+                    wire(
+                        sendMessageSeam?.invoke(effect.target, effect.text)
+                            ?: client.sendMessage(networkId = networkId, target = effect.target, text = effect.text, clientId = clientId),
+                    )
                 }
                 is CommandEffect.Action ->
                     // A `/me` can be the reply — `reply` is null for every other command (see `send`).
-                    wentNowhere = !client.sendAction(
-                        networkId = networkId, target = effect.target, text = effect.text, clientId = correlator(),
-                        replyTo = if (effect.target == key.target) reply?.messageId else null,
-                    ) || wentNowhere
+                    wire(
+                        client.sendAction(
+                            networkId = networkId, target = effect.target, text = effect.text, clientId = correlator(),
+                            replyTo = if (effect.target == key.target) reply?.messageId else null,
+                        ),
+                    )
                 is CommandEffect.Notice ->
-                    wentNowhere = !client.sendNotice(
-                        networkId = networkId, target = effect.target, text = effect.text, clientId = correlator(),
-                    ) || wentNowhere
+                    wire(
+                        client.sendNotice(
+                            networkId = networkId, target = effect.target, text = effect.text, clientId = correlator(),
+                        ),
+                    )
                 is CommandEffect.Raw ->
                     wire(client.sendRaw(networkId = networkId, line = effect.line))
                 is CommandEffect.ShowProfile ->
@@ -2328,6 +2334,10 @@ class ChatViewModel(
                 // banner already names the outage, and a "No response" for each would only pile up
                 // behind it (lurker-ios#57).
                 pendingJoins.removeAll()
+                // And the read marks are asked again. One written into a socket that had died
+                // without saying so was recorded as sent, and the dedupe would skip it for good
+                // (sweep L23). The server MAX-clamps, so a mark that did land costs one redundant write.
+                lastMarked.clear()
                 store.apply(frame)
                 onSocketDropped()
             }

@@ -174,6 +174,12 @@ fun BufferListScreen(
     LaunchedEffect(inputs.favorites) {
         if (optimistic?.isCurrent(inputs.favorites) == false) optimistic = null
     }
+    // …and so does the socket ending. The shadow waits for an echo the dropped socket took with it,
+    // and the reconnect's burst re-sends the list unchanged, which releases nothing (sweep L29) — the
+    // case of a drop written into a socket that had died without saying so.
+    LaunchedEffect(inputs.connection) {
+        if (inputs.connection != SocketStatus.Connected) optimistic = null
+    }
 
     // Stage two. `inputs` compares by identity, so this rebuilds exactly when stage one let a frame
     // through, or the shadow order moved.

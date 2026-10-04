@@ -575,19 +575,15 @@ internal class ComposerState(
      * local change — the strip comes down when the server's `away-state` echo folds in, on every
      * device at once.
      *
-     * ⚠ Asked of the connection, not of the send: a dropped socket stays assigned until the
-     * reconnect replaces it, so a write onto it "succeeds" and goes nowhere. And of BOTH signals:
-     * airplane mode flips `reachable` while the socket still reads connected, for as long as it takes
-     * to notice. Nothing retries a Back, so say so, or the strip staying put reads as a Back that
-     * ignored you.
+     * ⚠ Asked of the connection AND of the send. Of BOTH connection signals: airplane mode flips
+     * `reachable` while the socket still reads connected, for as long as it takes to notice. And of
+     * the send, which says when there was no socket to take it. Nothing retries a Back, so say so,
+     * or the strip staying put reads as a Back that ignored you.
      */
     fun back() {
         val state = model.state
-        if (state.reachable && state.connection == SocketStatus.Connected) {
-            model.setBack(key.networkId)
-        } else {
-            notice("Not connected — try again when you're back online")
-        }
+        if (state.reachable && state.connection == SocketStatus.Connected && model.setBack(key.networkId)) return
+        notice("Not connected — try again when you're back online")
     }
 }
 

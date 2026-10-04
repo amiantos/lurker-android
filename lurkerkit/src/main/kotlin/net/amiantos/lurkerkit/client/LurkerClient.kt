@@ -137,6 +137,14 @@ internal class LurkerClient(
     private var socket: WebSocket? = null
 
     /**
+     * The socket has ended, and the reconnect hasn't replaced it yet. ⚠⚠ The socket is kept —
+     * `dropSocket` and the `task !== socket` guards still need it — but nothing can be written to
+     * it, so `send` answers false. Without this, every write made while "Reconnecting…" showed
+     * reported true and went nowhere, which is the window the callers' Boolean exists for.
+     */
+    private var socketEnded = false
+
+    /**
      * Which socket this is, counting from the first — so a caller can tie something it learned
      * from a frame to the socket that sent it. Bumped the moment a socket is made, before it
      * opens, because writes start going to it then.
@@ -740,6 +748,7 @@ internal class LurkerClient(
         // can land before the two lines below have run.
         val task = session.newWebSocket(request, SocketListener())
         socket = task
+        socketEnded = false
         socketGeneration += 1
     }
 
@@ -856,6 +865,7 @@ internal class LurkerClient(
 
     private fun handleClose(code: Int?, closeCode: Int, reason: String, task: WebSocket) {
         if (task !== socket) return
+        socketEnded = true
         abandonReplies()
         onFrame(closeFrame(status = code, closeCode = closeCode, reason = reason))
     }
@@ -999,11 +1009,11 @@ internal class LurkerClient(
      * A raw IRC line — the escape hatch behind `/nick`, `/mode`, `/kick`, `/whois`, the
      * service messages, the server queries, and every unrecognized command.
      *
-     * **Returns false when it went nowhere.** Most callers rightly ignore that — a raw line
-     * is fire-and-forget and its answer is whatever the server buffer prints. The WHOIS
-     * behind the profile screen is the exception, and it is why this returns at all: it
-     * claims an in-flight slot that only a reply can free, so a line that never left the
-     * socket would wedge that nick's lookup for the session (see `whoisPending`).
+     * **Returns false when it went nowhere.** A typed `/quote` (and every command that goes out
+     * raw) is handed back to the composer on false (sweep L02). The WHOIS behind the profile
+     * screen needs it too: it claims an in-flight slot that only a reply can free, so a line
+     * that never left the socket would wedge that nick's lookup for the session (see
+     * `whoisPending`).
      */
     fun sendRaw(networkId: Int?, line: String): Boolean {
         if (networkId == null) return false
@@ -1834,7 +1844,8 @@ internal class LurkerClient(
      * "written" OkHttp exposes, and what a background-allowance release has to wait for. A
      * refused frame takes LurkerKit's write-failure path — `onComplete` false, and for a
      * deliberate write the "Send failed" error, raised after this returns as LurkerKit raises
-     * it — while this still answers true, a socket having been there to take it. OkHttp gives
+     * it — and this answers false, which LurkerKit can't: OkHttp knows at once that the frame
+     * went nowhere, and every caller that checks is better for hearing it. OkHttp gives
      * no reason for a refusal; the one shown is the POSIX `ENOTCONN` text iOS reports for a
      * write to a dead socket.
      */
@@ -1845,7 +1856,7 @@ internal class LurkerClient(
         onComplete: ((ok: Boolean) -> Unit)? = null,
     ): Boolean {
         val socket = socket
-        if (socket == null) {
+        if (socket == null || socketEnded) {
             onFlush?.invoke()
             return false
         }
@@ -1860,7 +1871,7 @@ internal class LurkerClient(
             }
             onFlush?.invoke()
         }
-        return true
+        return queued
     }
 
     /**
