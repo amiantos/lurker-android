@@ -36,19 +36,23 @@ sealed interface HighlightDay {
          * asked two things here, where a day starts and what the day before it is, and its time
          * zone settles both.
          *
-         * Port note: as in LurkerKit, yesterday is `todayStart` moved back a calendar day, held
-         * against the row's own start of day — so beside a clock change that lands on midnight
-         * the day before can come out as `On`, on both platforms alike. Checked against the Swift
-         * for a `now` on every day of 2000–2030 in every zone the two know; they differ only
-         * where their time-zone data does (a rule change one has and the other has not yet).
+         * Port note: as in LurkerKit, yesterday is `todayStart` moved back a calendar day, and
+         * the row is yesterday when it falls on the same day as that instant
+         * (`Calendar.isDate(_:inSameDayAs:)`, here the two start-of-days compared). Checked
+         * against the Swift for a `now` on every day of 2000–2030 in every zone the two know;
+         * they differ only where their time-zone data does (a rule change one has and the other
+         * has not yet).
          */
         fun of(date: Instant?, now: Instant, zone: ZoneId): HighlightDay {
             if (date == null) return Undated
             val dayStart = startOfDay(date, zone)
             val todayStart = startOfDay(now, zone)
+            // Yesterday is asked as a calendar day, not compared as an instant: where a DST change
+            // moves midnight (Havana, Santiago, Cairo), today's start minus a day lands at 01:00
+            // on a yesterday that began at 00:00, and its rows got a dated header instead.
             return if (dayStart == todayStart) {
                 Today
-            } else if (dayStart == dayBefore(todayStart, zone)) {
+            } else if (dayStart == startOfDay(dayBefore(todayStart, zone), zone)) {
                 Yesterday
             } else {
                 On(dayStart)

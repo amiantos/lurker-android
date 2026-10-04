@@ -74,6 +74,13 @@ class ComposerTypingTest {
     }
 
     @Test
+    fun `a double-slash escape is a message, so it claims typing`() {
+        assertEquals(true, typing.draftChanged("//shrug", t0))
+        assertEquals(true, typing.draftChanged(" //shrug", t0.plusSeconds(4)))
+        assertEquals(listOf(TypingSignal.Active, TypingSignal.Active), sent)
+    }
+
+    @Test
     fun `ending says done only when the network thinks we're typing`() {
         typing.ended()
         assertTrue(sent.isEmpty())

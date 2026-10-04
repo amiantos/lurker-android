@@ -129,7 +129,9 @@ object CommandParser {
         // UTF-16 length (`İ` lowercases to two units), which is what is dropped here.
         val typed = body.takeWhile { !it.isSwiftWhitespace() }
         val verb = typed.lowercase()
-        val argLine = body.substring(typed.length).trimmingWhitespaces()
+        // Newlines too, like the web's `trim()`: `/me⏎waves` (a multi-line paste, a
+        // shift-return) would otherwise send the newline at the front of the action.
+        val argLine = body.substring(typed.length).trimmingWhitespacesAndNewlines()
         val rest = if (argLine.isEmpty()) emptyList() else argLine.splitOnSwiftWhitespace()
 
         return ParsedInput.Command(
@@ -969,22 +971,22 @@ object CommandParser {
 
     /**
      * The body of a command after its first token, interior spacing preserved — the web's
-     * `argLine.slice(first.length).trim()`. `argLine` begins with `first`.
+     * `argLine.slice(first.length).trim()`. `argLine` begins with `first`. Newlines are
+     * trimmed too, as `trim()` does: `/topic #chan⏎new topic` mustn't start with one.
      *
      * Port note: LurkerKit drops `first.count` `Character`s from `argLine` whatever it begins
      * with. Where it does begin with `first` — the case the line above describes — that is
-     * `first`'s UTF-16 length, and it is cut as such. It does not when a line break follows the
-     * verb (`/notice⏎bob hi`): the edge trim leaves the break on `argLine` while the tokens are
-     * split past it, so the cut lands inside the token instead of after it. That is LurkerKit's
-     * behaviour and it is kept, counted the way LurkerKit counts it — by grapheme cluster, see
-     * `characterBoundaries` — because counting units there cuts a CR-LF in half and can leave
-     * half a surrogate pair on the wire.
+     * `first`'s UTF-16 length, and it is cut as such. Should it ever not, the cut is counted the
+     * way LurkerKit counts it — by grapheme cluster, see `characterBoundaries` — because counting
+     * units there could cut a CR-LF in half or leave half a surrogate pair on the wire. (A line
+     * break after the verb was the one way in, `/notice⏎bob hi`, until lurker-ios#197 trimmed
+     * newlines off `argLine` too.)
      */
     private fun body(first: String, argLine: String): String {
-        if (argLine.startsWith(first)) return argLine.substring(first.length).trimmingWhitespaces()
+        if (argLine.startsWith(first)) return argLine.substring(first.length).trimmingWhitespacesAndNewlines()
         val count = characterBoundaries(first).size
         val cut = characterBoundaries(argLine).getOrNull(count - 1) ?: argLine.length
-        return argLine.substring(cut).trimmingWhitespaces()
+        return argLine.substring(cut).trimmingWhitespacesAndNewlines()
     }
 
     /** Where each of `text`'s Swift `Character`s ends — `support.graphemeBoundaries`. */

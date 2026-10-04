@@ -117,6 +117,23 @@ class OutgoingTypingTests {
     }
 
     @Test
+    fun testACommandAfterLeadingWhitespaceIsStillACommand() {
+        // lurker-ios#202: the composer trims before sending, so ` /whois al` runs as a command;
+        // announcing typing for it would be the same leak as for `/whois al`.
+        val typing = OutgoingTyping()
+        assertNull(typing.draftChanged(" /whois al", t0))
+        assertNull(typing.draftChanged("\n/join #x", t0.addingTimeInterval(1.0)))
+        assertFalse(typing.isSignalling)
+    }
+
+    @Test
+    fun testADoubleSlashEscapeIsAMessageAndIsAnnounced() {
+        // `//shrug` goes to the channel as `/shrug`, so it is composing like any other line.
+        val typing = OutgoingTyping()
+        assertEquals(TypingSignal.Active, typing.draftChanged("//shrug", t0))
+    }
+
+    @Test
     fun testTurningAMessageIntoACommandSaysDone() {
         val typing = OutgoingTyping()
         typing.draftChanged("hello", t0)

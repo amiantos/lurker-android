@@ -21,6 +21,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * Behaviour of the client-side preview store, with the resolver stubbed.
@@ -93,13 +94,23 @@ class LinkPreviewStoreTests {
         return condition()
     }
 
+    /**
+     * Wait until the store has written its answer for every one of `urls` — a value, a verdict,
+     * or a retry entry. `isPending` turns false at exactly that write (the flush clears `pending`
+     * before the round trip, but `asked` holds the URL until it is answered), so this waits for
+     * the event itself rather than betting `settle()` on how fast CI is. Only for a FIRST ask: a
+     * re-queued URL with a retry entry already reads as settled.
+     */
+    private suspend fun TestScope.answered(store: LinkPreviewStore, urls: List<String>): Boolean =
+        eventually { urls.all { !store.isPending(it) } }
+
     // "resolves what it's asked for and serves it back"
     @Test
     fun resolves() = runTest {
         val stub = Stub()
         val store = makeStore(stub)
         store.request(listOf("https://e.test/a.png"))
-        settle()
+        assertTrue(answered(store, listOf("https://e.test/a.png")))
         assertEquals("/proxy/https://e.test/a.png", store.preview("https://e.test/a.png")?.src)
     }
 
@@ -109,7 +120,7 @@ class LinkPreviewStoreTests {
         val stub = Stub()
         val store = makeStore(stub)
         store.request(listOf("https://e.test/1", "https://e.test/2", "https://e.test/3"))
-        settle()
+        assertTrue(answered(store, listOf("https://e.test/1", "https://e.test/2", "https://e.test/3")))
         assertEquals(1, stub.batches.size)
         assertEquals(3, stub.batches.firstOrNull()?.size)
     }
@@ -120,7 +131,7 @@ class LinkPreviewStoreTests {
         val stub = Stub()
         val store = makeStore(stub)
         store.request(listOf("https://e.test/x", "https://e.test/x"))
-        settle()
+        assertTrue(answered(store, listOf("https://e.test/x")))
         store.request(listOf("https://e.test/x"))
         settle()
         assertEquals(listOf("https://e.test/x"), stub.batches.flatten())
@@ -185,7 +196,7 @@ class LinkPreviewStoreTests {
         val store = makeStore(stub)
 
         store.request(listOf("https://e.test/gone"))
-        settle()
+        assertTrue(answered(store, listOf("https://e.test/gone")))
         assertEquals(1, stub.batches.size)
         assertNull(store.retry["https://e.test/gone"], "nothing armed, so nothing polls")
         assertFalse(store.runDueReasks(), "and nothing ever comes due")
@@ -201,9 +212,8 @@ class LinkPreviewStoreTests {
         val stub = Stub()
         val store = makeStore(stub)
         store.request((0..<25).map { "https://e.test/$it" })
-        // Batches after the first are paced, so this needs longer than the coalesce window.
-        delay(900)
-        assertEquals(2, stub.batches.size)
+        // Batches after the first are paced 600ms apart: waited for, not slept through.
+        assertTrue(eventually { stub.batches.size == 2 })
         assertEquals(20, stub.batches[0].size)
         assertEquals(5, stub.batches[1].size)
     }
@@ -214,7 +224,7 @@ class LinkPreviewStoreTests {
         val stub = Stub()
         val store = makeStore(stub)
         store.request(listOf("https://e.test/a"))
-        settle()
+        assertTrue(answered(store, listOf("https://e.test/a")))
         assertNotNull(store.preview("https://e.test/a"))
 
         store.reset()
@@ -222,7 +232,7 @@ class LinkPreviewStoreTests {
 
         // And `asked` cleared too, so the next account's server is actually consulted.
         store.request(listOf("https://e.test/a"))
-        settle()
+        assertTrue(answered(store, listOf("https://e.test/a")))
         assertEquals(2, stub.batches.size)
     }
 
@@ -242,7 +252,7 @@ class LinkPreviewStoreTests {
         }
         val store = makeStore(stub)
         store.request(listOf("https://e.test/a", "https://e.test/ghost"))
-        settle()
+        assertTrue(answered(store, listOf("https://e.test/a", "https://e.test/ghost")))
 
         assertEquals("T", store.preview("https://e.test/a")?.title)
         assertNull(store.preview("https://e.test/ghost"))
@@ -267,7 +277,7 @@ class LinkPreviewStoreTests {
         }
         val store = makeStore(stub, clock)
         store.request(listOf("https://e.test/busy"))
-        settle()
+        assertTrue(answered(store, listOf("https://e.test/busy")))
         assertEquals(1, stub.batches.size)
         assertNotNull(store.retry["https://e.test/busy"])
 
@@ -278,8 +288,7 @@ class LinkPreviewStoreTests {
 
         clock.date = clock.date.plusSeconds(60)
         assertTrue(store.runDueReasks())
-        settle()
-        assertEquals(2, stub.batches.size, "the URL is asked about a second time")
+        assertTrue(eventually { stub.batches.size == 2 }, "the URL is asked about a second time")
     }
 
     // "never re-asks a VERDICT, so a dead link is not a perpetual poller"
@@ -302,7 +311,7 @@ class LinkPreviewStoreTests {
         }
         val store = makeStore(stub, clock)
         store.request(listOf("https://e.test/dead"))
-        settle()
+        assertTrue(answered(store, listOf("https://e.test/dead")))
         assertNull(store.retry["https://e.test/dead"], "a verdict arms nothing")
 
         clock.date = clock.date.plusSeconds(600)
@@ -328,7 +337,7 @@ class LinkPreviewStoreTests {
         }
         val store = makeStore(stub, clock)
         store.request(listOf("https://e.test/dead"))
-        settle()
+        assertTrue(answered(store, listOf("https://e.test/dead")))
 
         // Still inside the TTL: priming must NOT re-ask, or the cap achieves nothing.
         clock.date = clock.date.plusSeconds(1800)
@@ -338,8 +347,8 @@ class LinkPreviewStoreTests {
 
         clock.date = clock.date.plusSeconds(1801)
         store.request(listOf("https://e.test/dead"))
-        settle()
-        assertEquals(2, stub.batches.size)
+        // A lapsed value is still a value, so `isPending` reads it as settled: wait on the batch.
+        assertTrue(eventually { stub.batches.size == 2 })
     }
 
     // MARK: - Sign-out, and not repopulating what it cleared
@@ -367,6 +376,8 @@ class LinkPreviewStoreTests {
         storeRef = resetting
 
         resetting.request(listOf("https://e.test/a"))
+        // The resolve has to have HAPPENED, or the emptiness below holds for the wrong reason.
+        assertTrue(eventually { stub.batches.size == 1 })
         settle()
 
         assertNull(resetting.preview("https://e.test/a"), "the cleared store must stay cleared")
@@ -413,13 +424,15 @@ class LinkPreviewStoreTests {
         // resolved previews sitting in the cache with nothing told to draw them.
         val stub = Stub()
         val store = makeStore(stub)
-        var updates = 0
-        store.onUpdate = { updates += 1 }
+        // How many batches had been asked when each paint happened. The stub records a batch as
+        // its resolve starts, so a paint per batch reads 1, then 2 — and a store that painted
+        // once at the end of the drain reads 3, once.
+        val paintedAt = mutableListOf<Int>()
+        store.onUpdate = { paintedAt.add(stub.batches.size) }
 
         store.request((0..<45).map { "https://e.test/$it" })
-        // Long enough for two of the three batches, not all three.
-        delay(800)
-        assertTrue(updates >= 2, "each completed batch paints; saw $updates")
+        assertTrue(eventually { paintedAt.size >= 2 })
+        assertEquals(listOf(1, 2), paintedAt.take(2), "each batch paints before the next is asked; saw $paintedAt")
     }
 
     // "says WHICH urls moved, so a consumer can tell whether it is affected"
@@ -463,10 +476,11 @@ class LinkPreviewStoreTests {
         clock.date = clock.date.plus(PreviewReask.floor).plusSeconds(1)
         store.request(listOf("https://e.test/dead"))
         assertTrue(eventually { stub.batches.size == 2 }, "asked a second time")
-        // ⚠ A beat AFTER the batch lands, because the stub records its call before the flush
-        // decides whether to say anything — asserting the silence on the batch alone would be
-        // asserting it a moment too early, which is a test that passes for the wrong reason.
-        settle()
+        // ⚠ AFTER the flush has decided, not when the batch lands: the stub records its call
+        // before the flush decides whether to say anything, so asserting the silence on the batch
+        // alone would pass for the wrong reason. The second rung is written in the same stretch
+        // as that decision.
+        assertTrue(eventually { store.retry["https://e.test/dead"]?.tries == 2 })
         assertEquals(1, reported.size, "and the second answer says nothing new")
     }
 
@@ -529,8 +543,7 @@ class LinkPreviewStoreTests {
         val store = makeStore(stub)
         val urls = (0..<40).map { "https://e.test/$it" }
         store.request(urls)
-        delay(800)
-
+        assertTrue(eventually { stub.batches.isNotEmpty() })
         assertEquals(urls.take(20), stub.batches.firstOrNull())
     }
 
@@ -555,7 +568,8 @@ class LinkPreviewStoreTests {
         }
         val store = makeStore(stub, clock)
         store.request(listOf("https://e.test/skewed"))
-        settle()
+        assertTrue(answered(store, listOf("https://e.test/skewed")))
+        assertNotNull(store.preview("https://e.test/skewed"), "the answer did land")
         assertNull(store.retry["https://e.test/skewed"])
         assertFalse(store.runDueReasks())
     }
@@ -576,13 +590,18 @@ class LinkPreviewStoreTests {
         stub.answer = { emptyList() }
         val store = makeStore(stub, clock)
         store.request(listOf("https://e.test/silent"))
-        settle()
+        assertTrue(answered(store, listOf("https://e.test/silent")))
 
         var rounds = 0
         while (store.retry["https://e.test/silent"] != null && rounds < 20) {
             clock.date = clock.date.plusSeconds(600)
+            val tries = store.retry["https://e.test/silent"]?.tries
             store.runDueReasks()
-            settle()
+            // Its retry entry is what moves (a rung up, or gone): a re-queued URL already reads as
+            // settled, so `answered` would return at once.
+            if (!eventually { store.retry["https://e.test/silent"]?.tries != tries }) {
+                fail("round ${rounds + 1}'s re-ask never landed")
+            }
             rounds += 1
         }
         assertTrue(rounds < 20, "it gave up rather than polling forever")
@@ -613,7 +632,7 @@ class LinkPreviewStoreTests {
         stub.answer = { emptyList() }
         val store = makeStore(stub)
         store.request(listOf("https://e.test/a", "https://e.test/b"))
-        settle()
+        assertTrue(answered(store, listOf("https://e.test/a", "https://e.test/b")))
 
         assertNotNull(store.retry["https://e.test/a"])
         assertFalse(store.isPending("https://e.test/a"))
@@ -635,7 +654,7 @@ class LinkPreviewStoreTests {
         stub.answer = { emptyList() }
         val store = makeStore(stub, clock)
         store.request(listOf("https://e.test/busy"))
-        settle()
+        assertTrue(answered(store, listOf("https://e.test/busy")))
         assertNull(store.preview("https://e.test/busy"), "no value to short-circuit on")
 
         clock.date = clock.date.plusSeconds(60)
@@ -657,7 +676,7 @@ class LinkPreviewStoreTests {
         stub.answer = { emptyList() } // transport failure, every time
         val store = makeStore(stub, clock)
         store.request(listOf("https://e.test/flaky"))
-        settle()
+        assertTrue(answered(store, listOf("https://e.test/flaky")))
         assertEquals(1, store.retry["https://e.test/flaky"]?.tries)
         // jitter at its midpoint is a multiplier of exactly 1, so the first gap is the floor.
         assertEquals(
@@ -667,9 +686,10 @@ class LinkPreviewStoreTests {
 
         clock.date = clock.date.plusSeconds(60)
         assertTrue(store.runDueReasks())
-        settle()
-
-        assertEquals(2, store.retry["https://e.test/flaky"]?.tries, "the count carried across")
+        assertTrue(
+            eventually { store.retry["https://e.test/flaky"]?.tries == 2 },
+            "the count carried across",
+        )
         assertEquals(
             PreviewReask.floor.multipliedBy(2),
             store.retry["https://e.test/flaky"]?.at?.let { Duration.between(clock.date, it) },
@@ -685,8 +705,7 @@ class LinkPreviewStoreTests {
         // Deliberately not settled: the coalesce window has not fired, so no answer can exist.
         assertTrue(store.isPending("https://e.test/slow"))
         assertFalse(store.allSettled(listOf("https://e.test/slow")))
-        settle()
-        assertFalse(store.isPending("https://e.test/slow"))
+        assertTrue(eventually { !store.isPending("https://e.test/slow") })
     }
 }
 

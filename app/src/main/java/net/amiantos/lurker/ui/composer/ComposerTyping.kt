@@ -5,7 +5,6 @@ package net.amiantos.lurker.ui.composer
 
 import net.amiantos.lurkerkit.model.OutgoingTyping
 import net.amiantos.lurkerkit.model.TypingSignal
-import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import java.time.Instant
 
 /**
@@ -23,7 +22,10 @@ import java.time.Instant
  * What it puts on the wire, for the record (each is a `+typing` TAGMSG to this buffer's target):
  * `active` when a non-command draft first appears and at most every 3s while it keeps changing;
  * `paused` once after 3s with no change; `done` when the draft empties or becomes a `/command`, on
- * send, and on leaving the buffer — never for a buffer you merely passed through.
+ * send, and on leaving the buffer — never for a buffer you merely passed through. Whether the draft
+ * is a command is `OutgoingTyping`'s call, made on the trimmed text the send button sends
+ * (lurker-ios#202): " /whois bob" runs as a command and says nothing, "//shrug" goes to the channel
+ * and is announced.
  */
 internal class ComposerTyping(private val emit: (TypingSignal) -> Unit) {
     private val outgoing = OutgoingTyping()
@@ -46,13 +48,13 @@ internal class ComposerTyping(private val emit: (TypingSignal) -> Unit) {
     fun draftChanged(draft: String, now: Instant): Boolean? {
         if (draft == lastDraft) return null
         lastDraft = draft
-        outgoing.draftChanged(sendForm(draft), now)?.let(emit)
+        outgoing.draftChanged(draft, now)?.let(emit)
         return outgoing.isSignalling
     }
 
     /** The idle timer armed for [draft] fired with nothing changed since. */
     fun idled(draft: String, now: Instant) {
-        outgoing.idled(sendForm(draft), now)?.let(emit)
+        outgoing.idled(draft, now)?.let(emit)
     }
 
     /** Stop claiming to type — on send, on a restore, and on leaving. Silent when we weren't. */
@@ -60,12 +62,4 @@ internal class ComposerTyping(private val emit: (TypingSignal) -> Unit) {
         lastDraft = null
         outgoing.ended()?.let(emit)
     }
-
-    /**
-     * The draft as the send button would send it (`ComposerModel.sendable`'s trim), which is what
-     * decides whether it's a command: " /whois bob" and "\n/join #x" run as commands, so they mustn't
-     * claim typing to the channel. iOS hands `OutgoingTyping` the raw text and so does announce them —
-     * a divergence on purpose, toward what the line actually does.
-     */
-    private fun sendForm(draft: String): String = draft.trimmingWhitespacesAndNewlines()
 }

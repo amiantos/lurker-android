@@ -10,6 +10,7 @@ import net.amiantos.lurkerkit.model.HighlightItem
 import net.amiantos.lurkerkit.model.Message
 import java.time.Instant
 import java.time.ZoneId
+import java.time.ZonedDateTime
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -116,6 +117,22 @@ class HighlightGroupingTests {
     }
 
     @Test
+    fun testYesterdayHoldsOnADayThatStartsAfterMidnight() {
+        // lurker-ios#200: Havana springs forward at midnight, so 2026-03-08 begins at 01:00.
+        // Today's start minus a day was 01:00 on the 7th, which began at 00:00, so yesterday's
+        // rows got a dated header. Santiago and Cairo do the same. Havana's fall-back on
+        // 2026-11-01 (01:00 back to 00:00) missed the other way, seen from the 2nd.
+        val havana = ZoneId.of("America/Havana")
+        fun noon(month: Int, day: Int): Instant = ZonedDateTime.of(2026, month, day, 12, 0, 0, 0, havana).toInstant()
+        assertEquals(HighlightDay.Yesterday, HighlightDay.of(date = noon(3, 7), now = noon(3, 8), zone = havana))
+        assertEquals(HighlightDay.Yesterday, HighlightDay.of(date = noon(11, 1), now = noon(11, 2), zone = havana))
+        assertEquals(
+            HighlightDay.On(noon(3, 6).atZone(havana).toLocalDate().atStartOfDay(havana).toInstant()),
+            HighlightDay.of(date = noon(3, 6), now = noon(3, 8), zone = havana),
+        )
+    }
+
+    @Test
     fun testDayIsClassifiedAgainstPassedNowNotTheDeviceDate() {
         // A fixed `now` that is emphatically not the day this test runs. Today/yesterday must
         // be measured against it, not the real clock — the earlier `isDateInToday` version
@@ -165,15 +182,16 @@ class HighlightGroupingTests {
     /**
      * Pins what LurkerKit does on a day that does not start at midnight. Cuba's clocks went
      * forward at 00:00 on 10 March 2024, so that day starts at 01:00; a day back from there is
-     * 01:00 on the 9th, which is not where the 9th starts — and the 9th reads as a date, not as
-     * yesterday. That is the Swift's answer for the same instants, kept rather than corrected.
+     * 01:00 on the 9th, which is not where the 9th starts — and until lurker-ios#200 the 9th read
+     * as a date. It is asked as a calendar day now, so the 9th is yesterday, seen from the very
+     * first instant of the 10th: the Swift's answer for the same instants.
      */
     @Test
-    fun testADayThatStartsLateMakesTheDayBeforeADate() {
+    fun testADayThatStartsLateStillHasAYesterday() {
         val havana = ZoneId.of("America/Havana")
         val firstInstantOfThe10th = Instant.ofEpochMilli(1_710_046_800_000)
         assertEquals(
-            HighlightDay.On(Instant.ofEpochMilli(1_709_960_400_000)),
+            HighlightDay.Yesterday,
             HighlightDay.of(date = Instant.ofEpochMilli(1_710_003_600_000), now = firstInstantOfThe10th, zone = havana),
             "noon on the 9th",
         )
