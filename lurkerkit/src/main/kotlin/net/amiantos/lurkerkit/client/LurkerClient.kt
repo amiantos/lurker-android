@@ -1047,10 +1047,13 @@ internal class LurkerClient(
         )
     }
 
-    /** Part a channel with an optional reason. The buffer survives (dimmed); `/close` drops it. */
-    fun part(networkId: Int?, channel: String, reason: String?) {
-        if (networkId == null) return
-        send(
+    /**
+     * Part a channel with an optional reason. The buffer survives (dimmed); `/close` drops it.
+     * False when it went nowhere — the composer hands a `/part` typed offline back (sweep L02).
+     */
+    fun part(networkId: Int?, channel: String, reason: String?): Boolean {
+        if (networkId == null) return false
+        return send(
             buildJsonObject {
                 put("type", "part")
                 put("networkId", networkId)
@@ -1062,11 +1065,11 @@ internal class LurkerClient(
 
     /**
      * A CTCP request aimed at a target — `/ctcp`, `/ping`. `issuingTarget` is the buffer the
-     * command was run in, so a reply can be routed back to it.
+     * command was run in, so a reply can be routed back to it. False when it went nowhere.
      */
-    fun sendCTCP(networkId: Int?, target: String, issuingTarget: String, ctcpType: String, args: String) {
-        if (networkId == null) return
-        send(
+    fun sendCTCP(networkId: Int?, target: String, issuingTarget: String, ctcpType: String, args: String): Boolean {
+        if (networkId == null) return false
+        return send(
             buildJsonObject {
                 put("type", "ctcp")
                 put("networkId", networkId)
@@ -1160,15 +1163,13 @@ internal class LurkerClient(
      * Set yourself away (`/away`), or clear it (`/back`, or `/away` with no message), on the
      * network named (lurker#994). The server widens it to every network for `all: true`, for
      * the `away.all_networks` setting when `all` is null, and when there's no network (the
-     * system buffer).
+     * system buffer). False when it went nowhere.
      */
-    fun setAway(message: String, networkId: Int?, all: Boolean?) {
+    fun setAway(message: String, networkId: Int?, all: Boolean?): Boolean =
         send(awayFrame(type = "away", message = message, networkId = networkId, all = all))
-    }
 
-    fun setBack(networkId: Int?, all: Boolean?) {
+    fun setBack(networkId: Int?, all: Boolean?): Boolean =
         send(awayFrame(type = "back", message = null, networkId = networkId, all = all))
-    }
 
     /**
      * Page older history for a buffer, back from `before` (exclusive message id). The
@@ -1272,9 +1273,10 @@ internal class LurkerClient(
      * Mark a buffer read up to `messageId`. The server MAX-clamps, so re-sending a lower
      * id is a safe no-op. The system buffer sends `networkId: null` (hence JSON null, not a
      * dropped key), so this can't reuse the null-`networkId` shortcut.
+     * False when it went nowhere, which `ChatViewModel.markRead` must not record as marked.
      */
-    fun markRead(networkId: Int?, target: String, messageId: Long) {
-        send(
+    fun markRead(networkId: Int?, target: String, messageId: Long): Boolean {
+        return send(
             buildJsonObject {
                 put("type", "mark-read")
                 put("networkId", networkId?.let { JsonPrimitive(it) } ?: JsonNull)
@@ -1501,10 +1503,14 @@ internal class LurkerClient(
     /**
      * Close a buffer: parts a channel and stops tracking a DM. The server pseudo-buffer
      * (`:server:`) can't be closed. No-op for the system buffer (networkId null).
+     *
+     * False when there was a verb to send and no socket to carry it. The two no-ops answer
+     * true: nothing was meant to go out, so nothing went missing — a `/close` typed in the
+     * server log mustn't come back to the composer as if the connection were down.
      */
-    fun closeBuffer(networkId: Int?, target: String) {
-        if (networkId == null || target.startsWith(":server:")) return
-        send(
+    fun closeBuffer(networkId: Int?, target: String): Boolean {
+        if (networkId == null || target.startsWith(":server:")) return true
+        return send(
             buildJsonObject {
                 put("type", "close-buffer")
                 put("networkId", networkId)
@@ -1585,10 +1591,11 @@ internal class LurkerClient(
      * buffer row to carry a marker — the same guard `closeBuffer` needs. The `:server:` log
      * IS clearable, unlike closing: a network's log is a real buffer with real read state,
      * and hiding a wall of connection noise is exactly what someone would want there.
+     * False when it went nowhere.
      */
-    fun clearBuffer(networkId: Int?, target: String, undo: Boolean) {
-        if (networkId == null) return
-        send(
+    fun clearBuffer(networkId: Int?, target: String, undo: Boolean): Boolean {
+        if (networkId == null) return false
+        return send(
             buildJsonObject {
                 put("type", if (undo) "unclear-buffer" else "clear-buffer")
                 put("networkId", networkId)
@@ -1629,9 +1636,10 @@ internal class LurkerClient(
      * span networks, so names can't address them). Send the FULL permuted list; a subset
      * floats to the front and would demote everything unmentioned. The server echoes the
      * authoritative `favorites-changed` either way (a stale set snaps this device back).
+     * False when it went nowhere: then no echo is coming to settle the order on screen.
      */
-    fun reorderFavorites(bufferIds: List<Int>) {
-        send(
+    fun reorderFavorites(bufferIds: List<Int>): Boolean {
+        return send(
             buildJsonObject {
                 put("type", "reorder-favorites")
                 putJsonArray("bufferIds") { bufferIds.forEach { add(JsonPrimitive(it)) } }

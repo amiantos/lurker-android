@@ -36,6 +36,7 @@ import net.amiantos.lurker.ui.networks.FormInset
 import net.amiantos.lurker.ui.networks.FormSectionFooter
 import net.amiantos.lurker.ui.networks.PageExit
 import net.amiantos.lurker.ui.theme.LurkerTheme
+import net.amiantos.lurkerkit.model.NickNote
 import net.amiantos.lurkerkit.session.ChatViewModel
 
 /**
@@ -75,9 +76,17 @@ class NickNoteState(private val model: ChatViewModel, val networkId: Int, val ni
     private fun send(note: String): Boolean {
         val state = model.state
         refusal = NickNoteModel.sendRefusal(state.connection, state.reachable)
-        if (refusal != null) return false
-        model.setNickNote(networkId = networkId, nick = nick, note = note)
-        return true
+            // Both: the state can read Connected for a moment after the socket is gone.
+            ?: NickNoteModel.NOT_CONNECTED.takeUnless { model.setNickNote(networkId = networkId, nick = nick, note = note) }
+        return refusal == null
+    }
+
+    /**
+     * Take an edit unless it would put the note past the server's cap (sweep L14), which cuts
+     * silently and can split an emoji — the web's `maxlength`.
+     */
+    fun edit(value: TextFieldValue) {
+        if (NickNote.fits(value.text)) draft = value
     }
 }
 
@@ -100,7 +109,7 @@ internal fun NickNotePage(state: NickNoteState, onBack: () -> Unit, onDone: () -
     NickNoteContent(
         nick = state.nick,
         draft = state.draft,
-        onDraftChange = { state.draft = it },
+        onDraftChange = state::edit,
         offersDelete = NickNoteModel.offersDelete(state.original),
         onBack = onBack,
         refusal = state.refusal,

@@ -18,7 +18,19 @@ data class NickNote(
      * clear, where there's no row left to have been updated.
      */
     val updatedAt: Instant? = null,
-)
+) {
+    companion object {
+        /**
+         * The server's cap (`setNickNote.ts`), in UTF-16 code units — JavaScript's `length`, and
+         * what the web's `maxlength` counts. Past it the server cuts silently, and can cut an emoji
+         * in half, so the editors refuse to grow a note beyond it instead (sweep L14).
+         */
+        const val maxLength = 4096
+
+        /** Whether `note` is short enough to be stored as typed. */
+        fun fits(note: String): Boolean = note.length <= maxLength
+    }
+}
 
 /**
  * The account's nick notes, per network.

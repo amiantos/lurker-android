@@ -1241,6 +1241,14 @@ class ChatViewModel(
         // Recorded rather than acted on inline so the remaining effects still run: a command that
         // is half machinery should not stop halfway because one send found no socket.
         var wentNowhere = false
+        // The verbs with no `send-result` of their own — `/topic`, `/nick`, `/part`, `/away` and
+        // the rest. Nothing is in flight when one goes out, so the correlator is minted only for a
+        // failure, to carry the line back; before sweep L02 they were dropped without a word.
+        fun wire(went: Boolean) {
+            if (went) return
+            correlator()
+            wentNowhere = true
+        }
         for (effect in effects) {
             when (effect) {
                 is CommandEffect.Send -> {
@@ -1260,7 +1268,7 @@ class ChatViewModel(
                         networkId = networkId, target = effect.target, text = effect.text, clientId = correlator(),
                     ) || wentNowhere
                 is CommandEffect.Raw ->
-                    client.sendRaw(networkId = networkId, line = effect.line)
+                    wire(client.sendRaw(networkId = networkId, line = effect.line))
                 is CommandEffect.ShowProfile ->
                     // Nothing goes out here — the screen asks when it opens. A `/whois` typed in
                     // the system buffer has no connection to ask on and is silently no-op'd, the
@@ -1274,11 +1282,11 @@ class ChatViewModel(
                         requestJoin(networkId = networkId, channel = effect.channel, key = effect.key, opens = true)
                     }
                 is CommandEffect.Part ->
-                    client.part(networkId = networkId, channel = effect.channel, reason = effect.reason)
+                    wire(client.part(networkId = networkId, channel = effect.channel, reason = effect.reason))
                 is CommandEffect.Close -> {
                     // As `closeBuffer` does: a `/close` stands down a pending open for that buffer.
                     pendingOpens.closing(BufferKey(networkId = networkId, target = effect.target))
-                    client.closeBuffer(networkId = networkId, target = effect.target)
+                    wire(client.closeBuffer(networkId = networkId, target = effect.target))
                 }
                 is CommandEffect.Clear ->
                     // Nothing is written locally, deliberately. The server picks the exact boundary
@@ -1286,15 +1294,17 @@ class ChatViewModel(
                     // including this one, so the marker this screen draws is always the
                     // authoritative one — an optimistic local clear would have to guess the id and
                     // would be wrong for anything that landed in between.
-                    client.clearBuffer(networkId = networkId, target = effect.target, undo = effect.undo)
+                    wire(client.clearBuffer(networkId = networkId, target = effect.target, undo = effect.undo))
                 is CommandEffect.Away ->
-                    client.setAway(effect.message, networkId = networkId, all = effect.all)
+                    wire(client.setAway(effect.message, networkId = networkId, all = effect.all))
                 is CommandEffect.Back ->
-                    client.setBack(networkId = networkId, all = effect.all)
+                    wire(client.setBack(networkId = networkId, all = effect.all))
                 is CommandEffect.Ctcp ->
-                    client.sendCTCP(
-                        networkId = networkId, target = effect.target, issuingTarget = key.target,
-                        ctcpType = effect.type, args = effect.args,
+                    wire(
+                        client.sendCTCP(
+                            networkId = networkId, target = effect.target, issuingTarget = key.target,
+                            ctcpType = effect.type, args = effect.args,
+                        ),
                     )
                 is CommandEffect.Activate -> if (networkId != null) {
                     val to = BufferKey(networkId = networkId, target = effect.target)
@@ -1586,13 +1596,18 @@ class ChatViewModel(
      * Mark a buffer read up to its latest loaded message. Server-authoritative and
      * MAX-clamped, and deduped here, so calling it on every state change while viewing a
      * buffer is cheap. The `read-state` echo updates the counts.
+     *
+     * ⚠ Recorded only once it has gone out. A mark with no socket goes nowhere, and recording it
+     * anyway had the dedupe skip the same id after the reconnect — the pointer never moved, on
+     * this device's badge or anyone else's (sweep L23).
      */
     fun markRead(key: BufferKey) {
         val latest = store.state.messages[key.id]?.mapNotNull { if (it.id != 0L) it.id else null }?.maxOrNull()
             ?: return
         if (latest <= (lastMarked[key.id] ?: 0L)) return
-        lastMarked[key.id] = latest
-        client.markRead(networkId = key.networkId, target = key.target, messageId = latest)
+        if (client.markRead(networkId = key.networkId, target = key.target, messageId = latest)) {
+            lastMarked[key.id] = latest
+        }
     }
 
     fun markAllRead() {
@@ -1841,14 +1856,22 @@ class ChatViewModel(
         }
     }
 
-    /** Close a buffer (part a channel / drop a DM) and remove its row immediately. */
-    fun closeBuffer(key: BufferKey) {
+    /**
+     * Close a buffer (part a channel / drop a DM) and remove its row immediately.
+     *
+     * False, with the row and its draft left alone, when the close couldn't go out. Removing the
+     * row anyway left the channel joined and the draft unsent, and the reconnect's snapshot put
+     * the row straight back with no account of why (sweep L16) — so the caller says so instead.
+     */
+    fun closeBuffer(key: BufferKey): Boolean {
         // A close stands down a wait for the same buffer: a DM closed while its open is pending
         // would otherwise be minted again by the late backlog and taken back into (lurker-ios#201).
+        // Whether or not the close goes out — the user has said they're done with it.
         pendingOpens.closing(key)
-        client.closeBuffer(networkId = key.networkId, target = key.target)
+        if (!client.closeBuffer(networkId = key.networkId, target = key.target)) return false
         dropDraft(key)
         store.removeBuffer(key)
+        return true
     }
 
     /**
@@ -1892,11 +1915,9 @@ class ChatViewModel(
      * `/back` from a control rather than the composer — the away strip's Back (lurker-ios#135),
      * on the network the strip is showing, scoped as a typed `/back` is (lurker#994). No local
      * mutation: the strip comes down when the server's `away-state` echo folds in, on every
-     * device at once.
+     * device at once. False when it went nowhere.
      */
-    fun setBack(networkId: Int?) {
-        client.setBack(networkId = networkId, all = null)
-    }
+    fun setBack(networkId: Int?): Boolean = client.setBack(networkId = networkId, all = null)
 
     /**
      * Ask the network who `nick` is (lurker-ios#12) — what the profile screen sends on open, and
@@ -1948,15 +1969,17 @@ class ChatViewModel(
      * ⚠ A `=bob` DCC chat is a conversation with bob, so its note IS bob's note. The server
      * stores whatever nick it is handed, so without this a note written from the chat would be
      * filed under `=bob` — a second note about the same person that the DM with bob never shows.
+     *
+     * False when it went nowhere: the editor stays open with what was typed (sweep L14).
      */
-    fun setNickNote(networkId: Int, nick: String, note: String) {
+    fun setNickNote(networkId: Int, nick: String, note: String): Boolean =
         client.setNickNote(networkId = networkId, nick = DccChat.peer(nick), note = note)
-    }
 
-    /** Rewrite the global order — pass the FULL permuted bufferId list (see LurkerClient). */
-    fun reorderFavorites(bufferIds: List<Int>) {
-        client.reorderFavorites(bufferIds = bufferIds)
-    }
+    /**
+     * Rewrite the global order — pass the FULL permuted bufferId list (see LurkerClient).
+     * False when it went nowhere, and then no echo is coming to settle a drop (sweep L29).
+     */
+    fun reorderFavorites(bufferIds: List<Int>): Boolean = client.reorderFavorites(bufferIds = bufferIds)
 
     fun clearError() {
         store.clearError()

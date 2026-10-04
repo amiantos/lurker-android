@@ -61,6 +61,7 @@ import net.amiantos.lurker.platform.AppEvent
 import net.amiantos.lurker.platform.AppEvents
 import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.conversation.ConversationScreen
+import net.amiantos.lurker.ui.conversation.ConversationScroll
 import net.amiantos.lurker.ui.dcc.DccOfferDialog
 import net.amiantos.lurker.ui.dcc.DccOffers
 import net.amiantos.lurker.ui.list.BufferListModel
@@ -378,9 +379,18 @@ fun MainScaffold(
     //
     // If it's the buffer open in the detail pane, the conversation notices its row go
     // (`BufferWatch`) and leaves, as it does for a close on another device.
-    fun close(buffer: Buffer) {
-        model.closeBuffer(buffer.key)
+    //
+    // Offline it says so and leaves the row (sweep L16). Removing it anyway sent no PART, so the
+    // reconnect's snapshot put the row back and the channel had never been left. Asked of both
+    // connection signals before the send's own answer, for the dropped-but-unnoticed socket that
+    // takes a write and loses it.
+    fun close(buffer: Buffer): Boolean {
+        if (!ConversationScroll.mayWrite(model.state) || !model.closeBuffer(buffer.key)) {
+            events.send(AppEvent.Notice(BufferListModel.NOT_CONNECTED))
+            return false
+        }
         uiPreferences.forgetLastOpenBuffer(ifMatching = buffer.key)
+        return true
     }
 
     // Join Channel, Add Network and the networks list — full-screen dialogs. Here, not in the list

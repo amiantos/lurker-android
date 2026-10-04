@@ -527,6 +527,13 @@ enum class UnreadSignal { Unread, Mentioned }
 object BufferListModel {
 
     /**
+     * What a Leave, Close or favorites drop says when it couldn't go out. Nothing queues a verb
+     * behind a dropped socket, so the list says so rather than looking like it worked (sweep L16,
+     * L29). The composer's Back says the same.
+     */
+    const val NOT_CONNECTED = "Not connected — try again when you're back online"
+
+    /**
      * Gives up waiting for `backlog-complete` and draws whatever has arrived, after this long.
      * Long enough that any burst worth waiting for lands first, short enough that a server which
      * never terminates one isn't a broken app. See `MainScaffold`'s fallback.

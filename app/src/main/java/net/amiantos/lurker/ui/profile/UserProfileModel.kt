@@ -283,8 +283,9 @@ object NickNoteModel {
 
     /**
      * Why Save or Delete can't go out now, or null when it can. The note travels over our own socket,
-     * and the kit's `setNickNote` doesn't say whether it was sent — so the editor asks first, and stays
-     * open with what was typed rather than closing on a write that went nowhere. Only the socket
+     * and the kit's `setNickNote` only knows whether there was one, not whether it still works — so
+     * the editor asks first, and stays open with what was typed rather than closing on a write that
+     * went nowhere. Only the socket
      * matters: a note is the account's, not the IRC network's, so a network that's down is no reason.
      */
     fun sendRefusal(connection: SocketStatus, reachable: Boolean): String? =
