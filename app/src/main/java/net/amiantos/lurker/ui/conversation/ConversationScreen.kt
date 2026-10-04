@@ -186,7 +186,8 @@ import java.time.ZoneOffset
  * @param onGone the buffer isn't open any more — see [BufferWatch].
  * @param onMoved the buffer was renamed under us — follow it to its new key.
  * @param uiPreferences the device's own settings — the composer reads its capitalization.
- * @param onOpenBuffer `/msg` or `/query` opened a DM and asks to switch to it.
+ * @param onOpenBuffer `/msg` or `/query` to a channel asks to switch to it. To a nick they ask nothing of
+ *   the screen: the kit lands on the DM once its row is in (`ChatViewModel.openAndShow`).
  * @param onShowProfile `/whois` asks for this person's profile — `BufferSheets.showProfile`.
  * @param onShowMembers the bar's members button (U5) — offered on channels only.
  * @param onShowInfo the bar's info button (U5) — this buffer's info and settings, on every buffer.

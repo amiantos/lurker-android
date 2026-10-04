@@ -110,6 +110,15 @@ internal class PendingJoins {
             .map { Outcome.TimedOut(it.key) }
     }
 
+    /**
+     * Something newer has the user's attention — a DM or DCC chat opening, another join that
+     * opens, or a buffer they went to themselves (lurker-ios#201): no join asked for so far may
+     * take them anywhere. Still tracked, so a refusal or a silence is still told.
+     */
+    fun stopOpening() {
+        for (entry in requests.entries) entry.setValue(entry.value.copy(opens = false))
+    }
+
     /** Forget everything: the socket died or the account signed out, so no answer is coming. */
     fun removeAll() {
         requests.clear()
@@ -138,8 +147,9 @@ internal class PendingJoins {
 }
 
 /**
- * A join this device asked for that didn't happen, to tell the user in passing (lurker-ios#57).
- * The app shows it as a toast.
+ * A join this device asked for that didn't happen, to tell the user in passing (lurker-ios#57) — or
+ * a DM it asked to open from a profile or a Friends row (lurker-ios#201), which fails the same way
+ * and is told the same way. The app shows it as a toast.
  */
 sealed interface JoinNotice {
     /** The server refused. `reason` is its own sentence, such as "This channel is invite-only." */
@@ -151,11 +161,15 @@ sealed interface JoinNotice {
     /** Never sent: the network isn't connected, or there was no socket to carry the JOIN. */
     data class NotConnected(val channel: String, val network: String) : JoinNotice
 
+    /** A DM's `open-buffer` was never sent, for the same reason. */
+    data class DmNotConnected(val nick: String, val network: String) : JoinNotice
+
     /** What the toast says. */
     val message: String
         get() = when (this) {
             is Refused -> "Couldn't join $channel: $reason"
             is NoResponse -> "No response joining $channel"
             is NotConnected -> "Can't join $channel while $network is offline"
+            is DmNotConnected -> "Can't message $nick while $network is offline"
         }
 }

@@ -80,7 +80,10 @@ internal class ComposerState(
     /** About to send: put the list where the send should leave it (`ComposerModel.sendScroll`). */
     internal var onWillSend: () -> Unit = {}
 
-    /** `/msg` / `/query` opened a DM and asks to switch to it. */
+    /**
+     * `/msg` / `/query` to a channel asks to switch to it. To a nick they ask nothing: the kit lands on
+     * the DM once its row is in (`ChatViewModel.openAndShow`, lurker-ios#201).
+     */
     internal var onOpenBuffer: (BufferKey) -> Unit = {}
 
     /** `/whois` — open the profile rather than leaving the numerics as the only answer. */
@@ -403,9 +406,9 @@ internal class ComposerState(
     // MARK: - Send
 
     /**
-     * The send button — iOS's `send(_:)`. The field isn't cleared until the line is handed over,
-     * and every outcome clears it: a command's answer (an error included) prints in the buffer as
-     * a local line, which is where the kit puts it.
+     * The send button — iOS's `send(_:)`. The field is cleared before the line is handed over, and
+     * every outcome leaves it clear but a refusal, which comes back into it: a command's answer (an
+     * error included) prints in the buffer as a local line, which is where the kit puts it.
      */
     fun send() {
         val text = ComposerModel.sendable(field.text.toString()) ?: return
@@ -414,16 +417,27 @@ internal class ComposerState(
         // field, a no-op once this has run.
         endTyping()
         onWillSend()
-        val outcome = model.send(key, text, reply)
+        // ⚠⚠ Cleared and flushed BEFORE the line goes to the view model, not after. Sending can take
+        // the user somewhere inside that call — `/query` to a DM we hold, `/join` to a channel we're
+        // in — and cleared after, a composer on its way out could save the command as this buffer's
+        // draft, which syncs to every device (lurker-ios#188, lurker-ios#201). A line refused inside
+        // the call comes back into this cleared field, and never travels with a switch: one that went
+        // nowhere goes nowhere (see `ChatViewModel.run`).
+        //
+        // The reply is taken for the send first, and a spent one cleared in the same batch as the
+        // field: the batch saves the draft, and the flush below sends it, so clearing it after left
+        // an empty draft on the server still carrying the reply this line used up. Spent if the line
+        // went out as it — a plain line or a `/me`. Any other command leaves it pending, as the web
+        // does. A refusal brings it back with the line (`restoreRefused`), as it always has.
+        val lineReply = reply
         batch {
-            // Spent if the line went out as it — a plain line or a `/me`. Any other command leaves it
-            // pending, as the web does. A refusal brings it back with the line (`restoreRefused`).
             if (Replies.consumes(text)) changeReply(null)
             apply(FieldEdit("", 0))
         }
         // Emptied on the server now, not on the debounce: a quick close or a switch to another
         // device would otherwise find the line just sent still waiting there.
         model.flushDraft(key)
+        val outcome = model.send(key, text, lineReply)
         // The field is free again, so anything still waiting can come back. Without this a second
         // refused line sat in the hold until the composer next appeared, which for someone staying
         // in one conversation is never.

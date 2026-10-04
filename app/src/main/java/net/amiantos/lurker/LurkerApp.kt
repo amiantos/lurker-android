@@ -195,13 +195,16 @@ class LurkerApp : Application() {
         // A join this device asked for landed — navigate to it (lurker-ios#57).
         model.onJoinOpened = { key -> events.send(AppEvent.OpenBuffer(key)) }
 
-        // A join that didn't happen says why, as a snackbar over whatever is on screen.
+        // A join that didn't happen, or a DM that couldn't be asked for, says why, as a snackbar over
+        // whatever is on screen.
         model.onJoinNotice = { notice -> events.send(AppEvent.Notice(notice.message)) }
 
-        // A DCC chat this device opened or accepted has a buffer — navigate, as for a join
-        // (lurker#270). Only once its `=nick` row exists: the kit holds the open until then
-        // (`PendingDccOpen`), since landing on an absent buffer in a settled roster pops straight back.
-        model.onDccChatOpened = { key -> events.send(AppEvent.OpenBuffer(key)) }
+        // A buffer this device opened has its row — navigate, as for a join: a DCC chat opened or
+        // accepted (lurker#270), or a DM from a profile's Send Message, a Friends row, `/msg` or
+        // `/query` (`ChatViewModel.openAndShow`, lurker-ios#201). Only once the row exists: the kit
+        // holds the open until then (`PendingOpens`), since landing on an absent buffer in a settled
+        // roster pops straight back.
+        model.onBufferOpened = { key -> events.send(AppEvent.OpenBuffer(key)) }
 
         // An offer someone made us is asked about over whatever is on screen (iOS `DccOfferPrompt`):
         // `MainScaffold` draws the dialog from `dccOffers.prompt`.

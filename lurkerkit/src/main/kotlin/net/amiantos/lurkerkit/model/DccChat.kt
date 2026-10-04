@@ -40,6 +40,10 @@ object DccChat {
     /** The buffer a chat with `nick` lives in. */
     fun target(nick: String): String =
         "=$nick"
+
+    /** …and its key, on `networkId`. */
+    internal fun key(networkId: Int, nick: String): BufferKey =
+        BufferKey(networkId = networkId, target = target(nick))
 }
 
 /**

@@ -41,6 +41,20 @@ class PendingJoinsTests {
         assertEquals(0, joins.pendingCount)
     }
 
+    /** a newer ask to go somewhere stands an opening join down, and its refusal is still told */
+    @Test
+    fun stopOpeningKeepsTheJoinTrackedButGoesNowhere() {
+        // ⚠ `/join #slow`, then Send Message to bob: bob landed, then #slow's answer yanked the
+        // user away from him (lurker-ios#201).
+        val joins = PendingJoins()
+        joins.request(chan, opens = true, now = t0)
+        joins.stopOpening()
+        assertEquals(PendingJoins.Outcome.Joined(chan, opens = false), joins.joined(chan))
+        joins.request(chan, opens = true, now = t0)
+        joins.stopOpening()
+        assertEquals(PendingJoins.Outcome.Refused(chan, reason = "No."), joins.refused(chan, reason = "No."))
+    }
+
     /** a join nobody here asked for moves nobody */
     @Test
     fun unaskedJoinsAreIgnored() {

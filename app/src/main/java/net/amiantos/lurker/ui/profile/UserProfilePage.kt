@@ -90,8 +90,8 @@ class ProfileState(private val model: ChatViewModel, val networkId: Int, val nic
 }
 
 /**
- * @param onOpenBuffer go to a conversation — Send Message. Handed back rather than done here: this page
- *   is inside a dialog, and its host owns closing it before anything replaces the screen behind it.
+ * @param onSendMessage Send Message: the host asks the kit to open the DM and go there once its row
+ *   is in (`ChatViewModel.openAndShow`, lurker-ios#201); the landing closes the dialog first.
  *   ⚠ Null means Send Message and the channel rows are not offered at all — see
  *   `UserProfileModel.sections`.
  * @param onJoinChannel a channel row: through the one join path (lurker-ios#57).
