@@ -966,7 +966,7 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
          * mark later, and a page sent offline blocks paging for good. Both signals: airplane mode
          * flips `reachable` while the socket still reads Connected.
          */
-        fun mayWrite(state: ChatState): Boolean = state.connection == SocketStatus.Connected && state.reachable
+        fun mayWrite(state: ChatState): Boolean = state.socketWritable
 
         /**
          * Whether the reader was parked at the newest row as [drawn] is replaced — iOS's

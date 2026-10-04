@@ -173,13 +173,13 @@ fun BufferListScreen(
     LaunchedEffect(inputs.favorites) {
         if (optimistic?.isCurrent(inputs.favorites) == false) optimistic = null
     }
-    // …and so does the socket ending. The shadow waits for an echo the dropped socket took with it,
-    // and the reconnect's burst re-sends the list unchanged, which releases nothing (sweep L29) — the
-    // case of a drop written into a socket that had died without saying so.
-    // And with a socket that hasn't had its snapshot: a foreground reconnect can replace one that
-    // died without saying so while the state never left Connected.
-    LaunchedEffect(inputs.connection, inputs.snapshotSinceOpen) {
-        if (inputs.connection != SocketStatus.Connected || !inputs.snapshotSinceOpen) optimistic = null
+    // …and so does a new burst. The shadow waits for an echo, and a socket that ends takes the echo
+    // with it — the reconnect's burst re-sends the list unchanged, which releases nothing (sweep L29).
+    // The burst's snapshot is the server's whole favorites order, which is what the echo would have
+    // said. That covers a drop written into a socket that died without saying so, a forced foreground
+    // reconnect included, and a drop that did go out keeps its place until then.
+    LaunchedEffect(inputs.burstGeneration) {
+        if (optimistic?.let { it.burstAtDrop != inputs.burstGeneration } == true) optimistic = null
     }
 
     // Stage two. `inputs` compares by identity, so this rebuilds exactly when stage one let a frame
@@ -264,7 +264,7 @@ fun BufferListScreen(
             // Shadow the new order until the echo folds — the list released above would otherwise
             // redraw the store's pre-drop order (a visible snap home, and a corrupt base for a
             // quick second drag).
-            optimistic = OptimisticFavorites(order = order, favoritesAtDrop = current)
+            optimistic = OptimisticFavorites(order = order, favoritesAtDrop = current, burstAtDrop = inputs.burstGeneration)
         },
         // The system buffer is app-scoped and always exists, so fall back to the synthetic one if
         // its row hasn't arrived from the server yet.
@@ -834,8 +834,12 @@ private fun SwipeToClose(title: String, onClose: () -> Boolean, content: @Compos
                 // dismissed, and a second close mid-slide could go out once the connection is back.
                 if (!currentOnClose()) {
                     scope.launch {
-                        state.reset()
-                        fired = false
+                        // `finally`: a new drag cancels the reset, and the row must still be closable.
+                        try {
+                            state.reset()
+                        } finally {
+                            fired = false
+                        }
                     }
                 }
             }

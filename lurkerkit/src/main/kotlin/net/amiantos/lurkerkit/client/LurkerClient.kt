@@ -1842,13 +1842,13 @@ internal class LurkerClient(
      * instead. So `onComplete` reports the queueing, before this returns; `onFlush` fires a
      * turn later, once the socket's queue has drained (`awaitWritten`) — the nearest thing to
      * "written" OkHttp exposes, and what a background-allowance release has to wait for. A
-     * refused frame takes LurkerKit's write-failure path — `onComplete` false, and for a
-     * deliberate write the "Send failed" error, raised after this returns as LurkerKit raises
-     * it — and this answers false, which LurkerKit can't: OkHttp knows at once that the frame
-     * went nowhere, and every caller that checks is better for hearing it. OkHttp gives
-     * no reason for a refusal; the one shown is the POSIX `ENOTCONN` text iOS reports for a
-     * write to a dead socket.
+     * refused frame answers false — which LurkerKit can't: OkHttp knows at once that the frame
+     * went nowhere — with `onComplete` false. So `surfacesFailure` has nothing to raise here:
+     * the caller of a deliberate write hears the false and hands the line back or says so, and
+     * a "Send failed" alert on top would report the one failure twice. On iOS the failure comes
+     * only later, from the write's completion, which is what `surfacesFailure` is for there.
      */
+    @Suppress("UNUSED_PARAMETER")
     private fun send(
         verb: JsonObject,
         surfacesFailure: Boolean = false,
@@ -1864,11 +1864,7 @@ internal class LurkerClient(
         val queued = socket.send(text)
         onComplete?.invoke(queued)
         scope.task {
-            if (queued) {
-                awaitWritten(socket)
-            } else if (surfacesFailure) {
-                onFrame(ServerFrame.ServerError("Send failed: Socket is not connected"))
-            }
+            if (queued) awaitWritten(socket)
             onFlush?.invoke()
         }
         return queued

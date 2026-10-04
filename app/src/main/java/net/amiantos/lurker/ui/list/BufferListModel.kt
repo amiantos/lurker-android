@@ -310,6 +310,12 @@ class BufferListInputs private constructor(
      */
     val snapshotSinceOpen: Boolean,
     /**
+     * Each socket's snapshot bumps it: what releases a favorites drop's shadow order (sweep L29).
+     * A counter, not `snapshotSinceOpen` — the open and the snapshot can land in one main-thread
+     * turn, and the conflated stream would never show the flag false.
+     */
+    val burstGeneration: Int,
+    /**
      * `backlog-complete` carries no state but this flag. On an account with nothing to list it
      * moves nothing else at all, so leaving it out would drop the frame as a duplicate and spin
      * "Loading buffers…" forever on exactly the account the empty state was written for.
@@ -382,6 +388,7 @@ class BufferListInputs private constructor(
                 connection = state.connection,
                 reachable = state.reachable,
                 snapshotSinceOpen = state.snapshotSinceOpen,
+                burstGeneration = state.burstGeneration,
                 backlogComplete = state.backlogComplete,
                 rosterSettled = state.rosterSettled,
                 favorites = state.favorites,
@@ -398,6 +405,7 @@ class BufferListInputs private constructor(
                 a.connection == b.connection &&
                 a.reachable == b.reachable &&
                 a.snapshotSinceOpen == b.snapshotSinceOpen &&
+                a.burstGeneration == b.burstGeneration &&
                 a.backlogComplete == b.backlogComplete &&
                 a.rosterSettled == b.rosterSettled &&
                 a.favorites == b.favorites &&
@@ -412,7 +420,12 @@ class BufferListInputs private constructor(
  * The just-dropped favorites order (bufferIds) awaiting its server echo, plus the store's
  * favorites it permutes — see [BufferListModel.orderedFavorites]. View state: the screen holds it.
  */
-data class OptimisticFavorites(val order: List<Int>, val favoritesAtDrop: List<FavoriteEntry>) {
+data class OptimisticFavorites(
+    val order: List<Int>,
+    val favoritesAtDrop: List<FavoriteEntry>,
+    /** The burst the drop was made in. A new one releases the shadow — see `BufferListScreen`. */
+    val burstAtDrop: Int,
+) {
     /** Whether the store still holds the favorites this order was made from. */
     fun isCurrent(favorites: List<FavoriteEntry>): Boolean = favorites == favoritesAtDrop
 }

@@ -352,7 +352,7 @@ class ChatViewModel(
                 client.restore(server = server, token = grant.token)
                 sessionSubject.value = SessionState.LoggedIn
                 scope.task { loadConfig() }
-                socketOpening = true
+                store.setSocketOpening()
                 client.start()
                 return true
             }
@@ -900,24 +900,14 @@ class ChatViewModel(
         canWrite && client.setBookmark(messageId = messageId, saved = saved)
 
     /**
-     * Whether a write the user made can reach the server now: our socket has opened AND the
-     * device has a path. Asked before every user write that reports its fate (sweep L02…L53),
-     * because the send's own answer can't see two windows:
+     * Whether a write the user made can reach the server now (`ChatState.socketWritable`). Asked
+     * before every user write that reports its fate (sweep L02…L53), because the send's own answer
+     * can't see two windows:
      * - a reconnect's new socket takes writes before its upgrade succeeds — deliberately, for the
-     *   connect burst — and loses them if the attempt fails. Connected waits for its first frame;
+     *   connect burst — and loses them if the attempt fails;
      * - airplane mode flips `reachable` while the old socket still reads Connected.
      */
-    private val canWrite: Boolean
-        get() = store.state.reachable && store.state.connection == SocketStatus.Connected && !socketOpening
-
-    /**
-     * A socket is being opened and hasn't sent its first frame. ⚠ Needed beside Connected: a forced
-     * reconnect (the foreground's stale-socket check) replaces the socket without the state ever
-     * leaving Connected, and OkHttp queues writes on the new one during its upgrade and loses them
-     * if the attempt fails. The client's own connect burst writes through regardless; this gates
-     * only the user's writes, through [canWrite].
-     */
-    private var socketOpening = false
+    private val canWrite: Boolean get() = store.state.socketWritable
 
     /**
      * React with `value` on a line, or take ours back when it's already there (lurker-ios#183).
@@ -1307,7 +1297,9 @@ class ChatViewModel(
                     // The one join path: it opens the channel once we're in it, and says why when
                     // we aren't (lurker-ios#57). Typed in a buffer on that network, so opening it is
                     // what `/join` means.
-                    if (networkId != null) {
+                    // Not after a send in the same line went nowhere (`/cycle`'s part): the line is
+                    // coming back to the composer, and a join notice on top would say it twice.
+                    if (networkId != null && !wentNowhere) {
                         requestJoin(networkId = networkId, channel = effect.channel, key = effect.key, opens = true)
                     }
                 is CommandEffect.Part ->
@@ -1635,9 +1627,10 @@ class ChatViewModel(
      * this device's badge or anyone else's (sweep L23).
      */
     fun markRead(key: BufferKey) {
+        if (!canWrite) return
         val latest = store.state.messages[key.id]?.mapNotNull { if (it.id != 0L) it.id else null }?.maxOrNull()
             ?: return
-        if (latest <= (lastMarked[key.id] ?: 0L) || !canWrite) return
+        if (latest <= (lastMarked[key.id] ?: 0L)) return
         if (client.markRead(networkId = key.networkId, target = key.target, messageId = latest)) {
             lastMarked[key.id] = latest
         }
@@ -2182,7 +2175,7 @@ class ChatViewModel(
         sessionSubject.value = SessionState.LoggedIn
         client.restore(server = saved.server, token = saved.token)
         scope.task { loadConfig() }
-        socketOpening = true
+        store.setSocketOpening()
         scope.task { client.start() }
     }
 
@@ -2339,7 +2332,6 @@ class ChatViewModel(
                 onIncompatible(frame.incompatibility)
             }
             ServerFrame.SocketOpen -> {
-                socketOpening = false
                 // A socket that opens after the server was found not to take this build (its config
                 // answered first) is closed rather than used.
                 if (store.state.connection.incompatibility != null) {
@@ -2610,11 +2602,11 @@ class ChatViewModel(
 
     /**
      * Open a new socket in place of the old one, resuming from the last event. The one door every
-     * reconnect goes through, so user writes wait for the new socket ([socketOpening]) — a forced
-     * one included, which replaces a stale socket while the state still reads Connected.
+     * reconnect goes through, so user writes wait for the new socket (`ChatState.socketOpening`) —
+     * a forced one included, which replaces a stale socket while the state still reads Connected.
      */
     internal fun reconnectSocket() {
-        socketOpening = true
+        store.setSocketOpening()
         client.reconnect(since = store.state.maxEventId)
     }
 

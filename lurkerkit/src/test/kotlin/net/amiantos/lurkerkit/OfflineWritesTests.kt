@@ -107,10 +107,12 @@ class OfflineWritesTests {
         assertFalse(model.setNickNote(networkId = 1, nick = "bob", note = "lives in Berlin"))
         assertFalse(model.closeBuffer(channel))
         assertNotNull(model.state.buffers[channel.id])
+        assertFalse(model.state.canWrite(networkId = 1), "joins, opens and reactions wait too")
 
         model.handle(ServerFrame.SocketOpen)
         model.send(channel, text = "/msg bob hi")
         assertNull(model.takeUnsent(channel), "open: it went")
+        assertTrue(model.state.canWrite(networkId = 1))
     }
 
     /** A command that puts nothing on the wire holds nothing: there is nothing to have lost. */
