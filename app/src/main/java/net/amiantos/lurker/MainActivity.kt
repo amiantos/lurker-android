@@ -9,6 +9,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.content.IntentCompat
 import net.amiantos.lurker.ui.shell.AppRoot
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurker.ui.uploads.SharePayload
@@ -77,9 +78,9 @@ class MainActivity : ComponentActivity() {
         val action = intent.action
         if (action != Intent.ACTION_SEND && action != Intent.ACTION_SEND_MULTIPLE) return
         val streams = if (action == Intent.ACTION_SEND) {
-            listOfNotNull(intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java))
+            listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
         } else {
-            intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
+            IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
         }
         val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
         app.uploads.shares.receive(SharePayload.of(streams.map(Uri::toString), text))

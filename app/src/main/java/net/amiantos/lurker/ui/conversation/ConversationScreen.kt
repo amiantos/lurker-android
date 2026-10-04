@@ -63,6 +63,7 @@ import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleStartEffect
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -924,7 +925,7 @@ internal fun rememberDayClock() = run {
             addAction(Intent.ACTION_DATE_CHANGED)
         }
         // System broadcasts reach an unexported receiver; nothing else should be able to.
-        context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        ContextCompat.registerReceiver(context, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         try {
             while (true) {
                 // Measured between instants, in the zone, so a day that's 23 or 25 hours long (a DST

@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.settings
 
+import android.os.Build
 import net.amiantos.lurker.ui.networks.FormErrorRow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -198,7 +199,14 @@ internal data class AboutLines(val version: String, val server: String?)
 /** "Version 1.0 (1)", from the package — iOS reads the bundle's short version and build. */
 private fun versionLine(context: Context): String {
     val info = runCatching {
-        context.packageManager.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
+        val packages = context.packageManager
+        // The flags overload is API 33; Fire OS 7 is API 28.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            packages.getPackageInfo(context.packageName, PackageManager.PackageInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            packages.getPackageInfo(context.packageName, 0)
+        }
     }.getOrNull()
     return SettingsModel.versionString(versionName = info?.versionName, versionCode = info?.longVersionCode)
 }

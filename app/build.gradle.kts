@@ -15,7 +15,7 @@ android {
         applicationId = "net.amiantos.lurker"
         // 33 (Android 13) so the app installs on e-ink Android devices, which lag
         // the mainline API level — a Boox Palma is API 33. Nothing here needs 34.
-        minSdk = 33
+        minSdk = 28
         targetSdk = 36
         versionCode = 1
         versionName = "1.0"
