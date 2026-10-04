@@ -122,7 +122,7 @@ class ComposerModelTest {
 
     @Test
     fun `a stale pick inserts nothing`() {
-        assertNull(ComposerModel.pick("hello", 5, 5, Completion.Mention("al"), "alice", ":"))
+        assertNull(ComposerModel.pick("hello ", 6, 6, Completion.Mention("al"), "alice", ":"))
         assertNull(ComposerModel.pick("@al", 0, 3, Completion.Mention("al"), "alice", ":"))
         assertNull(ComposerModel.pick("@al", 3, 3, null, "alice", ":"))
     }
