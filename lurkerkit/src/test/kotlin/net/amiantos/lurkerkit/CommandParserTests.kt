@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.commands.ArgKind
 import net.amiantos.lurkerkit.commands.CommandEffect
 import net.amiantos.lurkerkit.commands.CommandParser
 import net.amiantos.lurkerkit.commands.CommandRegistry
@@ -1178,6 +1179,29 @@ class CommandParserTests {
             sent += words.drop(3)
         }
         assertEquals(masks, sent)
+    }
+
+    @Test
+    fun testAMaskTooLongForAnyLineRefusesTheWholeCommand() {
+        // Unsplittable, and sending the others without it would half-apply the ban.
+        val long = "*!*@" + "h".repeat(400)
+        assertEquals(
+            listOf<CommandEffect>(CommandEffect.Info("/ban: one of those is too long for a MODE line")),
+            context("/ban troll $long"),
+        )
+    }
+
+    @Test
+    fun testCompletionFollowsAChannelFirstForm() {
+        val invite = CommandRegistry.spec("invite")!!
+        assertEquals(ArgKind.Channel, invite.argKind(listOf("bob")))
+        assertEquals(ArgKind.Nick, invite.argKind(listOf("#other")))
+        val kickban = CommandRegistry.spec("kickban")!!
+        assertEquals(ArgKind.Nick, kickban.argKind(emptyList()))
+        assertEquals(ArgKind.Nick, kickban.argKind(listOf("#other")))
+        assertEquals(ArgKind.Text, kickban.argKind(listOf("troll")))
+        // A single form still fits a channel in a nick slot: `/msg #chan hi` is a message.
+        assertEquals(ArgKind.Text, CommandRegistry.spec("msg")!!.argKind(listOf("#chan")))
     }
 
     @Test

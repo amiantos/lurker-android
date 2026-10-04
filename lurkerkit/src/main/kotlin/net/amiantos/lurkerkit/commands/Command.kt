@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit.commands
 
+import net.amiantos.lurkerkit.model.ChannelName
 import net.amiantos.lurkerkit.model.IgnoreRule
 
 // The slash-command surface, ported from the web client's `handleCommand` dispatcher
@@ -340,14 +341,22 @@ data class CommandSpec(
      *
      * Resolved from what was typed rather than by counting, so a form's keywords can pick it and
      * an optional flag can be there or not: `/dcc close chat b` and `/dcc chat -passive b` both
-     * land on the nick. The first form the tokens fit answers. For a command with neither — every
-     * command but `/dcc` — this is exactly a position count, with a trailing `rest` slot answering
-     * past its end (so the third nick of `/op a b c` still reads as a nick).
+     * land on the nick. The first form the tokens fit answers. For a command with one form — every
+     * command but `/dcc`, `/invite` and `/kickban` — this is exactly a position count, with a
+     * trailing `rest` slot answering past its end (so the third nick of `/op a b c` still reads as
+     * a nick).
+     *
+     * A form whose filled slots agree with their tokens wins first: a channel in each channel
+     * slot, and no channel in a nick slot. That's what picks `/invite #chan <nick>` over
+     * `/invite <nick> [channel]`. Failing that, the first form the tokens fit at all, so
+     * `/msg #chan hi` still completes as a message.
      */
     fun argKind(preceding: List<String>, typing: String = ""): ArgKind {
-        for (form in forms) {
-            val kind = kind(form, preceding, typing)
-            if (kind != null) return kind
+        for (strict in listOf(true, false)) {
+            for (form in forms) {
+                val kind = kind(form, preceding, typing, strict)
+                if (kind != null) return kind
+            }
         }
         return ArgKind.None
     }
@@ -360,7 +369,7 @@ data class CommandSpec(
 
     companion object {
         /** Walk one form. Null when the typed tokens don't fit it. */
-        private fun kind(form: List<ArgSpec>, preceding: List<String>, typing: String): ArgKind? {
+        private fun kind(form: List<ArgSpec>, preceding: List<String>, typing: String, strict: Boolean): ArgKind? {
             var slot = 0
 
             // A flag slot is filled by a `-` token and skipped by anything else.
@@ -376,6 +385,11 @@ data class CommandSpec(
                 }
                 val arg = form[slot]
                 if (arg.kind == ArgKind.Keyword && token.lowercase() != arg.label.lowercase()) return null
+                if (strict && (arg.kind == ArgKind.Channel || arg.kind == ArgKind.Nick) &&
+                    ChannelName.isChannelTarget(token) != (arg.kind == ArgKind.Channel)
+                ) {
+                    return null
+                }
                 slot += 1
             }
             skipFlags(typing)
@@ -485,8 +499,7 @@ object CommandRegistry {
             listOf("whois"), CommandCategory.Channels, "Look up a user",
             args = listOf(ArgSpec("nick", ArgKind.Nick, optional = true)),
         ),
-        // Channel-first too, as /kick takes it. Completion follows the first form: nothing in a
-        // form can say "this token is a channel", so the second is for `/commands` to show.
+        // Channel-first too, as /kick takes it; `argKind` picks that form when a channel leads.
         CommandSpec(
             listOf("invite"), CommandCategory.Channels, "Invite a user to a channel",
             forms = listOf(
@@ -502,7 +515,13 @@ object CommandRegistry {
         ),
         CommandSpec(
             listOf("kickban"), CommandCategory.Moderation, "Ban a user from this channel, then kick them",
-            args = listOf(ArgSpec("nick", ArgKind.Nick), ArgSpec("reason", ArgKind.Text, optional = true, rest = true)),
+            forms = listOf(
+                listOf(ArgSpec("nick", ArgKind.Nick), ArgSpec("reason", ArgKind.Text, optional = true, rest = true)),
+                listOf(
+                    ArgSpec("channel", ArgKind.Channel), ArgSpec("nick", ArgKind.Nick),
+                    ArgSpec("reason", ArgKind.Text, optional = true, rest = true),
+                ),
+            ),
         ),
         CommandSpec(
             listOf("mode"), CommandCategory.Moderation, "Set channel or user modes",

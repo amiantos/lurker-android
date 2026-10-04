@@ -1105,6 +1105,11 @@ object CommandParser {
         val sign = if (adding) "+" else "-"
         fun line(params: List<String>): String =
             "MODE $channel $sign${letter.toString().repeat(params.size)} ${params.joinToString(" ")}"
+        // One mask too long for a line of its own can't be split, and sending the rest without it
+        // would half-apply the command — so the whole command is refused.
+        if (args.any { line(listOf(it)).toByteArray(Charsets.UTF_8).size > modeLineBudget }) {
+            return listOf(CommandEffect.Info("/$verb: one of those is too long for a MODE line"))
+        }
         // A known spec with no MODES is no limit; an unknown spec is the default, as the web.
         val limit: Int? = if (spec != null) spec.maxModes else defaultMaxModes
         val lines = mutableListOf<List<String>>()
