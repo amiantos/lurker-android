@@ -141,4 +141,13 @@ class SpeakersTests {
         val map = SpeakerMap(listOf(Speaker(nick = "alice", lastSpoke = t0))).rename("alice", "Alice_AFK")
         assertEquals(listOf(Speaker(nick = "Alice_AFK", lastSpoke = t0)), map.recent)
     }
+
+    /** The folded key doesn't move, but the spelling completion offers does. */
+    @Test
+    fun testACaseOnlyRenameRespellsTheEntry() {
+        var map = SpeakerMap(listOf(Speaker(nick = "alice", lastSpoke = t0))).rename("alice", "Alice")
+        assertEquals(listOf(Speaker(nick = "Alice", lastSpoke = t0)), map.recent)
+        map = map.rename("bob", "Bob")
+        assertEquals(1, map.recent.size, "an unknown nick is still a no-op")
+    }
 }

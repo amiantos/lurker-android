@@ -93,12 +93,18 @@ data class SpeakerMap private constructor(
 
     /**
      * Carry an entry across a nick change, so someone who spoke and then renamed doesn't read
-     * as a stranger when they part. The newer of the two times wins where both exist.
+     * as a stranger when they part. The newer of the two times wins where both exist. A
+     * case-only change (`alice` → `Alice`) keeps the entry and its time and takes the new
+     * spelling, which is what completion offers.
      */
     fun rename(old: String, new: String): SpeakerMap {
         val oldKey = old.lowercase()
         val newKey = new.lowercase()
-        if (oldKey.isEmpty() || newKey.isEmpty() || oldKey == newKey) return this
+        if (oldKey.isEmpty() || newKey.isEmpty()) return this
+        if (oldKey == newKey) {
+            val entry = lastSpoke[oldKey] ?: return this
+            return SpeakerMap(lastSpoke + (oldKey to Speaker(new, entry.lastSpoke)))
+        }
         val carried = lastSpoke[oldKey] ?: return this
         return SpeakerMap(lastSpoke - oldKey).record(nick = new, date = carried.lastSpoke)
     }
