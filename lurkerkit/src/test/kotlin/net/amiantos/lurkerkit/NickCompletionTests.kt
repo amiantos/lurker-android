@@ -3,14 +3,14 @@
 
 package net.amiantos.lurkerkit
 
-import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Member
-import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.NickCompletion
 import net.amiantos.lurkerkit.model.SettingOption
 import net.amiantos.lurkerkit.model.SettingType
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.model.SpeakerMap
+import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -18,21 +18,25 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Locks the @‑mention logic to the web client's `nickCompletion.ts`: speakers before
+ * Locks nick completion to the web client's `nickCompletion.ts`: speakers before
  * members, recency order, self excluded, departed speakers dropped in channels — plus
  * the token scanner and the addressing suffix the composer inserts.
  */
 class NickCompletionTests {
 
-    private fun speech(id: Long, nick: String, isSelf: Boolean = false): Message =
-        Message(id = id, type = EventType.Message, nick = nick, text = "hi", isSelf = isSelf)
+    /**
+     * A speaker map where each nick spoke at its index — so the LAST listed spoke most recently,
+     * the way a buffer's history reads.
+     */
+    private fun spoke(vararg nicks: String): SpeakerMap =
+        nicks.foldIndexed(SpeakerMap()) { index, map, nick -> map.record(nick, Instant.ofEpochSecond(index + 1L)) }
 
     // MARK: - Candidates
 
     @Test
     fun testRecentSpeakersLeadNewestFirstThenMembersAlphabetically() {
         val candidates = NickCompletion.candidates(
-            messages = listOf(speech(1, "alice"), speech(2, "bob")),
+            speakers = spoke("alice", "bob"),
             members = listOf(Member(nick = "zoe"), Member(nick = "alice"), Member(nick = "bob"), Member(nick = "carol")),
             selfNick = "me",
             query = "",
@@ -47,7 +51,7 @@ class NickCompletionTests {
     @Test
     fun testFilteringIsCaseInsensitiveAndKeepsRecencyOrder() {
         val candidates = NickCompletion.candidates(
-            messages = listOf(speech(1, "Anna"), speech(2, "arthur")),
+            speakers = spoke("Anna", "arthur"),
             members = listOf(Member(nick = "Anna"), Member(nick = "arthur"), Member(nick = "AXEL"), Member(nick = "bob")),
             selfNick = null,
             query = "a",
@@ -59,7 +63,7 @@ class NickCompletionTests {
     @Test
     fun testYouAreNeverACandidate() {
         val candidates = NickCompletion.candidates(
-            messages = listOf(speech(1, "ME", isSelf = true), speech(2, "alice")),
+            speakers = spoke("ME", "alice"),
             members = listOf(Member(nick = "me"), Member(nick = "alice")),
             selfNick = "me",
             query = "",
@@ -74,36 +78,35 @@ class NickCompletionTests {
      */
     @Test
     fun testADepartedSpeakerIsDroppedInChannelsButNotDMs() {
-        val history = listOf(speech(1, "ghost"), speech(2, "alice"))
+        val speakers = spoke("ghost", "alice")
         val inChannel = NickCompletion.candidates(
-            messages = history, members = listOf(Member(nick = "alice")),
+            speakers = speakers, members = listOf(Member(nick = "alice")),
             selfNick = null, query = "", isChannel = true,
         )
         assertEquals(listOf("alice"), inChannel)
 
         val inDM = NickCompletion.candidates(
-            messages = history, members = emptyList(),
+            speakers = speakers, members = emptyList(),
             selfNick = null, query = "", isChannel = false,
         )
         assertEquals(listOf("alice", "ghost"), inDM)
     }
 
     @Test
-    fun testOnlySpeechCountsAsSpeakingAndTheCapHolds() {
-        val noisy: List<Message> = listOf(
-            speech(1, "alice"),
-            Message(id = 2, type = EventType.Join, nick = "joiner", text = null),
-            Message(id = 3, type = EventType.Notice, nick = "noticebot", text = "psa"),
-            Message(id = 4, type = EventType.Action, nick = "bob", text = "waves"),
-        )
-        val members = listOf("alice", "bob", "joiner", "noticebot", "carol", "dave").map { Member(nick = it) }
+    fun testTheCapHolds() {
+        val members = listOf("alice", "bob", "carol", "dave", "erin", "frank").map { Member(nick = it) }
         val candidates = NickCompletion.candidates(
-            messages = noisy, members = members, selfNick = null, query = "", isChannel = true,
+            speakers = spoke("alice", "bob"), members = members, selfNick = null, query = "", isChannel = true,
         )
-        assertEquals(4, candidates.size, "capped at four")
+        assertEquals(listOf("bob", "alice", "carol", "dave"), candidates, "capped at four")
+    }
+
+    /** A speaker is offered as they last spelled their nick, not as the map's lowercased key. */
+    @Test
+    fun testASpeakerKeepsTheirSpelling() {
         assertEquals(
-            listOf("bob", "alice"), candidates.take(2),
-            "an action speaks; a join or notice does not",
+            listOf("Alice"),
+            NickCompletion.candidates(speakers = spoke("Alice"), members = emptyList(), selfNick = null, query = "al", isChannel = false),
         )
     }
 
@@ -141,10 +144,92 @@ class NickCompletionTests {
     @Test
     fun testACaretOutsideTheTokenDeactivatesIt() {
         assertNull(
-            NickCompletion.activeMention("@al done", caret = 8),
+            NickCompletion.activeMention("@al done ", caret = 9),
             "past the token's word there is no active mention",
         )
-        assertNull(NickCompletion.activeMention("plain text", caret = 5))
+        assertNull(NickCompletion.activeMention("plain text", caret = 0))
+    }
+
+    // MARK: - Bare words (#57)
+
+    /**
+     * The web's mobile strip: two letters of a nick ask without an `@`, and completion
+     * replaces the word from its first letter.
+     */
+    @Test
+    fun testABareWordOfTwoLettersAsks() {
+        assertEquals(
+            NickCompletion.MentionToken(start = 4, end = 6, query = "al"),
+            NickCompletion.activeMention("hey al", caret = 6),
+        )
+        assertEquals(
+            NickCompletion.MentionToken(start = 0, end = 2, query = "al"),
+            NickCompletion.activeMention("al", caret = 2),
+        )
+        assertEquals("al", NickCompletion.activeMention("al more", caret = 2)?.query, "the end of a word, not of the text")
+    }
+
+    @Test
+    fun testABareWordOfOneCharacterDoesNot() {
+        assertNull(NickCompletion.activeMention("hey a", caret = 5), "every \"I\" and \"a\" would float the pills")
+        assertNull(
+            NickCompletion.activeMention("hey \uD83D\uDC4D", caret = 6),
+            "one emoji is one character, not its two UTF-16 units",
+        )
+    }
+
+    /**
+     * A caret placed inside a word is editing it: pills there would float over every typo
+     * fix, and a pick would replace the rest of the word ("al|ready" → "alice ").
+     */
+    @Test
+    fun testABareCaretInsideAWordDoesNotAsk() {
+        assertNull(NickCompletion.activeMention("I already said", caret = 4))
+        assertNull(NickCompletion.activeMention("thanks alice's idea", caret = 9))
+    }
+
+    /**
+     * Completion replaces the whole word, so a word holding an `@` past its start never
+     * asks, in either shape: it would take the `@host` with it.
+     */
+    @Test
+    fun testAWordWithAnAtPastItsStartDoesNotAsk() {
+        assertNull(NickCompletion.activeMention("mail user@host", caret = 14))
+        assertNull(NickCompletion.activeMention("@alice@host.com", caret = 3), "even after the caret, an @… would lose its tail")
+        assertNull(NickCompletion.activeMention("@a@b", caret = 4))
+    }
+
+    @Test
+    fun testACommandOrChannelWordDoesNotAsk() {
+        assertNull(NickCompletion.activeMention("/jo", caret = 3))
+        assertNull(NickCompletion.activeMention("//jo", caret = 4), "an escaped command")
+        for (sigil in listOf("#", "&", "+", "!")) {
+            assertNull(NickCompletion.activeMention("see ${sigil}li", caret = 7), sigil)
+        }
+    }
+
+    /**
+     * A command's arguments are keys, passwords and new nicks: a bare word stays out of them.
+     * `/me`'s argument is speech, `//` escapes a command, and an `@` asks anywhere.
+     */
+    @Test
+    fun testACommandLineAsksOnlyForMeOrAnAt() {
+        assertNull(NickCompletion.activeMention("/msg NickServ IDENTIFY hu", caret = 25))
+        assertNull(
+            NickCompletion.activeMention("  /nick al", caret = 10),
+            "the composer trims, so leading whitespace is still a command",
+        )
+        assertEquals("al", NickCompletion.activeMention("/me waves at al", caret = 15)?.query)
+        assertEquals("al", NickCompletion.activeMention("/ME waves at al", caret = 15)?.query)
+        assertNull(NickCompletion.activeMention("/meow al", caret = 8), "a verb, not a prefix")
+        assertEquals("al", NickCompletion.activeMention("//x al", caret = 6)?.query)
+        assertEquals("al", NickCompletion.activeMention("/topic hi @al", caret = 13)?.query)
+    }
+
+    @Test
+    fun testAnAtStillAsksFromItsFirstKeystrokeAnywhereInTheWord() {
+        assertEquals("a", NickCompletion.activeMention("hey @a", caret = 6)?.query, "the bare threshold never applies to an @")
+        assertEquals("al", NickCompletion.activeMention("@alice", caret = 3)?.query)
     }
 
     // MARK: - Addressing suffix
@@ -392,7 +477,7 @@ class NickCompletionTests {
     @Test
     fun testTheQueryFoldsBeyondAsciiButANickIsStillMatchedLiterally() {
         fun candidates(query: String): List<String> = NickCompletion.candidates(
-            messages = listOf(speech(1, "\u00D1u")),
+            speakers = spoke("\u00D1u"),
             members = listOf("\u00C9mile", "\u00D1u", "bob", "\uD83D\uDE00bob", "\u00E9va").map { Member(nick = it) },
             selfNick = null, query = query, isChannel = true,
         )

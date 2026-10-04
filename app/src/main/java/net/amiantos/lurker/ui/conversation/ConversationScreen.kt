@@ -705,7 +705,6 @@ fun ConversationScreen(
         model = model,
         key = key,
         kind = kind,
-        messages = { current.visible },
         onWillSend = ::carryToComposer,
         onOpenBuffer = onOpenBuffer,
         onShowProfile = onShowProfile,

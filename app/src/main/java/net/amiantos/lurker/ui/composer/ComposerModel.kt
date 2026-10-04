@@ -23,6 +23,7 @@ import net.amiantos.lurkerkit.model.NickCompletion
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.model.SpeakerMap
 import net.amiantos.lurkerkit.model.member
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.support.TextRange
@@ -40,7 +41,7 @@ import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 
 /**
  * What kind of completion is live under the caret. The composer detects the *shape*
- * (`CommandCompletion` for a slash line, `NickCompletion` for an `@`) and reports the query; the
+ * (`CommandCompletion` for a slash line, `NickCompletion` for a nick) and reports the query; the
  * candidates come from state the field never sees — the command table, the network's channels,
  * this buffer's members. iOS's `ComposerBar.Completion`.
  */
@@ -54,7 +55,7 @@ internal sealed interface Completion {
     /** Typing a nick argument of a command — `/msg al|`, `/whois b|`. */
     data class NickArg(val query: String) : Completion
 
-    /** An `@`-mention anywhere free text is allowed, including inside `/me …`. */
+    /** A nick being typed — `@al|`, or a bare `al|` (#57) — anywhere free text is allowed, including inside `/me …`. */
     data class Mention(val query: String) : Completion
 }
 
@@ -178,9 +179,11 @@ internal class CandidateSources(
     val ignores: IgnoreSet,
     val buffers: Map<String, Buffer>,
     val selfNick: String?,
+    val speakers: SpeakerMap?,
 ) {
     companion object {
         fun of(state: ChatState, key: BufferKey) = CandidateSources(
+            speakers = state.speakers[key.id],
             members = state.members[key.id],
             ignores = state.ignores,
             buffers = state.buffers,
@@ -189,7 +192,7 @@ internal class CandidateSources(
 
         fun same(old: CandidateSources, new: CandidateSources): Boolean =
             old.members === new.members && old.ignores === new.ignores && old.buffers === new.buffers &&
-                old.selfNick == new.selfNick
+                old.selfNick == new.selfNick && old.speakers === new.speakers
     }
 }
 
@@ -234,8 +237,8 @@ internal object ComposerModel {
     /**
      * The completion under the caret, or null. A slash line is classified first
      * (`CommandCompletion`): a channel/nick argument or the verb itself wins, and anything else —
-     * free text, an unknown command — falls through to `@`-mention detection, so `/me @al|` still
-     * completes a nick. A selection (start ≠ end) is editing, never mid-token.
+     * free text, an unknown command — falls through to nick detection, so `/me @al|` and
+     * `/me al|` still complete a nick. A selection (start ≠ end) is editing, never mid-token.
      */
     fun completion(text: String, selectionStart: Int, selectionEnd: Int): Completion? {
         if (selectionStart != selectionEnd) return null
@@ -284,7 +287,7 @@ internal object ComposerModel {
 
     /**
      * What a pick inserts, by the context it was offered in. A command inserts its verb, a channel or
-     * nick argument inserts that value, an `@`-mention inserts the nick with its addressing suffix.
+     * nick argument inserts that value, a nick being typed inserts the nick with its addressing suffix.
      * Null when the caret has moved off the token since (the pick is stale).
      */
     fun pick(text: String, selectionStart: Int, selectionEnd: Int, completion: Completion?, value: String, punctuation: String): FieldEdit? {
@@ -298,16 +301,21 @@ internal object ComposerModel {
     }
 
     /**
-     * Replace the active `@token` with [nick] plus its addressing suffix — the web picker's exact
-     * insertion, so both clients send the same line. The `@` itself goes: IRC addresses by bare
-     * nick, and the sent line highlights by containing it. The whole word, not just up to the caret:
-     * completing `@al|ice` must swallow the tail, not weld the pick onto it.
+     * Replace the nick being typed — an `@…` or a bare word — with [nick] plus its addressing
+     * suffix: the web picker's exact insertion, so both clients send the same line. An `@` goes: IRC
+     * addresses by bare nick, and the sent line highlights by containing it. The whole word, not just
+     * up to the caret: completing `@al|ice` must swallow the tail, not weld the pick onto it.
+     *
+     * A pick the word under the caret no longer leads to is stale and inserts nothing. A bare word
+     * makes nearly any word a token, so "is there one" no longer tells a pick made for this word from
+     * one made for the word the caret just left.
      *
      * [punctuation] is the resolved `input.completion.nick_suffix` — PUNCTUATION only, the space is
      * always ours to add (`NickCompletion.addressPunctuation`).
      */
     fun completeMention(text: String, caret: Int, nick: String, punctuation: String): FieldEdit? {
         val token = NickCompletion.activeMention(text, caret) ?: return null
+        if (!nick.lowercase().startsWith(token.query.lowercase())) return null
         val replacement = nick + NickCompletion.addressingSuffix(beforeTokenAt = token.start, text = text, punctuation = punctuation)
         return replace(text, TextRange(token.start, token.end), replacement)
     }

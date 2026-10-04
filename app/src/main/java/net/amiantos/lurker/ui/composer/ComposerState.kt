@@ -22,7 +22,6 @@ import androidx.lifecycle.compose.LifecycleStartEffect
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -37,6 +36,7 @@ import net.amiantos.lurkerkit.model.NickCompletion
 import net.amiantos.lurkerkit.model.OutgoingTyping
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.Replies
+import net.amiantos.lurkerkit.model.SpeakerMap
 import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.store.SocketStatus
 import java.time.Instant
@@ -76,9 +76,6 @@ internal class ComposerState(
     private val scope: CoroutineScope,
 ) {
     // MARK: - What the screen hands in (set every composition — see `rememberComposerState`)
-
-    /** The lines this buffer renders, newest last — what nick completion ranks recency by. */
-    internal var messages: () -> List<Message> = { emptyList() }
 
     /** About to send: put the list where the send should leave it (`ComposerModel.sendScroll`). */
     internal var onWillSend: () -> Unit = {}
@@ -181,7 +178,14 @@ internal class ComposerState(
         reportEdit(now)
     }
 
-    /** Recompute the completion under the caret, and the pills, only when it changed. */
+    /**
+     * Recompute the completion under the caret, and the pills, only when it changed.
+     *
+     * Not gated on [Snapshot.composing], unlike iOS's marked text: Gboard and most Latin keyboards
+     * hold the word being typed as the composing region, so the gate would switch bare-word nicks
+     * (#57) off for nearly everyone. The text is in the field either way, and a pick ends the
+     * composition the way any edit does.
+     */
     private fun emitCompletion(now: Snapshot) {
         val computed = ComposerModel.completion(now.text, now.selection.min, now.selection.max)
         val last = lastCompletion
@@ -208,7 +212,7 @@ internal class ComposerState(
             nicks = { query ->
                 val state = model.state
                 NickCompletion.candidates(
-                    messages = messages(),
+                    speakers = state.speakers[key.id] ?: SpeakerMap(),
                     members = state.visibleMembers(key),
                     selfNick = key.networkId?.let { state.networks[it]?.nick },
                     query = query,
@@ -578,7 +582,6 @@ internal class ComposerState(
  * it current: the field's own changes, the stored draft, the chrome, the refused-line nudge, and
  * the flush on leaving.
  *
- * @param messages the lines the list renders, newest last — read when a nick completion is asked for.
  * @param onWillSend put the list where a send should leave it, before the line goes.
  */
 @Composable
@@ -586,7 +589,6 @@ internal fun rememberComposerState(
     model: ChatViewModel,
     key: BufferKey,
     kind: BufferKind,
-    messages: () -> List<Message>,
     onWillSend: () -> Unit,
     onOpenBuffer: (BufferKey) -> Unit,
     onShowProfile: (networkId: Int, nick: String) -> Unit,
@@ -596,7 +598,6 @@ internal fun rememberComposerState(
     val keyboard = LocalSoftwareKeyboardController.current
     val events = LocalAppEvents.current
     SideEffect {
-        state.messages = messages
         state.onWillSend = onWillSend
         state.onOpenBuffer = onOpenBuffer
         state.onShowProfile = onShowProfile
@@ -626,15 +627,15 @@ internal fun rememberComposerState(
             .distinctUntilChanged()
             .collect { state.chrome = it }
     }
-    // The pills' sources: the nicklist, the rules, the network's channels and your nick off the store,
-    // and the lines the list renders (Compose state, so observed). A pill for someone who just left, or
-    // who was just ignored, mustn't stay tappable — nor someone who just joined stay missing.
+    // The pills' sources, all off the store: the nicklist, the rules, the network's channels, your nick
+    // and who has spoken lately. A pill for someone who just left, or who was just ignored, mustn't stay
+    // tappable — nor someone who just joined stay missing.
     LaunchedEffect(state) {
-        val sources = model.statePublisher
+        model.statePublisher
             .conflate()
             .map { CandidateSources.of(it, key) }
             .distinctUntilChanged(CandidateSources::same)
-        combine(sources, snapshotFlow { state.messages() }) { _, _ -> }.collect { state.refreshSuggestions() }
+            .collect { state.refreshSuggestions() }
     }
     // A held refused line comes back when the field frees up by hand — the text deleted — as well as on
     // the composer's own moves (each of which asks itself).

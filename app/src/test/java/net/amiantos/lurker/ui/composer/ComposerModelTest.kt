@@ -16,6 +16,7 @@ import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.model.SpeakerMap
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -39,13 +40,21 @@ class ComposerModelTest {
     fun `free text in a command falls through to a mention`() {
         assertEquals(Completion.Mention("al"), ComposerModel.completion("/me waves at @al", 16, 16))
         assertEquals(Completion.Mention(""), ComposerModel.completion("hey @", 5, 5))
+        assertEquals(Completion.Mention("al"), ComposerModel.completion("/me waves at al", 15, 15))
     }
 
     @Test
-    fun `a selection, an email and plain text complete nothing`() {
+    fun `a bare word of two letters is a mention without the at (#57)`() {
+        assertEquals(Completion.Mention("al"), ComposerModel.completion("hey al", 6, 6))
+        assertNull(ComposerModel.completion("hey a", 5, 5))
+        assertNull("a command's argument is not a nick slot", ComposerModel.completion("/nick al", 8, 8))
+    }
+
+    @Test
+    fun `a selection, an email and a finished word complete nothing`() {
         assertNull(ComposerModel.completion("/jo", 1, 3))
         assertNull(ComposerModel.completion("mail me@host", 12, 12))
-        assertNull(ComposerModel.completion("hello there", 11, 11))
+        assertNull(ComposerModel.completion("hello there ", 12, 12))
         // `//` is an escaped literal, not a command.
         assertNull(ComposerModel.completion("//jo", 4, 4))
     }
@@ -115,7 +124,9 @@ class ComposerModelTest {
 
     @Test
     fun `a stale pick inserts nothing`() {
-        assertNull(ComposerModel.pick("hello", 5, 5, Completion.Mention("al"), "alice", ":"))
+        assertNull(ComposerModel.pick("hello ", 6, 6, Completion.Mention("al"), "alice", ":"))
+        // Pills built for `al`, picked after the caret moved to the end of another word.
+        assertNull(ComposerModel.pick("hello al", 5, 5, Completion.Mention("al"), "alice", ":"))
         assertNull(ComposerModel.pick("@al", 0, 3, Completion.Mention("al"), "alice", ":"))
         assertNull(ComposerModel.pick("@al", 3, 3, null, "alice", ":"))
     }
@@ -229,15 +240,18 @@ class ComposerModelTest {
     }
 
     @Test
-    fun `candidate sources compare by identity, so a moved nicklist or rule set refreshes the pills`() {
+    fun `candidate sources compare by identity, so a moved nicklist, rule set or speaker refreshes the pills`() {
         val members = listOf(Member(nick = "alice"))
         val buffers = mapOf("1::#a" to Buffer(networkId = 1, target = "#a", kind = BufferKind.Channel))
         val ignores = IgnoreSet.empty
-        val sources = CandidateSources(members, ignores, buffers, selfNick = "me")
-        assertTrue(CandidateSources.same(sources, CandidateSources(members, ignores, buffers, "me")))
-        assertFalse(CandidateSources.same(sources, CandidateSources(members + Member(nick = "bob"), ignores, buffers, "me")))
-        assertFalse(CandidateSources.same(sources, CandidateSources(members.toList(), ignores, buffers, "me")))
-        assertFalse(CandidateSources.same(sources, CandidateSources(members, ignores, buffers, "me_")))
+        val speakers = SpeakerMap().record("alice", Instant.ofEpochSecond(1))
+        val sources = CandidateSources(members, ignores, buffers, selfNick = "me", speakers = speakers)
+        assertTrue(CandidateSources.same(sources, CandidateSources(members, ignores, buffers, "me", speakers)))
+        assertFalse(CandidateSources.same(sources, CandidateSources(members + Member(nick = "bob"), ignores, buffers, "me", speakers)))
+        assertFalse(CandidateSources.same(sources, CandidateSources(members.toList(), ignores, buffers, "me", speakers)))
+        assertFalse(CandidateSources.same(sources, CandidateSources(members, ignores, buffers, "me_", speakers)))
+        // Someone spoke: the map is a new value, and the pills re-rank.
+        assertFalse(CandidateSources.same(sources, CandidateSources(members, ignores, buffers, "me", speakers.record("bob", Instant.ofEpochSecond(2)))))
     }
 
     // MARK: - Send
