@@ -1041,13 +1041,15 @@ object CommandParser {
 
     /**
      * A whole `:name:` in the gemoji character set — what the web's `reactionFromInput` would
-     * look up, closing colon optional. Left open, the name needs two characters: `:D` and `:P`
-     * are emoticons, not names.
+     * look up, closing colon optional. Left open, an emoticon isn't a name: `:D` and `:P` are
+     * too short to be one, and a nose and a letter (`:-D`, `:-p`) is a face. `:-1` and `:+1`
+     * stay names — the web turns them into 👎 and 👍.
      */
     private fun isShortcode(text: String): Boolean {
         if (!text.startsWith(":")) return false
         val closed = text.length > 1 && text.endsWith(":")
         val name = text.substring(1, if (closed) text.length - 1 else text.length)
+        if (!closed && name.length == 2 && name[0] == '-' && (name[1] in 'a'..'z' || name[1] in 'A'..'Z')) return false
         return name.length >= (if (closed) 1 else 2) &&
             name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it in "_+-" }
     }

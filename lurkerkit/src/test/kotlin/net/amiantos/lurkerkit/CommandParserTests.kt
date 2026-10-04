@@ -1267,6 +1267,11 @@ class CommandParserTests {
         // Emoticons and the emoji itself still go out.
         assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":D")), effects("/react :D"))
         assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":P")), effects("/react :P"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":-D")), effects("/react :-D"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":-p")), effects("/react :-p"))
+        // `:-1` and `:+1` are names on the web (👎, 👍), not faces.
+        assertTrue(isInfo(effects("/react :-1")))
+        assertTrue(isInfo(effects("/react :+1")))
         assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":-)")), effects("/react :-)"))
         assertEquals(listOf<CommandEffect>(CommandEffect.React(value = "🎉")), effects("/react 🎉"))
     }
