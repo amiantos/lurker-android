@@ -64,6 +64,31 @@ class OfflineWritesTests {
         }
     }
 
+    /**
+     * A write that would go out is still refused when it couldn't reach the server: a reconnect's
+     * socket that hasn't opened (it takes writes before its upgrade, and loses them if the
+     * attempt fails), or a device with no path while the old socket still reads connected.
+     * `/msg` goes through the seam, which says "sent", so only the gate can hand it back.
+     */
+    @Test
+    fun testAWriteThatWouldGoOutWaitsForTheConnection() {
+        val unopened = testViewModel()
+        unopened.sendMessageSeam = { _, _ -> true }
+        unopened.send(channel, text = "/msg bob hi")
+        assertEquals("/msg bob hi", unopened.takeUnsent(channel)?.text, "the socket hasn't opened")
+
+        val unreachable = viewModel()
+        unreachable.sendMessageSeam = { _, _ -> true }
+        unreachable.setReachable(false)
+        unreachable.send(channel, text = "/msg bob hi")
+        assertEquals("/msg bob hi", unreachable.takeUnsent(channel)?.text, "the device has no path")
+
+        val online = viewModel()
+        online.sendMessageSeam = { _, _ -> true }
+        online.send(channel, text = "/msg bob hi")
+        assertNull(online.takeUnsent(channel), "connected and reachable: it went")
+    }
+
     /** A command that puts nothing on the wire holds nothing: there is nothing to have lost. */
     @Test
     fun testALocalCommandHoldsNothing() {

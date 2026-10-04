@@ -38,7 +38,6 @@ import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.SpeakerMap
 import net.amiantos.lurkerkit.session.ChatViewModel
-import net.amiantos.lurkerkit.store.SocketStatus
 import java.time.Instant
 
 /**
@@ -575,14 +574,12 @@ internal class ComposerState(
      * local change — the strip comes down when the server's `away-state` echo folds in, on every
      * device at once.
      *
-     * ⚠ Asked of the connection AND of the send. Of BOTH connection signals: airplane mode flips
-     * `reachable` while the socket still reads connected, for as long as it takes to notice. And of
-     * the send, which says when there was no socket to take it. Nothing retries a Back, so say so,
-     * or the strip staying put reads as a Back that ignored you.
+     * False from the kit when it couldn't reach the server — it asks both connection signals and the
+     * send. Nothing retries a Back, so say so, or the strip staying put reads as a Back that ignored
+     * you.
      */
     fun back() {
-        val state = model.state
-        if (state.reachable && state.connection == SocketStatus.Connected && model.setBack(key.networkId)) return
+        if (model.setBack(key.networkId)) return
         notice("Not connected — try again when you're back online")
     }
 }

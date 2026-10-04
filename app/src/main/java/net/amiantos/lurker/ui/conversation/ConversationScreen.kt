@@ -315,11 +315,12 @@ fun ConversationScreen(
             // `view.window != nil`). ⚠ A WRITE: the server's pointer moves for every device. Asked
             // when this buffer's messages changed (or it's the first mark), as iOS's deduped `apply`
             // asks — not for every frame of every other buffer, each of which would scan this one's.
-            // ⚠ And only online (`mayWrite`), checked before anything is recorded. Going offline
-            // forgets this screen's own mark, so the first frame back online asks again even when
-            // no new line has landed: a mark written into a socket that died without saying so
-            // would otherwise never be re-sent (sweep L23). The kit forgets its own on the drop.
-            if (!ConversationScroll.mayWrite(state)) jobs.markedFor = null
+            // ⚠ And only online (`mayWrite`), checked before anything is recorded. Going offline, or a
+            // new socket without its snapshot yet, forgets this screen's own mark, so the first frame
+            // back asks again even when no new line has landed: a mark written into a socket that died
+            // without saying so would otherwise never be re-sent (sweep L23). The kit forgets its own
+            // on a drop and on a new socket.
+            if (!ConversationScroll.mayWrite(state) || !state.snapshotSinceOpen) jobs.markedFor = null
             val held = state.messages[key.id]
             if (scroll.marksRead && ConversationScroll.mayWrite(state) &&
                 lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) && held !== jobs.markedFor

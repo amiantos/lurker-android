@@ -33,6 +33,7 @@ import net.amiantos.lurkerkit.commands.CommandEffect
 import net.amiantos.lurkerkit.commands.CommandParser
 import net.amiantos.lurkerkit.commands.ParsedInput
 import net.amiantos.lurkerkit.model.BufferKey
+import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.CertificateExport
 import net.amiantos.lurkerkit.model.CertificateResult
 import net.amiantos.lurkerkit.model.CertificateSource
@@ -895,7 +896,17 @@ class ChatViewModel(
      * see the Bookmarks list's swipe.
      */
     fun setBookmark(messageId: Long, saved: Boolean): Boolean =
-        client.setBookmark(messageId = messageId, saved = saved)
+        canWrite && client.setBookmark(messageId = messageId, saved = saved)
+
+    /**
+     * Whether a write the user made can reach the server now: our socket has opened AND the
+     * device has a path. Asked before every user write that reports its fate (sweep L02…L53),
+     * because the send's own answer can't see two windows:
+     * - a reconnect's new socket takes writes before its upgrade succeeds — deliberately, for the
+     *   connect burst — and loses them if the attempt fails. Connected waits for its first frame;
+     * - airplane mode flips `reachable` while the old socket still reads Connected.
+     */
+    private val canWrite: Boolean get() = store.state.reachable && store.state.connection == SocketStatus.Connected
 
     /**
      * React with `value` on a line, or take ours back when it's already there (lurker-ios#183).
@@ -1195,7 +1206,7 @@ class ChatViewModel(
                 // at. The ack path covers a live socket the cell refuses on; this covers not
                 // reaching the cell.
                 val id = unsent.track(key, line = text, reply = reply)
-                if (!client.sendMessage(
+                if (!canWrite || !client.sendMessage(
                         networkId = key.networkId, target = key.target, text = parsed.text, clientId = id,
                         replyTo = reply?.messageId,
                     )
@@ -1241,12 +1252,13 @@ class ChatViewModel(
         // Recorded rather than acted on inline so the remaining effects still run: a command that
         // is half machinery should not stop halfway because one send found no socket.
         var wentNowhere = false
-        // Every wire effect reports here. The message verbs mint their correlator before sending,
-        // since it rides the verb; the rest — `/topic`, `/nick`, `/part`, `/away` — have no
-        // `send-result`, so theirs is minted only for a failure, to carry the line back. Before
-        // sweep L02 those were dropped without a word.
-        fun wire(went: Boolean) {
-            if (went) return
+        // Every wire effect goes through here, and goes out only if it can (`canWrite`). The message
+        // verbs mint their correlator before sending, since it rides the verb; the rest — `/topic`,
+        // `/nick`, `/part`, `/away` — have no `send-result`, so theirs is minted only for a failure,
+        // to carry the line back. Before sweep L02 those were dropped without a word.
+        val writable = canWrite
+        fun wire(send: () -> Boolean) {
+            if (writable && send()) return
             correlator()
             wentNowhere = true
         }
@@ -1254,27 +1266,27 @@ class ChatViewModel(
             when (effect) {
                 is CommandEffect.Send -> {
                     val clientId = correlator()
-                    wire(
+                    wire {
                         sendMessageSeam?.invoke(effect.target, effect.text)
-                            ?: client.sendMessage(networkId = networkId, target = effect.target, text = effect.text, clientId = clientId),
-                    )
+                            ?: client.sendMessage(networkId = networkId, target = effect.target, text = effect.text, clientId = clientId)
+                    }
                 }
-                is CommandEffect.Action ->
+                is CommandEffect.Action -> {
                     // A `/me` can be the reply — `reply` is null for every other command (see `send`).
-                    wire(
+                    val clientId = correlator()
+                    wire {
                         client.sendAction(
-                            networkId = networkId, target = effect.target, text = effect.text, clientId = correlator(),
+                            networkId = networkId, target = effect.target, text = effect.text, clientId = clientId,
                             replyTo = if (effect.target == key.target) reply?.messageId else null,
-                        ),
-                    )
-                is CommandEffect.Notice ->
-                    wire(
-                        client.sendNotice(
-                            networkId = networkId, target = effect.target, text = effect.text, clientId = correlator(),
-                        ),
-                    )
+                        )
+                    }
+                }
+                is CommandEffect.Notice -> {
+                    val clientId = correlator()
+                    wire { client.sendNotice(networkId = networkId, target = effect.target, text = effect.text, clientId = clientId) }
+                }
                 is CommandEffect.Raw ->
-                    wire(client.sendRaw(networkId = networkId, line = effect.line))
+                    wire { client.sendRaw(networkId = networkId, line = effect.line) }
                 is CommandEffect.ShowProfile ->
                     // Nothing goes out here — the screen asks when it opens. A `/whois` typed in
                     // the system buffer has no connection to ask on and is silently no-op'd, the
@@ -1288,11 +1300,15 @@ class ChatViewModel(
                         requestJoin(networkId = networkId, channel = effect.channel, key = effect.key, opens = true)
                     }
                 is CommandEffect.Part ->
-                    wire(client.part(networkId = networkId, channel = effect.channel, reason = effect.reason))
+                    wire { client.part(networkId = networkId, channel = effect.channel, reason = effect.reason) }
                 is CommandEffect.Close -> {
                     // As `closeBuffer` does: a `/close` stands down a pending open for that buffer.
                     pendingOpens.closing(BufferKey(networkId = networkId, target = effect.target))
-                    wire(client.closeBuffer(networkId = networkId, target = effect.target))
+                    // The server log can't be closed: nothing goes out, so there's nothing to hand back.
+                    when (BufferKind.of(networkId = networkId, target = effect.target)) {
+                        BufferKind.Server, BufferKind.System -> Unit
+                        else -> wire { client.closeBuffer(networkId = networkId, target = effect.target) }
+                    }
                 }
                 is CommandEffect.Clear ->
                     // Nothing is written locally, deliberately. The server picks the exact boundary
@@ -1300,18 +1316,18 @@ class ChatViewModel(
                     // including this one, so the marker this screen draws is always the
                     // authoritative one — an optimistic local clear would have to guess the id and
                     // would be wrong for anything that landed in between.
-                    wire(client.clearBuffer(networkId = networkId, target = effect.target, undo = effect.undo))
+                    wire { client.clearBuffer(networkId = networkId, target = effect.target, undo = effect.undo) }
                 is CommandEffect.Away ->
-                    wire(client.setAway(effect.message, networkId = networkId, all = effect.all))
+                    wire { client.setAway(effect.message, networkId = networkId, all = effect.all) }
                 is CommandEffect.Back ->
-                    wire(client.setBack(networkId = networkId, all = effect.all))
+                    wire { client.setBack(networkId = networkId, all = effect.all) }
                 is CommandEffect.Ctcp ->
-                    wire(
+                    wire {
                         client.sendCTCP(
                             networkId = networkId, target = effect.target, issuingTarget = key.target,
                             ctcpType = effect.type, args = effect.args,
-                        ),
-                    )
+                        )
+                    }
                 is CommandEffect.Activate -> if (networkId != null) {
                     val to = BufferKey(networkId = networkId, target = effect.target)
                     if (wentNowhere) {
@@ -1610,7 +1626,7 @@ class ChatViewModel(
     fun markRead(key: BufferKey) {
         val latest = store.state.messages[key.id]?.mapNotNull { if (it.id != 0L) it.id else null }?.maxOrNull()
             ?: return
-        if (latest <= (lastMarked[key.id] ?: 0L)) return
+        if (latest <= (lastMarked[key.id] ?: 0L) || !canWrite) return
         if (client.markRead(networkId = key.networkId, target = key.target, messageId = latest)) {
             lastMarked[key.id] = latest
         }
@@ -1874,7 +1890,7 @@ class ChatViewModel(
         // would otherwise be minted again by the late backlog and taken back into (lurker-ios#201).
         // Whether or not the close goes out — the user has said they're done with it.
         pendingOpens.closing(key)
-        if (!client.closeBuffer(networkId = key.networkId, target = key.target)) return false
+        if (!canWrite || !client.closeBuffer(networkId = key.networkId, target = key.target)) return false
         dropDraft(key)
         store.removeBuffer(key)
         return true
@@ -1923,7 +1939,7 @@ class ChatViewModel(
      * mutation: the strip comes down when the server's `away-state` echo folds in, on every
      * device at once. False when it went nowhere.
      */
-    fun setBack(networkId: Int?): Boolean = client.setBack(networkId = networkId, all = null)
+    fun setBack(networkId: Int?): Boolean = canWrite && client.setBack(networkId = networkId, all = null)
 
     /**
      * Ask the network who `nick` is (lurker-ios#12) — what the profile screen sends on open, and
@@ -1979,13 +1995,13 @@ class ChatViewModel(
      * False when it went nowhere: the editor stays open with what was typed (sweep L14).
      */
     fun setNickNote(networkId: Int, nick: String, note: String): Boolean =
-        client.setNickNote(networkId = networkId, nick = DccChat.peer(nick), note = note)
+        canWrite && client.setNickNote(networkId = networkId, nick = DccChat.peer(nick), note = note)
 
     /**
      * Rewrite the global order — pass the FULL permuted bufferId list (see LurkerClient).
      * False when it went nowhere, and then no echo is coming to settle a drop (sweep L29).
      */
-    fun reorderFavorites(bufferIds: List<Int>): Boolean = client.reorderFavorites(bufferIds = bufferIds)
+    fun reorderFavorites(bufferIds: List<Int>): Boolean = canWrite && client.reorderFavorites(bufferIds = bufferIds)
 
     fun clearError() {
         store.clearError()
@@ -2317,6 +2333,10 @@ class ChatViewModel(
                     client.dropSocket()
                     return
                 }
+                // A new socket asks every read mark again. The drop clears them too, but a foreground
+                // reconnect can replace a socket that died without saying so, and its close is never
+                // heard — a mark lost on it would be deduped for good (sweep L23).
+                lastMarked.clear()
                 store.apply(frame)
                 reconnectAttempt = 0 // a clean connection resets the backoff
             }

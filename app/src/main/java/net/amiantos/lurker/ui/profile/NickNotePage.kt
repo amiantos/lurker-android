@@ -62,8 +62,9 @@ class NickNoteState(private val model: ChatViewModel, val networkId: Int, val ni
     /**
      * ⚠ Sent verbatim; the server trims and decides. A whitespace-only note is a DELETE there, so
      * pre-trimming here would only hide which of the two happened — the `nick-note-updated` echo
-     * settles it either way. ⚠ A WRITE, to every device. False (and [refusal] set) when there's no
-     * socket to send it down — see `NickNoteModel.sendRefusal`.
+     * settles it either way. ⚠ A WRITE, to every device. False (and [refusal] set) when it couldn't
+     * reach the server — the kit asks both connection signals and the send. Only our socket matters:
+     * a note is the account's, not the IRC network's, so a network that's down is no reason.
      */
     fun save(): Boolean = send(draft.text)
 
@@ -74,10 +75,7 @@ class NickNoteState(private val model: ChatViewModel, val networkId: Int, val ni
     }
 
     private fun send(note: String): Boolean {
-        val state = model.state
-        refusal = NickNoteModel.sendRefusal(state.connection, state.reachable)
-            // Both: the state can read Connected for a moment after the socket is gone.
-            ?: NickNoteModel.NOT_CONNECTED.takeUnless { model.setNickNote(networkId = networkId, nick = nick, note = note) }
+        refusal = NickNoteModel.NOT_CONNECTED.takeUnless { model.setNickNote(networkId = networkId, nick = nick, note = note) }
         return refusal == null
     }
 

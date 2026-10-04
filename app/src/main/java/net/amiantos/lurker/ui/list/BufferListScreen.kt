@@ -67,7 +67,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import net.amiantos.lurker.platform.AppEvent
 import net.amiantos.lurker.platform.LocalAppEvents
-import net.amiantos.lurker.ui.conversation.ConversationScroll
 import net.amiantos.lurker.ui.feeds.AppView
 import net.amiantos.lurker.ui.feeds.AppViewMenuItem
 import net.amiantos.lurker.ui.feeds.ViewsLayout
@@ -177,8 +176,10 @@ fun BufferListScreen(
     // …and so does the socket ending. The shadow waits for an echo the dropped socket took with it,
     // and the reconnect's burst re-sends the list unchanged, which releases nothing (sweep L29) — the
     // case of a drop written into a socket that had died without saying so.
-    LaunchedEffect(inputs.connection) {
-        if (inputs.connection != SocketStatus.Connected) optimistic = null
+    // And with a socket that hasn't had its snapshot: a foreground reconnect can replace one that
+    // died without saying so while the state never left Connected.
+    LaunchedEffect(inputs.connection, inputs.snapshotSinceOpen) {
+        if (inputs.connection != SocketStatus.Connected || !inputs.snapshotSinceOpen) optimistic = null
     }
 
     // Stage two. `inputs` compares by identity, so this rebuilds exactly when stage one let a frame
@@ -256,7 +257,7 @@ fun BufferListScreen(
             // change, and a reorder that went nowhere has no echo coming to change them — the
             // reconnect re-sends the same list — so this device kept an order nobody else had
             // (sweep L29). The released list draws the store's order instead, which is the truth.
-            if (!ConversationScroll.mayWrite(model.state) || !model.reorderFavorites(bufferIds = order)) {
+            if (!model.reorderFavorites(bufferIds = order)) {
                 events?.send(AppEvent.Notice(BufferListModel.NOT_CONNECTED))
                 return@stop
             }
@@ -829,9 +830,13 @@ private fun SwipeToClose(title: String, onClose: () -> Boolean, content: @Compos
                 fired = true
                 // A close that couldn't go out leaves the row, so it slides back rather than
                 // sitting swiped off with nothing coming to remove it (sweep L16).
+                // `fired` stays set until the row is home: the box re-runs this while it's still
+                // dismissed, and a second close mid-slide could go out once the connection is back.
                 if (!currentOnClose()) {
-                    fired = false
-                    scope.launch { state.reset() }
+                    scope.launch {
+                        state.reset()
+                        fired = false
+                    }
                 }
             }
         }
