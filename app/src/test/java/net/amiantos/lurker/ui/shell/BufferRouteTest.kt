@@ -51,7 +51,33 @@ class BufferRouteTest {
         val second = BufferRoute.of(key, jump = JumpRequest.to(42))
         assertNotEquals(first.jump, second.jump)
         assertEquals(first.key.id, second.key.id)
-        assertEquals(BufferRoute.of(key), first.copy(jump = null))
+        assertEquals(BufferRoute.of(key).copy(visit = first.visit), first.copy(jump = null))
+    }
+
+    /** Each open is its own visit (sweep L11); an in-place jump amends the visit it was given on. */
+    @Test
+    fun `two opens of one buffer are two visits, and a copy keeps its visit`() {
+        val key = BufferKey(networkId = 3, target = "#lurker")
+        val first = BufferRoute.of(key)
+        assertNotEquals(first.visit, BufferRoute.of(key).visit)
+        assertEquals(first.visit, first.copy(jump = JumpRequest.to(42)).visit)
+    }
+
+    /** Newest first; a visit shown again moves to the front; past the capacity the oldest go. */
+    @Test
+    fun `recent visits keep the newest and hand back the ones to drop`() {
+        val visits = RecentVisits(capacity = 3)
+        assertEquals(emptyList<String>(), visits.touch("a#1"))
+        assertEquals(emptyList<String>(), visits.touch("b#2"))
+        assertEquals(emptyList<String>(), visits.touch("c#3"))
+        // Back to a: it's newest again, and nothing falls off.
+        assertEquals(emptyList<String>(), visits.touch("a#1"))
+        assertEquals(listOf("b#2"), visits.touch("d#4"))
+        assertEquals(listOf("d#4", "a#1", "c#3"), visits.saved())
+        // Showing the newest again is nothing.
+        assertEquals(emptyList<String>(), visits.touch("d#4"))
+        // Restored after a rotation, it carries on from where it was.
+        assertEquals(listOf("c#3"), RecentVisits(visits.saved(), capacity = 3).touch("e#5"))
     }
 
     /**

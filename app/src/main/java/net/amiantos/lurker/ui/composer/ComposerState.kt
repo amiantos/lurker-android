@@ -12,9 +12,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
@@ -28,6 +30,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import net.amiantos.lurker.platform.AppEvent
 import net.amiantos.lurker.platform.LocalAppEvents
+import net.amiantos.lurker.platform.findActivity
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.ComposerDraft
@@ -73,6 +76,12 @@ internal class ComposerState(
     val key: BufferKey,
     val kind: BufferKind,
     private val scope: CoroutineScope,
+    /**
+     * The field — saved by the screen (`rememberComposerState`), so a rotation or a process death
+     * hands back what was typed, caret included. Opened on the buffer's draft: this device's unflushed
+     * edit, else the server's.
+     */
+    val field: TextFieldState = TextFieldState(initialText = model.draft(key)?.body ?: ""),
 ) {
     // MARK: - What the screen hands in (set every composition — see `rememberComposerState`)
 
@@ -96,9 +105,6 @@ internal class ComposerState(
     // MARK: - What the bar draws
 
     private val initialDraft: ComposerDraft? = model.draft(key)
-
-    /** The field. Opened on the buffer's draft — this device's unflushed edit, else the server's. */
-    val field = TextFieldState(initialText = initialDraft?.body ?: "")
 
     val focusRequester = FocusRequester()
 
@@ -368,8 +374,10 @@ internal class ComposerState(
      *
      * Ends the edit too — see [endEditing].
      */
-    internal fun leave() {
-        endTyping()
+    internal fun leave(changingConfiguration: Boolean = false) {
+        // A rotation isn't leaving: the same text is back in the field a frame later, still being
+        // written, and telling the channel `done` mid-sentence on every turn of the phone was a lie.
+        if (!changingConfiguration) endTyping()
         endEditing()
     }
 
@@ -601,7 +609,14 @@ internal fun rememberComposerState(
     onShowProfile: (networkId: Int, nick: String) -> Unit,
 ): ComposerState {
     val scope = rememberCoroutineScope()
-    val state = remember(model, key) { ComposerState(model, key, kind, scope) }
+    // Saved, not just remembered: a rotation, a theme or font-size change, or a fold rebuilds the
+    // screen, and a remembered field came back as the stored draft — empty in the Lurker console and a
+    // server log, whose drafts don't sync, and with the caret thrown to the end everywhere else.
+    val field = rememberSaveable(key.id, saver = TextFieldState.Saver) {
+        TextFieldState(initialText = model.draft(key)?.body ?: "")
+    }
+    val state = remember(model, key) { ComposerState(model, key, kind, scope, field) }
+    val activity = LocalContext.current.findActivity()
     val keyboard = LocalSoftwareKeyboardController.current
     val events = LocalAppEvents.current
     SideEffect {
@@ -657,7 +672,7 @@ internal fun rememberComposerState(
     // looked at (iOS's `viewDidAppear`); leaving — the buffer, or the app — ends typing and flushes.
     LifecycleStartEffect(state) {
         state.restoreRefused()
-        onStopOrDispose { state.leave() }
+        onStopOrDispose { state.leave(changingConfiguration = activity?.isChangingConfigurations == true) }
     }
     return state
 }

@@ -41,6 +41,7 @@ import androidx.compose.material3.adaptive.navigation.NavigableListDetailPaneSca
 import androidx.compose.material3.adaptive.navigation.rememberListDetailPaneScaffoldNavigator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -48,6 +49,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -184,8 +186,8 @@ fun MainScaffold(
     // beside the list, a notification for the one you're reading): the route the pane shows, with
     // the new request on it. Not a navigation, for the rename's reason — the navigator has no
     // replace, and a pop and push would rebuild the conversation (and on a phone slide it out and
-    // back in) to deliver one message id. The conversation is keyed by buffer, so a new `jump` on
-    // the same buffer reaches the screen in place, and each request acts once (`jumps`).
+    // back in) to deliver one message id. The conversation is keyed by visit, which a copy keeps, so a
+    // new `jump` on the same buffer reaches the screen in place, and each request acts once (`jumps`).
     // Saved with the history it amends; any navigation of ours clears it, as with the rename.
     var jumpedInPlace by rememberSaveable { mutableStateOf<BufferRoute?>(null) }
 
@@ -193,6 +195,14 @@ fun MainScaffold(
     // history that holds it — back to a buffer you were jumped into rebuilds its screen from the
     // same route, request and all (`JumpLedger`).
     val jumps = rememberSaveable(saver = JumpLedgerSaver) { JumpLedger() }
+
+    // The conversation's saved state, per visit (sweep L11). The detail pane's own holder keys by
+    // pane, and inside it the screen was keyed by buffer — so reopening #a after backing out restored
+    // the last visit's state: the "New messages" divider above lines already read, the list at a
+    // shifted index, the tail no longer followed. Kept here, outside the panes, for the recent visits
+    // only (`RecentVisits`).
+    val visitStates = rememberSaveableStateHolder()
+    val recentVisits = rememberSaveable(saver = RecentVisitsSaver) { RecentVisits() }
 
     // A side-by-side pick in flight. The replace below passes through the list destination, and the
     // detail pane would otherwise show the system buffer for the frame in between.
@@ -340,7 +350,8 @@ fun MainScaffold(
         // The conversation is rebuilt under its new key (it's keyed by buffer), so a jump it was
         // opened with, or given in place, has already been consumed and isn't carried across.
         jumpedInPlace = null
-        if (destination.copy(jump = null) == target) {
+        // By parts, not the whole route: `target` is a new visit, and a route is never equal to one.
+        if (destination.networkId == target.networkId && destination.target == target.target) {
             clearRename()
         } else {
             renamedFrom = destination
@@ -510,35 +521,41 @@ fun MainScaffold(
                     // iOS never shows an empty column: side by side with nothing picked, the pane rests
                     // on the system buffer, the app's own log — and doesn't record it as where you were.
                     val bufferKey = route?.key ?: Buffer.system.key
-                    // A fresh screen per buffer — its scroll position, revealed spoilers and hydrate
-                    // bookkeeping belong to the buffer, as iOS builds a fresh screen per open.
-                    key(bufferKey.id) {
-                        ConversationScreen(
-                            model = model,
-                            key = bufferKey,
-                            // A new request on the same buffer arrives here without rebuilding the
-                            // screen (`jumpedInPlace`); each acts once for the session (`jumps`).
-                            jump = route?.jump,
-                            jumps = jumps,
-                            resting = route == null,
-                            showsBack = !sideBySide,
-                            onBack = ::back,
-                            onVisit = { uiPreferences.recordLastOpenBuffer(bufferKey) },
-                            onGone = { leave(bufferKey) },
-                            onMoved = { to -> follow(bufferKey, to) },
-                            uiPreferences = uiPreferences,
-                            // `/msg` and `/query` to a channel — a pick, at once. To a nick they ask
-                            // nothing of the screen: the kit lands on the DM once its row is in
-                            // (`ChatViewModel.openAndShow` → `AppEvent.OpenBuffer`).
-                            onOpenBuffer = { to -> open(to) },
-                            onShowMembers = { bufferSheets.showMembers(bufferKey) },
-                            onShowInfo = { bufferSheets.showInfo(bufferKey) },
-                            onShowProfile = { networkId, nick -> bufferSheets.showProfile(networkId, nick) },
-                            sideBySide = sideBySide,
-                            onOpenView = { view -> openView(view, from = bufferKey) },
-                            onOpenMedia = mediaViewer::show,
-                            media = media,
-                        )
+                    // A fresh screen per open — its scroll position, revealed spoilers and hydrate
+                    // bookkeeping belong to the visit, as iOS builds a fresh screen per open. Saved
+                    // per visit (`visitStates`), so a rotation or a back to it restores them; the
+                    // resting system buffer is one long visit.
+                    val visit = "${bufferKey.id}#${route?.visit ?: 0}"
+                    SideEffect { recentVisits.touch(visit).forEach(visitStates::removeState) }
+                    key(visit) {
+                        visitStates.SaveableStateProvider(visit) {
+                            ConversationScreen(
+                                model = model,
+                                key = bufferKey,
+                                // A new request on the same buffer arrives here without rebuilding the
+                                // screen (`jumpedInPlace`); each acts once for the session (`jumps`).
+                                jump = route?.jump,
+                                jumps = jumps,
+                                resting = route == null,
+                                showsBack = !sideBySide,
+                                onBack = ::back,
+                                onVisit = { uiPreferences.recordLastOpenBuffer(bufferKey) },
+                                onGone = { leave(bufferKey) },
+                                onMoved = { to -> follow(bufferKey, to) },
+                                uiPreferences = uiPreferences,
+                                // `/msg` and `/query` to a channel — a pick, at once. To a nick they ask
+                                // nothing of the screen: the kit lands on the DM once its row is in
+                                // (`ChatViewModel.openAndShow` → `AppEvent.OpenBuffer`).
+                                onOpenBuffer = { to -> open(to) },
+                                onShowMembers = { bufferSheets.showMembers(bufferKey) },
+                                onShowInfo = { bufferSheets.showInfo(bufferKey) },
+                                onShowProfile = { networkId, nick -> bufferSheets.showProfile(networkId, nick) },
+                                sideBySide = sideBySide,
+                                onOpenView = { view -> openView(view, from = bufferKey) },
+                                onOpenMedia = mediaViewer::show,
+                                media = media,
+                            )
+                        }
                     }
                 }
             },
@@ -595,6 +612,8 @@ fun MainScaffold(
 
 /** Saves the consumed jump requests with the navigator's history. */
 private val JumpLedgerSaver = Saver<JumpLedger, LongArray>(save = { it.saved() }, restore = { JumpLedger(it.toList()) })
+
+private val RecentVisitsSaver = Saver<RecentVisits, ArrayList<String>>(save = { it.saved() }, restore = { RecentVisits(it) })
 
 /** A route remembered across compositions without being state — reading it must not recompose. */
 private class LastDestination(var route: BufferRoute?)
