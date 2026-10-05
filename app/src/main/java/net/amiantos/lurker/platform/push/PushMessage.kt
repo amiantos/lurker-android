@@ -24,8 +24,6 @@ data class PushMessage(
     val tag: String,
     /** When the message was sent, for the notification's timestamp; null when unreadable. */
     val sentAt: Long?,
-    /** The server's unread-highlight total, which a launcher that shows counts reads. */
-    val badge: Int?,
     /**
      * The keys a tap needs, copied onto the tap's intent as string extras. The same keys a
      * system-drawn FCM notification puts on its launch intent, so `MainActivity` reads either.
@@ -70,7 +68,6 @@ data class PushMessage(
                 body = data["body"].orEmpty(),
                 tag = tag,
                 sentAt = data["time"]?.let(::epochMillis),
-                badge = data["badge"]?.toIntOrNull()?.takeIf { it >= 0 },
                 tap = TAP_KEYS.mapNotNull { key -> data[key]?.let { key to it } }.toMap(),
             )
         }

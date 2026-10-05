@@ -38,7 +38,6 @@ class PushMessageTest {
         assertEquals("hey there", message.body)
         assertEquals("7::bob", message.tag)
         assertEquals(1_791_201_600_000L, message.sentAt)
-        assertEquals(3, message.badge)
     }
 
     @Test
@@ -83,9 +82,7 @@ class PushMessageTest {
     }
 
     @Test
-    fun anUnreadableTimeOrBadgeIsLeftOut() {
-        val message = PushMessage.parse(dm + mapOf("time" to "yesterday", "badge" to "-1"))!!
-        assertNull(message.sentAt)
-        assertNull(message.badge)
+    fun anUnreadableTimeIsLeftOut() {
+        assertNull(PushMessage.parse(dm + ("time" to "yesterday"))!!.sentAt)
     }
 }

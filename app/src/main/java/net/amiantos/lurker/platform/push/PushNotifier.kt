@@ -80,9 +80,26 @@ object PushNotifier {
             builder.setContentText(message.body).setStyle(NotificationCompat.BigTextStyle().bigText(message.body))
         }
         message.sentAt?.let { builder.setWhen(it).setShowWhen(true) }
-        // Where a launcher that shows a count reads it (LurkerApp's `badge` has no other outlet).
-        message.badge?.let(builder::setNumber)
+        // No `setNumber`: a launcher that shows a count sums its notifications' numbers, so the
+        // server's account-wide total on each one would count it once per buffer. Left at the default,
+        // the icon counts buffers with something new, and goes down as they're read (`clearRead`).
         NotificationManagerCompat.from(context).notify(message.tag, NOTIFICATION_ID, builder.build())
+    }
+
+    /**
+     * The buffers [bufferIds] (`BufferKey.id`) were read, here or on another device: take their
+     * notifications down, which is what brings a launcher's badge down with them (see
+     * [ReadTransitions]). A message notification's tag is the server's `"<networkId>::<target>"` —
+     * the id's shape before the fold — so it's matched folded. A kick's and a came-online's tags carry
+     * a suffix and stay: reading the channel doesn't answer either.
+     */
+    fun clearRead(context: Context, bufferIds: Set<String>) {
+        if (bufferIds.isEmpty()) return
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        for (posted in manager.activeNotifications) {
+            val tag = posted.tag ?: continue
+            if (posted.id == NOTIFICATION_ID && tag.lowercase() in bufferIds) manager.cancel(tag, NOTIFICATION_ID)
+        }
     }
 
     /** Sign-out: the previous account's messages must not stay on the lock screen for the next one. */
