@@ -35,6 +35,7 @@ import net.amiantos.lurker.platform.findActivity
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.ComposerDraft
+import net.amiantos.lurkerkit.model.Drafts
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.NickCompletion
 import net.amiantos.lurkerkit.model.OutgoingTyping
@@ -107,13 +108,17 @@ internal class ComposerState(
     private val initialDraft: ComposerDraft? = model.draft(key)
 
     init {
-        // A saved field restored over a stored draft that moved meanwhile — another device's write
-        // landing while the screen was being rebuilt — takes the draft, as a fresh field would: the
-        // draft is the newer word, and the saved text typed over it would overwrite it. Where they
-        // agree the saved caret stands. Buffers whose drafts don't sync (the Lurker console, a server
-        // log) have none, and keep what was saved.
-        val stored = initialDraft?.body
-        if (stored != null && stored != field.text.toString()) field.setTextAndPlaceCursorAtEnd(stored)
+        // Where drafts sync, the stored draft is the truth and the saved field only lends its caret:
+        // leaving flushes what was typed, so a rebuilt composer opens on the draft as a fresh one
+        // would — another device's edit, or its clear or send (no draft at all), included. Saved
+        // text typed over either would come back and sync the deleted words back up. Where they
+        // agree the caret stands. After a process death nothing is held yet and the field opens
+        // empty until the server's draft repaints it, as it always did. Buffers whose drafts don't
+        // sync (the Lurker console, a server log) have only what was saved, and keep it.
+        if (Drafts.syncs(key)) {
+            val stored = initialDraft?.body ?: ""
+            if (stored != field.text.toString()) field.setTextAndPlaceCursorAtEnd(stored)
+        }
     }
 
     val focusRequester = FocusRequester()
