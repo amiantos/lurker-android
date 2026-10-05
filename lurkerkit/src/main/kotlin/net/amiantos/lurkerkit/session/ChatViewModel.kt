@@ -2231,29 +2231,43 @@ class ChatViewModel(
      * revoking it would sign the user out from under themselves, so it's checked rather than assumed.
      */
     internal fun retryPendingRevokes(now: Instant = Instant.now()) {
+        // Almost always empty — checked before the live session's read, which costs a decrypt.
+        val owed = sessions.pendingRevokes()
+        if (owed.isEmpty()) return
         val live = client.currentSession?.token ?: sessions.load()?.token
-        for (pending in sessions.pendingRevokes()) {
+        for (pending in owed) {
             if (pending.token == live) continue
             if (pending.token in revokingNow) {
                 retryWanted.add(pending.token)
                 continue
             }
-            if (Duration.between(Instant.ofEpochMilli(pending.since), now) >= revokeRetryWindow) {
-                sessions.removePendingRevoke(pending.token)
-                continue
-            }
-            revokingNow.add(pending.token)
-            scope.task { revokeFinished(pending.token, client.revoke(server = pending.server, token = pending.token)) }
+            send(pending, now)
         }
     }
 
+    /** One owed revoke: dropped if it has outlived [revokeRetryWindow], otherwise sent. */
+    private fun send(pending: PendingRevoke, now: Instant = Instant.now()) {
+        if (Duration.between(Instant.ofEpochMilli(pending.since), now) >= revokeRetryWindow) {
+            sessions.removePendingRevoke(pending.token)
+            return
+        }
+        revokingNow.add(pending.token)
+        scope.task { revokeFinished(pending.token, client.revoke(server = pending.server, token = pending.token)) }
+    }
+
+    /**
+     * ⚠⚠ A wanted replay sends THIS token again, never every owed one. Re-running
+     * [retryPendingRevokes] here would mark each other token still out as wanted — a trigger it
+     * never got — and two failing tokens would then re-mark each other forever: a request loop for
+     * as long as the app runs, tight when offline makes each fail at once.
+     */
     private fun revokeFinished(token: String, outcome: LurkerClient.RevokeOutcome) {
         revokingNow.remove(token)
         val wanted = retryWanted.remove(token)
         if (outcome == LurkerClient.RevokeOutcome.Done) {
             sessions.removePendingRevoke(token)
         } else if (wanted) {
-            retryPendingRevokes()
+            sessions.pendingRevokes().firstOrNull { it.token == token }?.let { send(it) }
         }
     }
 

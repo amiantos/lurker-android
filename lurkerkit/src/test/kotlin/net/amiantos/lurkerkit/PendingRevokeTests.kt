@@ -26,6 +26,8 @@ import okio.ByteString.Companion.encodeUtf8
 import java.io.IOException
 import java.time.Instant
 import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.Executors
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -96,14 +98,18 @@ class PendingRevokeTests {
 
     // MARK: - Against a server that answers
 
-    /** Answers every request with one status and body (or no answer at all), recording each. */
-    private class Answering(val status: Int?, val body: String = "", val delayMs: Long = 0) {
+    /**
+     * Answers every request with one status and body (or no answer at all), recording each. With a
+     * [gate], each request waits for it to open before answering: the test decides how long a
+     * request is in flight, not the clock.
+     */
+    private class Answering(val status: Int?, val body: String = "", val gate: CountDownLatch? = null) {
         val requests: MutableList<String> = Collections.synchronizedList(mutableListOf())
         val http: OkHttpClient = OkHttpClient.Builder()
             .addInterceptor { chain ->
                 val request = chain.request()
                 requests.add("${request.method} ${request.url.encodedPath} ${request.header("Authorization")}")
-                if (delayMs > 0) Thread.sleep(delayMs)
+                gate?.await(10, TimeUnit.SECONDS)
                 if (status == null) throw IOException("no answer")
                 Response.Builder()
                     .request(request)
@@ -178,16 +184,40 @@ class PendingRevokeTests {
 
     @Test
     fun testATriggerDuringARequestIsNotLost() = runBlocking {
-        Harness(Answering(503, delayMs = 400)).use { h ->
+        val gate = CountDownLatch(1)
+        Harness(Answering(503, gate = gate)).use { h ->
             h.sessions.addPendingRevoke(PersistedSession(server = "https://lurker.test", token = "old"))
             h.launch()
             h.waitUntil { h.server.requests.size == 1 }
-            assertEquals(setOf("old"), h.onMain { h.model.revoking })
+            // Held open by the gate: the network comes back while it's still out.
             h.onMain { h.model.setReachable(false); h.model.setReachable(true) }
-            // The first is still out, so nothing new yet; once it fails, the replay goes.
+            assertEquals(1, h.server.requests.size)
+            gate.countDown()
+            // It fails, and the trigger it swallowed is replayed — once.
             h.waitUntil { h.server.requests.size == 2 && h.model.revoking.isEmpty() }
-            delay(600)
+            delay(300)
             assertEquals(2, h.server.requests.size)
+        }
+    }
+
+    /**
+     * Two owed revokes, both out when a foreground arrives: each is replayed once when it fails,
+     * and then the retries stop. Replaying by re-running the whole retry marked the OTHER token,
+     * still out, as wanted too — and the two re-marked each other in a loop for good.
+     */
+    @Test
+    fun testTwoOwedRevokesDoNotFeedEachOther() = runBlocking {
+        val gate = CountDownLatch(1)
+        Harness(Answering(503, gate = gate)).use { h ->
+            h.sessions.addPendingRevoke(PersistedSession(server = "https://lurker.test", token = "a"))
+            h.sessions.addPendingRevoke(PersistedSession(server = "https://lurker.test", token = "b"))
+            h.launch()
+            h.waitUntil { h.server.requests.size == 2 }
+            h.onMain { h.model.enterForeground() }
+            gate.countDown()
+            h.waitUntil { h.server.requests.size == 4 && h.model.revoking.isEmpty() }
+            delay(500)
+            assertEquals(4, h.server.requests.size)
         }
     }
 

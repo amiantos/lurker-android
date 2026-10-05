@@ -31,9 +31,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import net.amiantos.lurkerkit.model.BufferKey
@@ -2103,7 +2101,11 @@ internal class LurkerClient(
 
     /** Whether a revoke needs asking again (lurker-ios#218). */
     enum class RevokeOutcome {
-        /** Lurker answered: the token is gone (or was already). */
+        /**
+         * Lurker answered — the token is gone, or was already — or the address isn't a URL at all, so
+         * there is nothing that could ever be asked. Not "the server confirmed": don't hang anything
+         * on it that needs that.
+         */
         Done,
 
         /** Nothing final yet — no answer, or one from something in front of the server. */
@@ -2630,8 +2632,9 @@ internal class LurkerClient(
          */
         fun revokeOutcome(status: Int?, body: ByteString?): RevokeOutcome {
             if (status == null || status !in 200..<300 || body == null) return RevokeOutcome.Retry
-            val ok = FrameParser.jsonObject(body)?.get("ok")?.jsonPrimitive?.booleanOrNull
-            return if (ok == true) RevokeOutcome.Done else RevokeOutcome.Retry
+            // `bool` never throws (an `ok` that's an object or an array is just not true) and reads as
+            // LurkerKit's `as? Bool` does: an unquoted true, or 1.
+            return if (FrameParser.jsonObject(body)?.bool("ok") == true) RevokeOutcome.Done else RevokeOutcome.Retry
         }
 
         /** The sign-out request, for both the revoke and the password-era session's end. */
