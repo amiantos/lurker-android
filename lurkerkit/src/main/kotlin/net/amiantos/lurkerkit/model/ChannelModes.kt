@@ -485,6 +485,10 @@ object ChannelModeForm {
  * normalized (`+l 050` comes back as 50). A refusal moves nothing, so the edit stands beside
  * the error.
  *
+ * ⚠ One exception to "goes when it matches": an edit made while its row's Save is still out, which
+ * matches the channel only because the channel hasn't answered yet — an undo. It stays until the
+ * channel moves, or until the Save is known not to be coming (`settle` unsent, `refused`).
+ *
  * Port note: immutable. Every mutator here returns `Void` in LurkerKit (`setOn`, `setValue`,
  * `setTopic`, `noteSending`, `settle`, `noteTopicSending`, `settleTopic`, `reconcile`), so
  * each returns the updated copy instead (`drafts = drafts.setOn("m", true, live)`).
@@ -624,6 +628,18 @@ data class ChannelModeDrafts private constructor(
             topicDissolvedWhilePending = null,
         )
 
+    /**
+     * The channel refused the Save — an error row inside its window (`ChannelRefusals`) — or the
+     * socket that carried it is gone. Either way the channel won't move for it, so nothing waits on
+     * it any more: an undo kept while it was out goes on the next reconcile, rather than lingering
+     * until somebody else's change of the same mode turns it into a revert of theirs.
+     *
+     * ⚠ Every row's record, not just the refused one's: an error row doesn't say which change it
+     * answers. An undo of a change in the same Save that did land is lost with it — the narrow price
+     * of never reverting another op.
+     */
+    fun refused(): ChannelModeDrafts = copy(savedRows = emptyMap(), savedTopic = null)
+
     /** …and the answer came. */
     fun settleTopic(topic: String, wentOut: Boolean): ChannelModeDrafts {
         var savedTopic = savedTopic
@@ -661,9 +677,10 @@ data class ChannelModeDrafts private constructor(
                 // the untick matches the channel as it still is; dropped here, the +m then lands
                 // and the switch turns back on, the undo lost. Kept until the channel moves off
                 // the state it was saved from: then it's a real difference, shown, and Save sends
-                // it. (A send that never left is taken back by `settle`, and the edit goes then.)
-                val undoWhileOut = saved?.let { !moved && it.sent != want } ?: false
-                if (!undoWhileOut) rows.remove(letter)
+                // it. (A send that never left is taken back by `settle`, and a refused one by
+                // `refused`; the edit goes then.) A matching edit whose saved row hasn't moved IS
+                // that undo: it equals the row's baseline, which is never what the Save sent.
+                if (saved == null || moved) rows.remove(letter)
             } else if (moved && saved?.sent == want) {
                 if (pendingLetters.contains(letter)) dissolvedWhilePending[letter] = want
                 rows.remove(letter)
@@ -678,8 +695,7 @@ data class ChannelModeDrafts private constructor(
         if (sending == liveTopic) {
             // Typed back to the old topic while the new one is out: kept until the new one lands,
             // as for the modes above.
-            val undoWhileOut = savedTopic?.let { !moved && it.sent != sending } ?: false
-            if (!undoWhileOut) typed = null
+            if (savedTopic == null || moved) typed = null
         } else if (moved && savedTopic?.sent == sending) {
             if (topicPending) topicDissolvedWhilePending = topic
             typed = null
