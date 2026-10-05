@@ -20,6 +20,8 @@ import net.amiantos.lurker.platform.AppEvents
 import net.amiantos.lurker.platform.ExpiryText
 import net.amiantos.lurker.platform.NoticeAction
 import net.amiantos.lurker.platform.ReachabilityMonitor
+import net.amiantos.lurker.platform.push.PushNotifier
+import net.amiantos.lurker.platform.push.PushRegistrar
 import net.amiantos.lurker.prefs.PrefsDefaultsStorage
 import net.amiantos.lurker.prefs.SharedStringPrefs
 import net.amiantos.lurker.prefs.UiPreferences
@@ -85,16 +87,22 @@ class LurkerApp : Application() {
         private set
 
     /**
+     * Push (lurker-android#16). App-scoped: a token rotation arrives in the messaging service with no
+     * activity up. `MainActivity` lends it the permission prompt while started.
+     */
+    lateinit var push: PushRegistrar
+        private set
+
+    /**
      * Same shape as reachability and push: the kit decides the number, the app makes the platform
      * call. Android has no first-party launcher badge outside notifications — a launcher draws a
-     * dot or a count from the app's *notifications* — so until push there is nothing to write to,
-     * and this only logs.
-     *
-     * U9: the count becomes the badge number on the notification channel's notifications
-     * (`NotificationCompat.Builder.setNumber`), which is where a launcher that shows counts reads
-     * it. No third-party badge library: they poke private launcher APIs.
+     * dot or a count from the app's *notifications* — so there is nothing for this to write to, and
+     * it only logs. What a launcher shows is the app's notifications, so those come down as their
+     * messages are read instead (`PushNotifier.clearRead`). No third-party badge library: they poke
+     * private launcher APIs.
      */
     private val badge = AppBadge { count -> Log.d(TAG, "badge: $count") }
+
 
     override fun onCreate() {
         super.onCreate()
@@ -110,6 +118,10 @@ class LurkerApp : Application() {
             oauthClients = OAuthClients(defaults),
             formatExpiry = ExpiryText(this),
             mediaCacheDirectory = File(cacheDir, "preview-media-cache"),
+            // FCM starts this process for every push that arrives while it's dead, with no activity.
+            // A restored session connects on the first foreground instead (`ProcessLifecycleOwner`'s
+            // start, below), not for a phone in someone's pocket.
+            startsInForeground = false,
         )
 
         // Keep the badge honest (lurker#490, lurker-ios#134), driven off state so it follows
@@ -117,6 +129,17 @@ class LurkerApp : Application() {
         // is a `task`, so it starts only after this returns, and on `Main.immediate` this collector
         // subscribes now, not later — so no state published by the restore can slip past it.
         badge.follow(model.statePublisher, scope)
+        // A notification comes down once its message is read, here or anywhere (`PushNotifier.clearRead`).
+        // Only when the buffers changed: the publisher emits for every typing and presence frame, and
+        // reading the shade is a call into the system.
+        scope.launch {
+            var buffers: Any? = null
+            model.statePublisher.collect { state ->
+                if (state.buffers === buffers) return@collect
+                buffers = state.buffers
+                PushNotifier.clearRead(this@LurkerApp, state)
+            }
+        }
 
         dccOffers = DccOffers(model, scope) { refusal -> events.send(AppEvent.Notice(refusal)) }
 
@@ -129,6 +152,9 @@ class LurkerApp : Application() {
             inserts = inserts,
             shares = ShareInbox(),
         )
+
+        PushNotifier.createChannels(this)
+        push = PushRegistrar(this, model, scope)
 
         wireCallbacks()
         observeSession()
@@ -247,12 +273,23 @@ class LurkerApp : Application() {
                 if (session == ChatViewModel.SessionState.LoggedOut) {
                     uiPreferences.forgetLastOpenBuffer()
                     events.drain()
+                    // The previous account's messages must not stay on the lock screen. (The token
+                    // goes too: `push.signedOut`, below.)
+                    PushNotifier.clearAll(this@LurkerApp)
                 }
                 // Only a session ENDING: a share received while signed out waits through a sign-in
                 // attempt that fails (LoggingIn → LoggedOut) for the one that works.
-                if (was == ChatViewModel.SessionState.LoggedIn && session != ChatViewModel.SessionState.LoggedIn) uploads.reset()
+                if (was == ChatViewModel.SessionState.LoggedIn && session != ChatViewModel.SessionState.LoggedIn) {
+                    uploads.reset()
+                    push.signedOut()
+                }
+                // Signing in is the moment push becomes askable. Only the transition: a restored
+                // session is replayed here as LoggedIn at launch, which may be FCM starting the process
+                // in the background, and `MainActivity.onStart` asks for that one.
+                if (was != ChatViewModel.SessionState.LoggedIn && session == ChatViewModel.SessionState.LoggedIn) {
+                    push.enableIfSignedIn(mayPrompt = true)
+                }
                 was = session
-                // U9: signing in is the moment push becomes askable (`enablePushIfSignedIn`).
             }
         }
     }
@@ -278,7 +315,8 @@ class LurkerApp : Application() {
                     // when the view model kept a live socket: after a reconnect the count is a
                     // pre-background leftover, and the burst's own write takes over once it's fresh.
                     if (keptSocket) badge.reassert(model.state)
-                    // U9: re-run push enabling on every foreground (tokens rotate, permission changes).
+                    // Push re-enables on every foreground from `MainActivity.onStart` instead: the
+                    // permission prompt needs the activity, which isn't up yet when this runs.
                 }
 
                 override fun onStop(owner: LifecycleOwner) {

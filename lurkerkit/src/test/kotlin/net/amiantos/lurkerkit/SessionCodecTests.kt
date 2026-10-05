@@ -140,6 +140,37 @@ class SessionCodecTests {
         assertNotNull(SessionStore(storage).load())
     }
 
+    /** A restore connects at once by default — what iOS does, and what a launch into the app wants. */
+    @Test
+    fun testARestoredSessionConnectsAtOnceInTheForeground() {
+        val model = viewModel(storageWithSession())
+        assertTrue(model.state.socketOpening)
+    }
+
+    /**
+     * An Android process FCM started with no activity (lurker-android#16) holds a restored session's
+     * connect until something comes to the foreground — no socket, no snapshot, for a phone in a
+     * pocket — and then starts it as the restore would have.
+     */
+    @Test
+    fun testARestoredSessionStartedInTheBackgroundConnectsOnForeground() {
+        val model = viewModel(storageWithSession(), startsInForeground = false)
+        assertEquals(ChatViewModel.SessionState.LoggedIn, model.session)
+        assertFalse(model.state.socketOpening)
+        // Going to the background first changes nothing: still nobody to connect for.
+        model.enterBackground()
+        assertFalse(model.state.socketOpening)
+        // Not a kept socket: there wasn't one.
+        assertFalse(model.enterForeground())
+        assertTrue(model.state.socketOpening)
+    }
+
+    private fun storageWithSession(): InMemorySecureStorage {
+        val storage = InMemorySecureStorage()
+        SessionStore(storage).save(PersistedSession(server = "https://app.lurker.chat", token = "t"))
+        return storage
+    }
+
     /**
      * A session the transport policy now rejects is dropped and bounced to sign-in with the
      * policy's sentence, and a password-era session is taken whatever happens.
@@ -166,12 +197,13 @@ class SessionCodecTests {
         assertFalse(model.enterForeground())
     }
 
-    private fun viewModel(storage: SecureStorage): ChatViewModel =
+    private fun viewModel(storage: SecureStorage, startsInForeground: Boolean = true): ChatViewModel =
         ChatViewModel(
             scope = TestScope(),
             sessions = SessionStore(storage),
             settingsCache = SettingsCache(InMemoryDefaultsStorage()),
             oauthClients = OAuthClients(InMemoryDefaultsStorage()),
             formatExpiry = { it.toString() },
+            startsInForeground = startsInForeground,
         )
 }

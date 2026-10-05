@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- The default-network callback that tells "no internet" from "reconnecting". -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Push (lurker-android#16). A runtime grant from Android 13; asked only once the server has said
+         it can deliver, never on the sign-in screen (PushRegistrar). -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!--
         networkSecurityConfig permits plain http, so a self-hoster can sign in to a LAN box.
@@ -77,6 +80,30 @@
                 <data android:mimeType="application/json" />
             </intent-filter>
         </activity>
+
+        <!--
+            A server older than lurker#1046 sends a `notification` block, which the system draws
+            itself while the app is in the background: give it our status-bar icon and the
+            catch-all channel rather than the launcher icon (a solid blob) and Firebase's own.
+        -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_lurker" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="other" />
+
+        <!--
+            Receives push (lurker-android#16). The server sends data-only messages, so this runs for
+            every one, foreground or not, and draws the notification itself (PushNotifier).
+        -->
+        <service
+            android:name=".platform.push.LurkerMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
     </application>
 
 </manifest>

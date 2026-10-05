@@ -3,6 +3,29 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+// Push (lurker-android#16). google-services.json ties a build to the Firebase project that can push to
+// it, and only the publisher's project can push to the published app (an FCM token is scoped to the
+// project in the APK, MismatchSenderId otherwise) — so the file is gitignored, not committed, and a
+// build without it is a normal build with push switched off: CI, and anyone building the app
+// themselves. `PushRegistrar` reads that as "Firebase isn't here" and never asks for permission.
+//
+// The PLAY bundle without it would be the published app silently unable to receive push, so that
+// refuses. Only the bundle: Play takes nothing else, and `./gradlew build` (which assembles a
+// release APK) has to keep working without the file.
+val googleServicesJson = file("google-services.json")
+if (googleServicesJson.exists()) {
+    apply(plugin = libs.plugins.google.services.get().pluginId)
+}
+gradle.taskGraph.whenReady {
+    val bundlesRelease = allTasks.any { it.project == project && it.name == "bundleRelease" }
+    if (bundlesRelease && !googleServicesJson.exists()) {
+        throw GradleException(
+            "app/google-services.json is missing: a Play bundle built without it can't receive push. " +
+                "Download it from the Firebase console (project lurker-4cec0).",
+        )
+    }
+}
+
 android {
     namespace = "net.amiantos.lurker"
     compileSdk {
@@ -64,6 +87,10 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.process)
     implementation(libs.okhttp)
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.messaging)
+    implementation(libs.androidx.fragment)
+    implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.kotlinx.coroutines.android)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

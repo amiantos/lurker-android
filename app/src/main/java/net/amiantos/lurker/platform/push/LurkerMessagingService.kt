@@ -1,0 +1,54 @@
+// Copyright (c) 2026 Brad Root
+// SPDX-License-Identifier: MPL-2.0
+
+package net.amiantos.lurker.platform.push
+
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ProcessLifecycleOwner
+import com.google.firebase.messaging.FirebaseMessagingService
+import com.google.firebase.messaging.RemoteMessage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import net.amiantos.lurker.LurkerApp
+import net.amiantos.lurkerkit.session.ChatViewModel
+
+/**
+ * Where FCM delivers (lurker-android#16). The server sends data-only messages, so this runs for every
+ * push whether the app is in the foreground or not, and the notification is ours to draw.
+ *
+ * Both callbacks run on a worker thread.
+ */
+class LurkerMessagingService : FirebaseMessagingService() {
+
+    override fun onMessageReceived(message: RemoteMessage) {
+        val push = PushMessage.parse(message.data) ?: return
+        val app = application as LurkerApp
+        // On the main thread, where sign-out clears notifications (`LurkerApp.observeSession`): checked
+        // and posted there, a sign-out can't land between the check and the post and leave the
+        // departing account's message on the lock screen. Blocking this worker briefly is fine; it's
+        // FCM's thread for exactly this.
+        runBlocking(Dispatchers.Main) {
+            // Signed out, nothing is shown: sign-out deletes the token (`PushRegistrar.signedOut`), but a
+            // push already in flight, or sent before the delete reached FCM, still lands here.
+            if (app.model.session != ChatViewModel.SessionState.LoggedIn) return@runBlocking
+            // Someone looking at the app sees the message there. The server already holds pushes while
+            // a client reports itself visible; this covers one in flight as the app came forward —
+            // iOS's `willPresent`, which shows nothing but the badge.
+            if (ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@runBlocking
+            // Already read: FCM can hold a push (Doze) past the read on another device, and nothing would
+            // take a notification posted now back down.
+            if (push.readIn(app.model.state)) return@runBlocking
+            PushNotifier.show(app, push)
+        }
+    }
+
+    /**
+     * FCM rotated this install's token. Register the new one if we're signed in and allowed to post —
+     * without prompting: no screen is up to ask on.
+     */
+    override fun onNewToken(token: String) {
+        val app = application as LurkerApp
+        app.scope.launch { app.push.enableIfSignedIn(mayPrompt = false) }
+    }
+}
