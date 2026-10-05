@@ -21,8 +21,15 @@ import net.amiantos.lurkerkit.store.ChatState
  * launch or a reconnect starts from) can only leave a notification up, never take a fresh one down.
  */
 object ReadMarkers {
-    fun readPast(state: ChatState, networkId: Int, target: String, messageId: Long): Boolean {
-        val buffer = state.buffers[BufferKey(networkId, target).id] ?: return false
+    /**
+     * Found by [bufferId] (the server's row id) when the push carried one, since it survives a rename
+     * — a DM whose peer changed nick moves to a new key, and the notification still names the old one.
+     * By name otherwise.
+     */
+    fun readPast(state: ChatState, networkId: Int, target: String, messageId: Long, bufferId: Int? = null): Boolean {
+        val buffer = bufferId?.let { id -> state.buffers.values.firstOrNull { it.bufferId == id } }
+            ?: state.buffers[BufferKey(networkId, target).id]
+            ?: return false
         // A pointer the server never stated reads 0, which is "nothing read", not a read.
         return buffer.readStateKnown && buffer.lastReadId >= messageId
     }

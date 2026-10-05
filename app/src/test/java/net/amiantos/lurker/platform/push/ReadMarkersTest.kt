@@ -12,7 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReadMarkersTest {
-    private fun state(target: String, lastReadId: Long, known: Boolean = true, unread: Int = 0): ChatState {
+    private fun state(target: String, lastReadId: Long, known: Boolean = true, unread: Int = 0, bufferId: Int? = null): ChatState {
         val key = BufferKey(1, target)
         return ChatState(
             buffers = mapOf(
@@ -23,6 +23,7 @@ class ReadMarkersTest {
                     unread = unread,
                     lastReadId = lastReadId,
                     readStateKnown = known,
+                    bufferId = bufferId,
                 ),
             ),
         )
@@ -58,6 +59,13 @@ class ReadMarkersTest {
         // A DM from someone new, pushed before this device has heard of the buffer.
         assertFalse(ReadMarkers.readPast(state("#lurker", lastReadId = 99), 1, "bob", 42))
         assertFalse(ReadMarkers.readPast(state("#lurker", lastReadId = 99), 2, "#lurker", 42))
+    }
+
+    @Test
+    fun aRenamedBufferIsFoundByItsRowId() {
+        // The push named `bob`; bob became `bobby` and the buffer moved to that key. The row id didn't.
+        assertTrue(ReadMarkers.readPast(state("bobby", lastReadId = 42, bufferId = 9), 1, "bob", 42, bufferId = 9))
+        assertFalse(ReadMarkers.readPast(state("bobby", lastReadId = 42, bufferId = 9), 1, "bob", 42))
     }
 
     @Test

@@ -25,6 +25,8 @@ data class PushMessage(
     val tag: String,
     /** When the message was sent, for the notification's timestamp; null when unreadable. */
     val sentAt: Long?,
+    /** The server's buffer row id, which survives a rename (see [ReadMarkers]). */
+    val bufferId: Int?,
     /**
      * The keys a tap needs, copied onto the tap's intent as string extras. The same keys a
      * system-drawn FCM notification puts on its launch intent, so `MainActivity` reads either.
@@ -56,7 +58,7 @@ data class PushMessage(
         val networkId = tap["networkId"]?.toIntOrNull() ?: return false
         val target = tap["target"] ?: return false
         val messageId = tap["messageId"]?.toLongOrNull() ?: return false
-        return ReadMarkers.readPast(state, networkId, target, messageId)
+        return ReadMarkers.readPast(state, networkId, target, messageId, bufferId)
     }
 
     companion object {
@@ -77,6 +79,7 @@ data class PushMessage(
                 body = data["body"].orEmpty(),
                 tag = tag,
                 sentAt = data["time"]?.let(::epochMillis),
+                bufferId = data["bufferId"]?.toIntOrNull(),
                 tap = TAP_KEYS.mapNotNull { key -> data[key]?.let { key to it } }.toMap(),
             )
         }

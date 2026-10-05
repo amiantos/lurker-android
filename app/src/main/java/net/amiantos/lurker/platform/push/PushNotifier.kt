@@ -42,6 +42,7 @@ object PushNotifier {
     private const val EXTRA_NETWORK_ID = "net.amiantos.lurker.networkId"
     private const val EXTRA_TARGET = "net.amiantos.lurker.target"
     private const val EXTRA_MESSAGE_ID = "net.amiantos.lurker.messageId"
+    private const val EXTRA_BUFFER_ID = "net.amiantos.lurker.bufferId"
 
     /**
      * Create (or update the names of) one channel per kind. Idempotent, and cheap enough for every
@@ -92,6 +93,7 @@ object PushNotifier {
                 message.tap["networkId"]?.let { putString(EXTRA_NETWORK_ID, it) }
                 message.tap["target"]?.let { putString(EXTRA_TARGET, it) }
                 message.tap["messageId"]?.let { putString(EXTRA_MESSAGE_ID, it) }
+                message.bufferId?.let { putInt(EXTRA_BUFFER_ID, it) }
             },
         )
         // No `setNumber`: a launcher that shows a count sums its notifications' numbers, so the
@@ -113,7 +115,8 @@ object PushNotifier {
             val networkId = about.getString(EXTRA_NETWORK_ID)?.toIntOrNull() ?: continue
             val target = about.getString(EXTRA_TARGET) ?: continue
             val messageId = about.getString(EXTRA_MESSAGE_ID)?.toLongOrNull() ?: continue
-            if (ReadMarkers.readPast(state, networkId, target, messageId)) manager.cancel(posted.tag, NOTIFICATION_ID)
+            val bufferId = if (about.containsKey(EXTRA_BUFFER_ID)) about.getInt(EXTRA_BUFFER_ID) else null
+            if (ReadMarkers.readPast(state, networkId, target, messageId, bufferId)) manager.cancel(posted.tag, NOTIFICATION_ID)
         }
     }
 
