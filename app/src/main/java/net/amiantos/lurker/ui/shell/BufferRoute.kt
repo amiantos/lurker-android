@@ -20,8 +20,8 @@ import kotlin.random.Random
  * two routes to one buffer with different [jump]s are different routes but the same conversation.
  *
  * [visit] tells one open of a buffer from the next (sweep L11): the conversation's saved state —
- * where the list was, the latched "New messages" divider — is kept per visit, so a rotation or a
- * back to a covered conversation restores it and a fresh open starts fresh. `copy` keeps it: an
+ * where the list was, the latched "New messages" divider — is kept per visit, so a rotation
+ * restores it and a fresh open starts fresh. `copy` keeps it: an
  * in-place jump is the same visit. A route saved before the field existed restores with 0.
  */
 data class BufferRoute(
@@ -82,36 +82,4 @@ class JumpLedger(consumed: Collection<Long> = emptyList()) {
 
     /** What to save. */
     fun saved(): LongArray = consumed.toLongArray()
-}
-
-/**
- * The conversation visits whose saved state is kept, newest first (sweep L11) — held by
- * `MainScaffold` with a `SaveableStateHolder` keyed by visit.
- *
- * Kept rather than dropped as soon as a visit stops showing, because a covered conversation comes
- * back: a join landing pushes #b over #a, and back rebuilds #a from the same route, which should
- * find #a where it was. The navigator doesn't expose its history, so how deep that can go is
- * guessed at [capacity]; past it a visit's state goes, and a conversation that deep comes back
- * fresh. Without the bound every open in a long session would stay in the saved Bundle.
- */
-class RecentVisits(visits: Collection<String> = emptyList(), private val capacity: Int = CAPACITY) {
-    private val visits = ArrayList(visits)
-
-    /** [visit] is showing: it's the newest. Returns the visits that fell off the end, to drop. */
-    fun touch(visit: String): List<String> {
-        if (visits.firstOrNull() == visit) return emptyList()
-        visits.remove(visit)
-        visits.add(0, visit)
-        if (visits.size <= capacity) return emptyList()
-        val evicted = visits.subList(capacity, visits.size).toList()
-        visits.subList(capacity, visits.size).clear()
-        return evicted
-    }
-
-    /** What to save. */
-    fun saved(): ArrayList<String> = ArrayList(visits)
-
-    companion object {
-        const val CAPACITY = 8
-    }
 }

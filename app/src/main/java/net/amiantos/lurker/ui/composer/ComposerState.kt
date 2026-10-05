@@ -4,6 +4,7 @@
 package net.amiantos.lurker.ui.composer
 
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -78,10 +79,9 @@ internal class ComposerState(
     private val scope: CoroutineScope,
     /**
      * The field — saved by the screen (`rememberComposerState`), so a rotation or a process death
-     * hands back what was typed, caret included. Opened on the buffer's draft: this device's unflushed
-     * edit, else the server's.
+     * hands back what was typed, caret included. Opened on the buffer's draft ([openField]).
      */
-    val field: TextFieldState = TextFieldState(initialText = model.draft(key)?.body ?: ""),
+    val field: TextFieldState = openField(model, key),
 ) {
     // MARK: - What the screen hands in (set every composition — see `rememberComposerState`)
 
@@ -105,6 +105,16 @@ internal class ComposerState(
     // MARK: - What the bar draws
 
     private val initialDraft: ComposerDraft? = model.draft(key)
+
+    init {
+        // A saved field restored over a stored draft that moved meanwhile — another device's write
+        // landing while the screen was being rebuilt — takes the draft, as a fresh field would: the
+        // draft is the newer word, and the saved text typed over it would overwrite it. Where they
+        // agree the saved caret stands. Buffers whose drafts don't sync (the Lurker console, a server
+        // log) have none, and keep what was saved.
+        val stored = initialDraft?.body
+        if (stored != null && stored != field.text.toString()) field.setTextAndPlaceCursorAtEnd(stored)
+    }
 
     val focusRequester = FocusRequester()
 
@@ -293,6 +303,13 @@ internal class ComposerState(
         }
     }
 
+    /** Downgrade an `active` claim to `paused` now — see [leave]. Silent when we weren't. */
+    private fun pauseTyping() {
+        typingIdle?.cancel()
+        typingIdle = null
+        typing.idled(field.text.toString(), Instant.now())
+    }
+
     /** Stop claiming to type — on send, and on leaving. Silent when we weren't. */
     private fun endTyping() {
         typingIdle?.cancel()
@@ -375,9 +392,12 @@ internal class ComposerState(
      * Ends the edit too — see [endEditing].
      */
     internal fun leave(changingConfiguration: Boolean = false) {
-        // A rotation isn't leaving: the same text is back in the field a frame later, still being
-        // written, and telling the channel `done` mid-sentence on every turn of the phone was a lie.
-        if (!changingConfiguration) endTyping()
+        // A rotation isn't leaving: the same text is back in the field a frame later, and telling the
+        // channel `done` mid-sentence on every turn of the phone was a lie. It does end THIS state's
+        // claim, though — the rebuilt composer starts knowing nothing was said, and could never end
+        // an `active` left standing. `paused` is what's true of text sitting in the field, and it
+        // lapses on its own; the next keystroke claims `active` again.
+        if (changingConfiguration) pauseTyping() else endTyping()
         endEditing()
     }
 
@@ -592,6 +612,9 @@ internal class ComposerState(
     }
 }
 
+/** A field opened on [key]'s draft: this device's unflushed edit, else the server's. */
+internal fun openField(model: ChatViewModel, key: BufferKey) = TextFieldState(initialText = model.draft(key)?.body ?: "")
+
 /**
  * The composer for [key], kept for the life of the conversation screen, with the effects that keep
  * it current: the field's own changes, the stored draft, the chrome, the refused-line nudge, and
@@ -612,9 +635,7 @@ internal fun rememberComposerState(
     // Saved, not just remembered: a rotation, a theme or font-size change, or a fold rebuilds the
     // screen, and a remembered field came back as the stored draft — empty in the Lurker console and a
     // server log, whose drafts don't sync, and with the caret thrown to the end everywhere else.
-    val field = rememberSaveable(key.id, saver = TextFieldState.Saver) {
-        TextFieldState(initialText = model.draft(key)?.body ?: "")
-    }
+    val field = rememberSaveable(saver = TextFieldState.Saver) { openField(model, key) }
     val state = remember(model, key) { ComposerState(model, key, kind, scope, field) }
     val activity = LocalContext.current.findActivity()
     val keyboard = LocalSoftwareKeyboardController.current

@@ -63,22 +63,6 @@ class BufferRouteTest {
         assertEquals(first.visit, first.copy(jump = JumpRequest.to(42)).visit)
     }
 
-    /** Newest first; a visit shown again moves to the front; past the capacity the oldest go. */
-    @Test
-    fun `recent visits keep the newest and hand back the ones to drop`() {
-        val visits = RecentVisits(capacity = 3)
-        assertEquals(emptyList<String>(), visits.touch("a#1"))
-        assertEquals(emptyList<String>(), visits.touch("b#2"))
-        assertEquals(emptyList<String>(), visits.touch("c#3"))
-        // Back to a: it's newest again, and nothing falls off.
-        assertEquals(emptyList<String>(), visits.touch("a#1"))
-        assertEquals(listOf("b#2"), visits.touch("d#4"))
-        assertEquals(listOf("d#4", "a#1", "c#3"), visits.saved())
-        // Showing the newest again is nothing.
-        assertEquals(emptyList<String>(), visits.touch("d#4"))
-        // Restored after a rotation, it carries on from where it was.
-        assertEquals(listOf("c#3"), RecentVisits(visits.saved(), capacity = 3).touch("e#5"))
-    }
 
     /**
      * Notification-jump to #a, push #b, back: #a's screen is rebuilt from the same route, request

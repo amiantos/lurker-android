@@ -141,9 +141,12 @@ internal fun UploadsPage(
     // Once per answer, not once per composition: this state outlives a rotation, and a bare
     // "scrollToTop > 0" threw the restored position back to the top on every one after a search.
     LaunchedEffect(state.scrollToTop) {
-        if (state.scrollToTop > state.scrolledToTop) {
-            state.scrolledToTop = state.scrollToTop
+        val answer = state.scrollToTop
+        if (answer > state.scrolledToTop) {
             gridState.scrollToItem(0)
+            // After, not before: a page torn down mid-scroll hasn't been to the top, and its
+            // successor should go.
+            state.scrolledToTop = answer
         }
     }
     // Scrolling puts the keyboard away: this screen is read while being typed at, and the gesture for
