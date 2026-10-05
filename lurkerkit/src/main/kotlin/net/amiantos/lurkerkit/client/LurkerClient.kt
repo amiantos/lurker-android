@@ -137,6 +137,14 @@ internal class LurkerClient(
     private var socket: WebSocket? = null
 
     /**
+     * The socket has ended, and the reconnect hasn't replaced it yet. ⚠⚠ The socket is kept —
+     * `dropSocket` and the `task !== socket` guards still need it — but nothing can be written to
+     * it, so `send` answers false. Without this, every write made while "Reconnecting…" showed
+     * reported true and went nowhere, which is the window the callers' Boolean exists for.
+     */
+    private var socketEnded = false
+
+    /**
      * Which socket this is, counting from the first — so a caller can tie something it learned
      * from a frame to the socket that sent it. Bumped the moment a socket is made, before it
      * opens, because writes start going to it then.
@@ -740,6 +748,7 @@ internal class LurkerClient(
         // can land before the two lines below have run.
         val task = session.newWebSocket(request, SocketListener())
         socket = task
+        socketEnded = false
         socketGeneration += 1
     }
 
@@ -856,6 +865,7 @@ internal class LurkerClient(
 
     private fun handleClose(code: Int?, closeCode: Int, reason: String, task: WebSocket) {
         if (task !== socket) return
+        socketEnded = true
         abandonReplies()
         onFrame(closeFrame(status = code, closeCode = closeCode, reason = reason))
     }
@@ -999,11 +1009,11 @@ internal class LurkerClient(
      * A raw IRC line — the escape hatch behind `/nick`, `/mode`, `/kick`, `/whois`, the
      * service messages, the server queries, and every unrecognized command.
      *
-     * **Returns false when it went nowhere.** Most callers rightly ignore that — a raw line
-     * is fire-and-forget and its answer is whatever the server buffer prints. The WHOIS
-     * behind the profile screen is the exception, and it is why this returns at all: it
-     * claims an in-flight slot that only a reply can free, so a line that never left the
-     * socket would wedge that nick's lookup for the session (see `whoisPending`).
+     * **Returns false when it went nowhere.** A typed `/quote` (and every command that goes out
+     * raw) is handed back to the composer on false (sweep L02). The WHOIS behind the profile
+     * screen needs it too: it claims an in-flight slot that only a reply can free, so a line
+     * that never left the socket would wedge that nick's lookup for the session (see
+     * `whoisPending`).
      */
     fun sendRaw(networkId: Int?, line: String): Boolean {
         if (networkId == null) return false
@@ -1047,10 +1057,13 @@ internal class LurkerClient(
         )
     }
 
-    /** Part a channel with an optional reason. The buffer survives (dimmed); `/close` drops it. */
-    fun part(networkId: Int?, channel: String, reason: String?) {
-        if (networkId == null) return
-        send(
+    /**
+     * Part a channel with an optional reason. The buffer survives (dimmed); `/close` drops it.
+     * False when it went nowhere — the composer hands a `/part` typed offline back (sweep L02).
+     */
+    fun part(networkId: Int?, channel: String, reason: String?): Boolean {
+        if (networkId == null) return false
+        return send(
             buildJsonObject {
                 put("type", "part")
                 put("networkId", networkId)
@@ -1062,11 +1075,11 @@ internal class LurkerClient(
 
     /**
      * A CTCP request aimed at a target — `/ctcp`, `/ping`. `issuingTarget` is the buffer the
-     * command was run in, so a reply can be routed back to it.
+     * command was run in, so a reply can be routed back to it. False when it went nowhere.
      */
-    fun sendCTCP(networkId: Int?, target: String, issuingTarget: String, ctcpType: String, args: String) {
-        if (networkId == null) return
-        send(
+    fun sendCTCP(networkId: Int?, target: String, issuingTarget: String, ctcpType: String, args: String): Boolean {
+        if (networkId == null) return false
+        return send(
             buildJsonObject {
                 put("type", "ctcp")
                 put("networkId", networkId)
@@ -1160,15 +1173,13 @@ internal class LurkerClient(
      * Set yourself away (`/away`), or clear it (`/back`, or `/away` with no message), on the
      * network named (lurker#994). The server widens it to every network for `all: true`, for
      * the `away.all_networks` setting when `all` is null, and when there's no network (the
-     * system buffer).
+     * system buffer). False when it went nowhere.
      */
-    fun setAway(message: String, networkId: Int?, all: Boolean?) {
+    fun setAway(message: String, networkId: Int?, all: Boolean?): Boolean =
         send(awayFrame(type = "away", message = message, networkId = networkId, all = all))
-    }
 
-    fun setBack(networkId: Int?, all: Boolean?) {
+    fun setBack(networkId: Int?, all: Boolean?): Boolean =
         send(awayFrame(type = "back", message = null, networkId = networkId, all = all))
-    }
 
     /**
      * Page older history for a buffer, back from `before` (exclusive message id). The
@@ -1272,9 +1283,10 @@ internal class LurkerClient(
      * Mark a buffer read up to `messageId`. The server MAX-clamps, so re-sending a lower
      * id is a safe no-op. The system buffer sends `networkId: null` (hence JSON null, not a
      * dropped key), so this can't reuse the null-`networkId` shortcut.
+     * False when it went nowhere, which `ChatViewModel.markRead` must not record as marked.
      */
-    fun markRead(networkId: Int?, target: String, messageId: Long) {
-        send(
+    fun markRead(networkId: Int?, target: String, messageId: Long): Boolean {
+        return send(
             buildJsonObject {
                 put("type", "mark-read")
                 put("networkId", networkId?.let { JsonPrimitive(it) } ?: JsonNull)
@@ -1501,10 +1513,14 @@ internal class LurkerClient(
     /**
      * Close a buffer: parts a channel and stops tracking a DM. The server pseudo-buffer
      * (`:server:`) can't be closed. No-op for the system buffer (networkId null).
+     *
+     * False when there was a verb to send and no socket to carry it. The two no-ops answer
+     * true: nothing was meant to go out, so nothing went missing — a `/close` typed in the
+     * server log mustn't come back to the composer as if the connection were down.
      */
-    fun closeBuffer(networkId: Int?, target: String) {
-        if (networkId == null || target.startsWith(":server:")) return
-        send(
+    fun closeBuffer(networkId: Int?, target: String): Boolean {
+        if (networkId == null || target.startsWith(":server:")) return true
+        return send(
             buildJsonObject {
                 put("type", "close-buffer")
                 put("networkId", networkId)
@@ -1585,10 +1601,11 @@ internal class LurkerClient(
      * buffer row to carry a marker — the same guard `closeBuffer` needs. The `:server:` log
      * IS clearable, unlike closing: a network's log is a real buffer with real read state,
      * and hiding a wall of connection noise is exactly what someone would want there.
+     * False when it went nowhere.
      */
-    fun clearBuffer(networkId: Int?, target: String, undo: Boolean) {
-        if (networkId == null) return
-        send(
+    fun clearBuffer(networkId: Int?, target: String, undo: Boolean): Boolean {
+        if (networkId == null) return false
+        return send(
             buildJsonObject {
                 put("type", if (undo) "unclear-buffer" else "clear-buffer")
                 put("networkId", networkId)
@@ -1629,9 +1646,10 @@ internal class LurkerClient(
      * span networks, so names can't address them). Send the FULL permuted list; a subset
      * floats to the front and would demote everything unmentioned. The server echoes the
      * authoritative `favorites-changed` either way (a stale set snaps this device back).
+     * False when it went nowhere: then no echo is coming to settle the order on screen.
      */
-    fun reorderFavorites(bufferIds: List<Int>) {
-        send(
+    fun reorderFavorites(bufferIds: List<Int>): Boolean {
+        return send(
             buildJsonObject {
                 put("type", "reorder-favorites")
                 putJsonArray("bufferIds") { bufferIds.forEach { add(JsonPrimitive(it)) } }
@@ -1824,12 +1842,13 @@ internal class LurkerClient(
      * instead. So `onComplete` reports the queueing, before this returns; `onFlush` fires a
      * turn later, once the socket's queue has drained (`awaitWritten`) — the nearest thing to
      * "written" OkHttp exposes, and what a background-allowance release has to wait for. A
-     * refused frame takes LurkerKit's write-failure path — `onComplete` false, and for a
-     * deliberate write the "Send failed" error, raised after this returns as LurkerKit raises
-     * it — while this still answers true, a socket having been there to take it. OkHttp gives
-     * no reason for a refusal; the one shown is the POSIX `ENOTCONN` text iOS reports for a
-     * write to a dead socket.
+     * refused frame answers false — which LurkerKit can't: OkHttp knows at once that the frame
+     * went nowhere — with `onComplete` false. So `surfacesFailure` has nothing to raise here:
+     * the caller of a deliberate write hears the false and hands the line back or says so, and
+     * a "Send failed" alert on top would report the one failure twice. On iOS the failure comes
+     * only later, from the write's completion, which is what `surfacesFailure` is for there.
      */
+    @Suppress("UNUSED_PARAMETER")
     private fun send(
         verb: JsonObject,
         surfacesFailure: Boolean = false,
@@ -1837,7 +1856,7 @@ internal class LurkerClient(
         onComplete: ((ok: Boolean) -> Unit)? = null,
     ): Boolean {
         val socket = socket
-        if (socket == null) {
+        if (socket == null || socketEnded) {
             onFlush?.invoke()
             return false
         }
@@ -1845,14 +1864,10 @@ internal class LurkerClient(
         val queued = socket.send(text)
         onComplete?.invoke(queued)
         scope.task {
-            if (queued) {
-                awaitWritten(socket)
-            } else if (surfacesFailure) {
-                onFrame(ServerFrame.ServerError("Send failed: Socket is not connected"))
-            }
+            if (queued) awaitWritten(socket)
             onFlush?.invoke()
         }
-        return true
+        return queued
     }
 
     /**

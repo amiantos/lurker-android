@@ -959,13 +959,14 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
 
         /**
          * Whether a request sent now can reach the server: the socket is up AND the device has a
-         * path. ⚠ Asked BEFORE anything the kit bookkeeps per request. `markRead` advances its
-         * dedupe mark, and `loadOlder`/`loadNewer` their in-flight flags, before the client drops a
-         * write onto a dead socket — and none of those reset on reconnect, so a mark sent offline
-         * suppresses the same mark later, and a page sent offline blocks paging for good. Both
-         * signals: airplane mode flips `reachable` while the socket still reads Connected.
+         * path. ⚠ Asked BEFORE anything the kit bookkeeps per request. `loadOlder`/`loadNewer` set
+         * their in-flight flags before the client drops a write onto a dead socket, and `markRead`
+         * advances its dedupe mark once the write is taken — which a dropped-but-unnoticed socket
+         * still does. None of those reset on reconnect, so a mark sent offline suppresses the same
+         * mark later, and a page sent offline blocks paging for good. Both signals: airplane mode
+         * flips `reachable` while the socket still reads Connected.
          */
-        fun mayWrite(state: ChatState): Boolean = state.connection == SocketStatus.Connected && state.reachable
+        fun mayWrite(state: ChatState): Boolean = state.socketWritable
 
         /**
          * Whether the reader was parked at the newest row as [drawn] is replaced — iOS's

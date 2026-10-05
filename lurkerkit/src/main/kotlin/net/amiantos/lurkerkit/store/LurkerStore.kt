@@ -122,6 +122,14 @@ data class ChatState(
      */
     val snapshotSinceOpen: Boolean = false,
     /**
+     * A socket is being opened and hasn't sent its first frame. ⚠ Needed beside `connection`: a
+     * forced reconnect (the foreground's stale-socket check) replaces the socket without the state
+     * ever leaving Connected, and OkHttp queues writes on the new one during its upgrade and loses
+     * them if the attempt fails. Read only by [socketWritable], so the banner and title don't move;
+     * the client's own connect burst writes through regardless.
+     */
+    val socketOpening: Boolean = false,
+    /**
      * Highest persisted message id seen (excluding the system buffer, which has its own
      * id space) — replayed as `?since=` on reconnect so the server ships only the gap.
      * Populated now so lurker-ios#4 can resume without a store change.
@@ -860,6 +868,13 @@ data class ChatState(
     }
 
     /**
+     * Whether a write the user makes can reach the server now: the device has a path, our socket
+     * has opened, and it isn't being replaced. The one rule every user write asks (the client
+     * sweep's offline-writes batch), here and in [canWrite].
+     */
+    val socketWritable: Boolean get() = reachable && connection == SocketStatus.Connected && !socketOpening
+
+    /**
      * Whether a write for this network can reach it right now: the device has a path, our socket
      * is up, and the network is connected — the one rule `/join`, a DM's `open-buffer`
      * (lurker-ios#201) and a reaction share, so a reconnect can't make them disagree.
@@ -869,7 +884,7 @@ data class ChatState(
      * it reconnects — so a send there "succeeds" and nothing ever answers.
      */
     fun canWrite(networkId: Int?): Boolean {
-        if (!(reachable && connection == SocketStatus.Connected) || networkId == null) return false
+        if (!socketWritable || networkId == null) return false
         return networks[networkId]?.state == ConnectionState.Connected
     }
 
@@ -1253,6 +1268,12 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
     fun setReachable(reachable: Boolean) {
         if (state.reachable == reachable) return
         publish(state.copy(reachable = reachable))
+    }
+
+    /** A socket is being opened (see [ChatState.socketOpening]); its `socketOpen` clears it. */
+    fun setSocketOpening() {
+        if (state.socketOpening) return
+        publish(state.copy(socketOpening = true))
     }
 
     /**
@@ -1716,6 +1737,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                 ServerFrame.SocketOpen ->
                     state.copy(
                         connection = SocketStatus.Connected,
+                        socketOpening = false,
                         // Connected, but this socket hasn't said anything yet: until its snapshot
                         // lands, every presence row and network state is left over from before
                         // the drop.

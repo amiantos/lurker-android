@@ -43,6 +43,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -63,6 +64,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+import net.amiantos.lurker.platform.AppEvent
+import net.amiantos.lurker.platform.LocalAppEvents
 import net.amiantos.lurker.ui.feeds.AppView
 import net.amiantos.lurker.ui.feeds.AppViewMenuItem
 import net.amiantos.lurker.ui.feeds.ViewsLayout
@@ -111,7 +115,8 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
  * @param sideBySide whether the list is beside the conversation rather than instead of it — iOS's
  *   `marksOpenBuffer`. It gates the open mark, and the banner: side by side the conversation pane
  *   carries it, so the two never draw over each other or are read out twice.
- * @param onClose leaves a channel or closes a buffer — the swipe and the menu both come here.
+ * @param onClose leaves a channel or closes a buffer — the swipe and the menu both come here. False
+ *   when it couldn't go out: the row stays, and the swipe puts it back.
  * @param onOpenSettings opens Settings, which `MainScaffold` hosts (with Sign Out inside it).
  * @param sheets the networks dialogs, hosted by `MainScaffold`: "+" opens Join Channel and Add
  *   Network, and Settings → Networks opens the networks list over Settings.
@@ -126,7 +131,7 @@ fun BufferListScreen(
     openKey: BufferKey?,
     sideBySide: Boolean,
     onOpen: (Buffer) -> Unit,
-    onClose: (Buffer) -> Unit,
+    onClose: (Buffer) -> Boolean,
     onOpenSettings: () -> Unit,
     sheets: NetworkSheets,
     onOpenView: (AppView) -> Unit = {},
@@ -146,6 +151,7 @@ fun BufferListScreen(
 
     var optimistic by remember { mutableStateOf<OptimisticFavorites?>(null) }
     var drag by remember { mutableStateOf<DragSession?>(null) }
+    val events = LocalAppEvents.current
 
     // ⚠⚠ The burst gate. `hasRenderedList` is NEVER reset here. On iOS it used to be cleared
     // whenever `backlogComplete` was false — meant as "a fresh session waits again" — which
@@ -166,6 +172,14 @@ fun BufferListScreen(
     // shadow order — see `orderedFavorites`.
     LaunchedEffect(inputs.favorites) {
         if (optimistic?.isCurrent(inputs.favorites) == false) optimistic = null
+    }
+    // …and so does a new burst. The shadow waits for an echo, and a socket that ends takes the echo
+    // with it — the reconnect's burst re-sends the list unchanged, which releases nothing (sweep L29).
+    // The burst's snapshot is the server's whole favorites order, which is what the echo would have
+    // said. That covers a drop written into a socket that died without saying so, a forced foreground
+    // reconnect included, and a drop that did go out keeps its place until then.
+    LaunchedEffect(inputs.burstGeneration) {
+        if (optimistic?.let { it.burstAtDrop != inputs.burstGeneration } == true) optimistic = null
     }
 
     // Stage two. `inputs` compares by identity, so this rebuilds exactly when stage one let a frame
@@ -239,11 +253,18 @@ fun BufferListScreen(
             if (cancelled) return@stop
             val current = inputs.favorites
             val order = session.dropOrder(current, optimistic) ?: return@stop
-            model.reorderFavorites(bufferIds = order)
+            // ⚠ Only a drop that went out is kept. The shadow order below lasts until favorites
+            // change, and a reorder that went nowhere has no echo coming to change them — the
+            // reconnect re-sends the same list — so this device kept an order nobody else had
+            // (sweep L29). The released list draws the store's order instead, which is the truth.
+            if (!model.reorderFavorites(bufferIds = order)) {
+                events?.send(AppEvent.Notice(BufferListModel.NOT_CONNECTED))
+                return@stop
+            }
             // Shadow the new order until the echo folds — the list released above would otherwise
             // redraw the store's pre-drop order (a visible snap home, and a corrupt base for a
             // quick second drag).
-            optimistic = OptimisticFavorites(order = order, favoritesAtDrop = current)
+            optimistic = OptimisticFavorites(order = order, favoritesAtDrop = current, burstAtDrop = inputs.burstGeneration)
         },
         // The system buffer is app-scoped and always exists, so fall back to the synthetic one if
         // its row hasn't arrived from the server yet.
@@ -278,7 +299,7 @@ fun BufferListScreen(
 /** What the list's touches do. One object so the content composable stays stateless (previews). */
 internal class BufferListActions(
     val onOpen: (Row) -> Unit,
-    val onClose: (Buffer) -> Unit,
+    val onClose: (Buffer) -> Boolean,
     val menuFor: (Buffer) -> RowMenu?,
     val onJoin: (Buffer) -> Unit,
     val onToggleFavorite: (Buffer, isFavorite: Boolean) -> Unit,
@@ -299,7 +320,7 @@ internal class BufferListActions(
         /** Touches that do nothing — for previews. */
         val None = BufferListActions(
             onOpen = {},
-            onClose = {},
+            onClose = { true },
             menuFor = { null },
             onJoin = {},
             onToggleFavorite = { _, _ -> },
@@ -794,11 +815,12 @@ private fun RowWithMenu(
  * back already swiped away.
  */
 @Composable
-private fun SwipeToClose(title: String, onClose: () -> Unit, content: @Composable () -> Unit) {
+private fun SwipeToClose(title: String, onClose: () -> Boolean, content: @Composable () -> Unit) {
     val state = remember {
         SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, positionalThreshold = { distance -> distance * 0.5f })
     }
     val currentOnClose by rememberUpdatedState(onClose)
+    val scope = rememberCoroutineScope()
     // Once: the box re-runs its dismiss callback whenever it recomposes still dismissed, and the
     // row stays composed until the store's removal lands.
     var fired by remember { mutableStateOf(false) }
@@ -806,7 +828,20 @@ private fun SwipeToClose(title: String, onClose: () -> Unit, content: @Composabl
         { _: SwipeToDismissBoxValue ->
             if (!fired) {
                 fired = true
-                currentOnClose()
+                // A close that couldn't go out leaves the row, so it slides back rather than
+                // sitting swiped off with nothing coming to remove it (sweep L16).
+                // `fired` stays set until the row is home: the box re-runs this while it's still
+                // dismissed, and a second close mid-slide could go out once the connection is back.
+                if (!currentOnClose()) {
+                    scope.launch {
+                        // `finally`: a new drag cancels the reset, and the row must still be closable.
+                        try {
+                            state.reset()
+                        } finally {
+                            fired = false
+                        }
+                    }
+                }
             }
         }
     }

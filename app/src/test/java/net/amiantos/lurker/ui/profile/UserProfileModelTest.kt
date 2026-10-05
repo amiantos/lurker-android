@@ -225,10 +225,8 @@ class UserProfileModelTest {
     }
 
     @Test
-    fun aNoteGoesOutOnlyOverAConnectedSocket() {
-        assertEquals(null, NickNoteModel.sendRefusal(SocketStatus.Connected, reachable = true))
-        assertEquals(NickNoteModel.NOT_CONNECTED, NickNoteModel.sendRefusal(SocketStatus.Reconnecting, reachable = true))
-        assertEquals(NickNoteModel.NOT_CONNECTED, NickNoteModel.sendRefusal(SocketStatus.Connected, reachable = false))
+    fun aRefusedNoteSaysNotConnected() {
+        // Whether it can go out is the kit's `canWrite` (OfflineWritesTests); this is what it says.
         assertEquals("Not connected — try again when you're back online", NickNoteModel.NOT_CONNECTED)
     }
 

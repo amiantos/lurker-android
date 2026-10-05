@@ -13,6 +13,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -39,6 +40,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
@@ -165,7 +167,8 @@ class SocketCloseTests {
     /**
      * An acked verb is answered by its `send-result`, read in full and never passed to the
      * store; a question still out when its socket ends is settled as `connectionLost`; and a
-     * deliberate write into the dead socket afterwards says so.
+     * deliberate write after the socket ends answers false — it went nowhere, and its caller hands
+     * the line back (sweep L02) — rather than true with a "Send failed" alert behind it.
      */
     @Test
     fun testRepliesSettleOnTheirAnswerOrWithTheirSocket() = runBlocking<Unit> {
@@ -189,11 +192,8 @@ class SocketCloseTests {
                 assertEquals(VerbReply.connectionLost, stranded.await())
                 assertEquals(ServerFrame.SocketClosed(reason = "", code = 101), harness.next<ServerFrame.SocketClosed>())
 
-                assertTrue(harness.onMain { sendMessage(networkId = 1, target = "#a", text = "hi") })
-                assertEquals(
-                    ServerFrame.ServerError("Send failed: Socket is not connected"),
-                    harness.next<ServerFrame.ServerError>(),
-                )
+                assertFalse(harness.onMain { sendMessage(networkId = 1, target = "#a", text = "hi") })
+                assertNull(withTimeoutOrNull(300) { harness.next<ServerFrame.ServerError>() })
             }
         }
     }

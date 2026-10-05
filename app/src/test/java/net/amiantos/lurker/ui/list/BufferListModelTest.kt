@@ -462,7 +462,7 @@ class BufferListModelTest {
     @Test
     fun theOptimisticOrderAppliesUntilAnyFavoritesChange() {
         val favorites = listOf(favorite(1, "#a", 1), favorite(1, "#b", 2), favorite(1, "#c", 3))
-        val optimistic = OptimisticFavorites(order = listOf(3, 1, 2), favoritesAtDrop = favorites)
+        val optimistic = OptimisticFavorites(order = listOf(3, 1, 2), favoritesAtDrop = favorites, burstAtDrop = 0)
         assertEquals(listOf(3, 1, 2), BufferListModel.orderedFavorites(favorites, optimistic).map { it.bufferId })
         val drawn = sections(state(favorites = favorites), optimistic)
         assertEquals(listOf("#c", "#a", "#b"), drawn.section(SectionId.Favorites).names())
@@ -477,7 +477,7 @@ class BufferListModelTest {
     @Test
     fun anOptimisticOrderMissingAnEntryKeepsItAtTheEnd() {
         val favorites = listOf(favorite(1, "#a", 1), favorite(1, "#b", 2), favorite(1, "bob", 3))
-        val optimistic = OptimisticFavorites(order = listOf(2, 1), favoritesAtDrop = favorites)
+        val optimistic = OptimisticFavorites(order = listOf(2, 1), favoritesAtDrop = favorites, burstAtDrop = 0)
         assertEquals(listOf(2, 1, 3), BufferListModel.orderedFavorites(favorites, optimistic).map { it.bufferId })
     }
 
@@ -513,7 +513,7 @@ class BufferListModelTest {
     fun aSecondDropBeforeTheEchoDiffsAgainstTheScreenNotTheStore() {
         // First drop moved #b above #a; its echo hasn't landed. The second drag puts them back.
         val favorites = listOf(favorite(1, "#a", 1), favorite(1, "#b", 2))
-        val optimistic = OptimisticFavorites(order = listOf(2, 1), favoritesAtDrop = favorites)
+        val optimistic = OptimisticFavorites(order = listOf(2, 1), favoritesAtDrop = favorites, burstAtDrop = 0)
         val onScreen = sections(state(favorites = favorites), optimistic)
         val session = DragSession.begin(onScreen, SectionId.Favorites, BufferKey(1, "#b").id, favorites)!!
             .moved(BufferKey(1, "#b").id, BufferKey(1, "#a").id)
