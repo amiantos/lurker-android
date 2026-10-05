@@ -11,6 +11,8 @@ import android.util.Log
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
+import com.google.android.gms.common.ConnectionResult
+import com.google.android.gms.common.GoogleApiAvailabilityLight
 import com.google.android.gms.tasks.Task
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
@@ -67,6 +69,13 @@ class PushRegistrar(
         /** Built without google-services.json — CI, or someone's own build. Push is off, by design. */
         data object NoFirebase : Outcome
 
+        /**
+         * No Google Play services: Fire OS tablets (a stated minSdk target), de-Googled phones. FCM
+         * rides Play services, so there is no token to have. Checked up front rather than left to the
+         * token request, whose failure on such a device is Firebase's to define.
+         */
+        data class NoPlayServices(val code: Int) : Outcome
+
         data class Failed(val reason: String) : Outcome
     }
 
@@ -103,6 +112,8 @@ class PushRegistrar(
 
     private suspend fun enable(mayPrompt: Boolean): Outcome {
         if (FirebaseApp.getApps(context).isEmpty()) return Outcome.NoFirebase
+        val playServices = GoogleApiAvailabilityLight.getInstance().isGooglePlayServicesAvailable(context)
+        if (playServices != ConnectionResult.SUCCESS) return Outcome.NoPlayServices(playServices)
         val supported = model.serverSupportsAPNs() ?: return Outcome.ServerUnreachable
         if (!supported) return Outcome.UnsupportedByServer
         permission(mayPrompt)?.let { return it }
@@ -145,6 +156,7 @@ class PushRegistrar(
             Outcome.ServerUnreachable -> Log.i(TAG, "couldn't reach the server to ask about push; retrying later")
             Outcome.Denied -> Log.i(TAG, "notifications are off for this app")
             Outcome.NoFirebase -> Log.i(TAG, "built without google-services.json; push is off")
+            is Outcome.NoPlayServices -> Log.i(TAG, "no Google Play services (code ${outcome.code}); push is off")
             is Outcome.Failed -> Log.w(TAG, "could not enable push: ${outcome.reason}")
         }
     }
