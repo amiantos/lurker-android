@@ -666,6 +666,7 @@ internal object FrameParser {
             networks = networks,
             globalIgnores = obj.objects("globalIgnores").map(::parseIgnoreRule),
             uploadLimits = advertisedUploadLimits(obj),
+            cursor = obj.longOrNull("cursor"),
         )
     }
 
@@ -877,6 +878,7 @@ internal object FrameParser {
                 topicSetBy = channel.stringOrNull("topicSetBy"),
                 topicSetAt = ISOTime.parse(channel.stringOrNull("topicSetAt")),
             ),
+            membersPending = channel.bool("membersPending"),
         )
 
     /**
@@ -1191,6 +1193,22 @@ internal object FrameParser {
             }
             else -> {}
         }
+        // The `invite` that names us (lurker#261) is the same shape again: a `:server:<id>`
+        // carrier, the inviter in `from`, the channel in `channel`. Below the guard it has no
+        // `nick` or `invited`, so `isRenderable` drops it — and with it the only chance to offer
+        // a Join. The other `invite`, someone else invited on a channel we're in, is a real
+        // channel line with neither field, and falls through.
+        if (obj.string("type") == "invite") {
+            val from = obj.stringOrNull("from")
+            if (!from.isNullOrEmpty()) {
+                val networkId = obj.intOrNull("networkId") ?: return ServerFrame.Ignored
+                val channel = obj.string("channel")
+                if (channel.isEmpty()) return ServerFrame.Ignored
+                return ServerFrame.Invited(
+                    networkId = networkId, channel = channel, from = from, userhost = obj.stringOrNull("userhost"),
+                )
+            }
+        }
         // `react-support` is network-scoped state on a `:server:<id>` carrier, like those above.
         if (obj.string("type") == "react-support") {
             val networkId = obj.intOrNull("networkId") ?: return ServerFrame.Ignored
@@ -1314,6 +1332,7 @@ internal object FrameParser {
                 networkId = obj.intOrNull("networkId"),
                 target = target,
                 members = obj.objects("members").map(::parseMember),
+                pending = obj.bool("membersPending"),
             )
         }
         // `typing` is ephemeral state like the three around it — no id, nothing to render —
@@ -1442,6 +1461,8 @@ internal object FrameParser {
             reactions = event["reactions"]?.asObjects()?.let(::parseReactions),
             replyTo = parseReplyContext(event["replyTo"]),
             replyToSelf = event.bool("replyToSelf"),
+            // Only a 421 carries it, naming the verb the ircd didn't know.
+            unknownCommand = if (type == EventType.Error) event.stringOrNull("unknownCommand") else null,
         )
     }
 

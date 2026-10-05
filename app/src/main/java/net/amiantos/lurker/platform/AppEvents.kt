@@ -30,8 +30,11 @@ sealed interface AppEvent {
      */
     data class OpenBuffer(val key: BufferKey, val jumpTo: Long? = null) : AppEvent
 
-    /** A one-line notice over whatever is on screen — a join that didn't happen says why. */
-    class Notice(val message: String) : AppEvent
+    /**
+     * A one-line notice over whatever is on screen — a join that didn't happen says why. With
+     * [action], a button on it: an invitation's Join (lurker#261).
+     */
+    class Notice(val message: String, val action: NoticeAction? = null) : AppEvent
 
     /**
      * The store rekeyed a buffer (a nick change in a DM, a channel rename). Whatever the navigator
@@ -39,6 +42,9 @@ sealed interface AppEvent {
      */
     data class BufferRenamed(val from: BufferKey, val to: BufferKey) : AppEvent
 }
+
+/** A notice's button: what it says, and what tapping it does. */
+class NoticeAction(val label: String, val run: () -> Unit)
 
 /**
  * The hand-off itself, in two parts — plus a third, the composer's refusal nudge ([refusals]), which

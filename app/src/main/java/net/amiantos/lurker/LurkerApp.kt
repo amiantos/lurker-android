@@ -18,6 +18,7 @@ import net.amiantos.lurker.auth.KeystoreSecureStorage
 import net.amiantos.lurker.platform.AppEvent
 import net.amiantos.lurker.platform.AppEvents
 import net.amiantos.lurker.platform.ExpiryText
+import net.amiantos.lurker.platform.NoticeAction
 import net.amiantos.lurker.platform.ReachabilityMonitor
 import net.amiantos.lurker.prefs.PrefsDefaultsStorage
 import net.amiantos.lurker.prefs.SharedStringPrefs
@@ -205,6 +206,18 @@ class LurkerApp : Application() {
         // holds the open until then (`PendingOpens`), since landing on an absent buffer in a settled
         // roster pops straight back.
         model.onBufferOpened = { key -> events.send(AppEvent.OpenBuffer(key)) }
+
+        // An invitation offers a Join on a snackbar (lurker#261) — the web's toast, which a snackbar
+        // can carry and an iOS toast can't (iOS asks in an alert). One at a time: the system buffer
+        // holds every invitation, so a flood is one snackbar rather than a queue of them.
+        model.onInvited = { networkId, channel, from ->
+            if (events.notices.value.none { it.action != null }) {
+                val network = model.state.networks[networkId]?.displayName
+                val text = if (network != null) "$from invited you to $channel on $network" else "$from invited you to $channel"
+                val join = NoticeAction("Join") { model.requestJoin(networkId = networkId, channel = channel, opens = true) }
+                events.send(AppEvent.Notice(text, join))
+            }
+        }
 
         // An offer someone made us is asked about over whatever is on screen (iOS `DccOfferPrompt`):
         // `MainScaffold` draws the dialog from `dccOffers.prompt`.

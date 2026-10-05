@@ -3,8 +3,10 @@
 
 package net.amiantos.lurker.ui.shell
 
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -37,8 +39,16 @@ fun NoticeHost(events: AppEvents, modifier: Modifier = Modifier) {
     val showing = hosts.lastOrNull() === token
     LaunchedEffect(head, showing) {
         if (head != null && showing) {
-            snackbar.showSnackbar(head.message)
+            val action = head.action
+            val result = snackbar.showSnackbar(
+                head.message,
+                actionLabel = action?.label,
+                // Long enough to reach for the button. Not Indefinite, the default with an action:
+                // an invitation nobody answers is still in the system buffer.
+                duration = if (action != null) SnackbarDuration.Long else SnackbarDuration.Short,
+            )
             events.consume(head)
+            if (result == SnackbarResult.ActionPerformed) action?.run()
         }
     }
     SnackbarHost(snackbar, modifier)

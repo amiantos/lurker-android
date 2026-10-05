@@ -1358,6 +1358,11 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                         // last server in force.
                         maxUploadBytes = frame.uploadLimits.maxUploadBytes,
                         maxStaticImageDimension = frame.uploadLimits.maxStaticImageDimension,
+                        // A fresh connect's channels arrive as shells, so without this the cursor
+                        // stops at the newest server-log row, and a drop before anything live
+                        // lands resumes from there — a resume slice for every buffer, the cost
+                        // shells exist to avoid (lurker#469).
+                        maxEventId = frame.cursor?.let { maxOf(state.maxEventId, it) } ?: state.maxEventId,
                     )
                     applySnapshot(next, frame.networks, globalIgnores = frame.globalIgnores)
                 }
@@ -1456,6 +1461,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                 is ServerFrame.ChannelMembers ->
                     applyChannelMembers(
                         state, networkId = frame.networkId, target = frame.target, members = frame.members,
+                        pending = frame.pending,
                     )
                 is ServerFrame.MemberUpdate ->
                     applyMemberUpdate(state, networkId = frame.networkId, target = frame.target, member = frame.member)
@@ -1687,6 +1693,9 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                     if (frame.live) peers = peers + frame.nick
                     state.copy(dccChats = state.dccChats.setting(frame.networkId, if (peers.isEmpty()) null else peers))
                 }
+                // A moment, not state: the view model offers the Join, and the system buffer's
+                // line is the record.
+                is ServerFrame.Invited -> state
                 is ServerFrame.Typing ->
                     applyTyping(
                         state, networkId = frame.networkId, target = frame.target,
@@ -2072,7 +2081,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                     val buffer = buffers[key]
                         ?: Buffer(networkId = snapshot.id, target = channel.name, kind = BufferKind.Channel)
                     buffers[key] = buffer.copy(joined = true, topic = channel.topic)
-                    members[key] = channel.members
+                    members[key] = membersAfter(members[key], channel.members, pending = channel.membersPending)
                     channelModes[key] = channel.modeState
                     // Third path that can materialize a row, so it owes `burstSeen` an entry
                     // like the other two — otherwise the burst's closing prune could drop a
@@ -2433,8 +2442,23 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             networkId: Int?,
             target: String,
             members: List<Member>,
-        ): ChatState =
-            state.copy(members = state.members + (BufferKey(networkId = networkId, target = target).id to members))
+            pending: Boolean,
+        ): ChatState {
+            val key = BufferKey(networkId = networkId, target = target).id
+            return state.copy(members = state.members + (key to membersAfter(state.members[key], members, pending)))
+        }
+
+        /**
+         * The member list to hold once the server sends `incoming` — which is the list, unless it
+         * is `pending` (`membersPending`, §9.1, lurker#863): then the server hasn't heard the
+         * channel's NAMES since it last attached, and `incoming` is only us plus whoever has
+         * joined since. Taking it would read as everyone leaving, so a list already held stands;
+         * with none held, something beats nothing. The definitive `names` follows within seconds.
+         */
+        private fun membersAfter(held: List<Member>?, incoming: List<Member>, pending: Boolean): List<Member> {
+            if (pending && !held.isNullOrEmpty()) return held
+            return incoming
+        }
 
         /**
          * A `member-update` patch: replace the matching member with the server's snapshot.
