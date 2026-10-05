@@ -189,6 +189,7 @@ class PendingRevokeTests {
             h.sessions.addPendingRevoke(PersistedSession(server = "https://lurker.test", token = "old"))
             h.launch()
             h.waitUntil { h.server.requests.size == 1 }
+            assertEquals(setOf("old"), h.onMain { h.model.revoking })
             // Held open by the gate: the network comes back while it's still out.
             h.onMain { h.model.setReachable(false); h.model.setReachable(true) }
             assertEquals(1, h.server.requests.size)

@@ -454,13 +454,14 @@ class ChatViewModel(
         cancelReconnect()
         // Owed a revoke until the server confirms it (lurker-ios#218), so a sign-out made offline still
         // reaches the server later instead of leaving the token, and its pushes, live for good.
-        val ending = client.currentSession
+        val now = Instant.now()
+        val ending = client.currentSession?.let { PendingRevoke(server = it.server, token = it.token, since = now.toEpochMilli()) }
         if (ending != null) {
-            sessions.addPendingRevoke(ending)
+            sessions.addPendingRevoke(PersistedSession(server = ending.server, token = ending.token), now)
             revokingNow.add(ending.token)
         }
         client.logout(deviceToken = deviceToken, drafts = drafts) { outcome ->
-            if (ending != null) revokeFinished(ending.token, outcome)
+            if (ending != null) revokeFinished(ending, outcome)
         }
         deviceToken = null
         // The next sign-in may be against a different server, whose answer differs.
@@ -2231,28 +2232,29 @@ class ChatViewModel(
      * revoking it would sign the user out from under themselves, so it's checked rather than assumed.
      */
     internal fun retryPendingRevokes(now: Instant = Instant.now()) {
-        // Almost always empty — checked before the live session's read, which costs a decrypt.
-        val owed = sessions.pendingRevokes()
-        if (owed.isEmpty()) return
-        val live = client.currentSession?.token ?: sessions.load()?.token
-        for (pending in owed) {
-            if (pending.token == live) continue
+        // Almost always empty — checked before [sendRevoke]'s read of the live session (a decrypt).
+        for (pending in sessions.pendingRevokes()) {
             if (pending.token in revokingNow) {
                 retryWanted.add(pending.token)
                 continue
             }
-            send(pending, now)
+            sendRevoke(pending, now)
         }
     }
 
-    /** One owed revoke: dropped if it has outlived [revokeRetryWindow], otherwise sent. */
-    private fun send(pending: PendingRevoke, now: Instant = Instant.now()) {
+    /**
+     * One owed revoke: dropped if it has outlived [revokeRetryWindow], otherwise sent. The one door
+     * every revoke request goes through, so the live-session check covers the first try and every
+     * replay alike.
+     */
+    private fun sendRevoke(pending: PendingRevoke, now: Instant = Instant.now()) {
+        if (pending.token == (client.currentSession?.token ?: sessions.load()?.token)) return
         if (Duration.between(Instant.ofEpochMilli(pending.since), now) >= revokeRetryWindow) {
             sessions.removePendingRevoke(pending.token)
             return
         }
         revokingNow.add(pending.token)
-        scope.task { revokeFinished(pending.token, client.revoke(server = pending.server, token = pending.token)) }
+        scope.task { revokeFinished(pending, client.revoke(server = pending.server, token = pending.token)) }
     }
 
     /**
@@ -2261,13 +2263,13 @@ class ChatViewModel(
      * never got — and two failing tokens would then re-mark each other forever: a request loop for
      * as long as the app runs, tight when offline makes each fail at once.
      */
-    private fun revokeFinished(token: String, outcome: LurkerClient.RevokeOutcome) {
-        revokingNow.remove(token)
-        val wanted = retryWanted.remove(token)
+    private fun revokeFinished(pending: PendingRevoke, outcome: LurkerClient.RevokeOutcome) {
+        revokingNow.remove(pending.token)
+        val wanted = retryWanted.remove(pending.token)
         if (outcome == LurkerClient.RevokeOutcome.Done) {
-            sessions.removePendingRevoke(token)
+            sessions.removePendingRevoke(pending.token)
         } else if (wanted) {
-            sessions.pendingRevokes().firstOrNull { it.token == token }?.let { send(it) }
+            sendRevoke(pending)
         }
     }
 
