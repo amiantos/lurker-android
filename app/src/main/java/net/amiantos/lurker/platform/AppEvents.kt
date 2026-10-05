@@ -112,6 +112,20 @@ class AppEvents {
         }
     }
 
+    /** A notification tap that arrived before any screen did, waiting for [attach]. */
+    private var parkedTap: AppEvent.OpenBuffer? = null
+
+    /**
+     * A notification tap (lurker-android#16). Unlike [send], it waits for the screen rather than being
+     * dropped: a tap that cold-launches the app reaches `MainActivity` before `MainScaffold` has
+     * attached, and is the whole reason the app is starting. iOS parks it the same way
+     * (`AppDelegate.pendingTap`). Only the latest waits — a second tap supersedes the first — and
+     * sign-out clears it ([drain]), so it can't open into the next session.
+     */
+    fun openFromNotification(event: AppEvent.OpenBuffer) {
+        if (attached) channel.trySend(event) else parkedTap = event
+    }
+
     /** A notice was shown for its full time (or dismissed) — take it off the list. */
     fun consume(notice: AppEvent.Notice) {
         pending.update { list -> if (list.firstOrNull() === notice) list.drop(1) else list }
@@ -134,6 +148,8 @@ class AppEvents {
     fun attach(): Any {
         val token = Any()
         attachment = token
+        parkedTap?.let(channel::trySend)
+        parkedTap = null
         return token
     }
 
@@ -156,6 +172,7 @@ class AppEvents {
     fun drain() {
         while (channel.tryReceive().isSuccess) Unit
         pending.value = emptyList()
+        parkedTap = null
     }
 }
 

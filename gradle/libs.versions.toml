@@ -21,6 +21,13 @@ reorderable = "3.1.0"
 # androidx.media3, one version for every artifact — they ship together and must not mix. The media
 # viewer's player (ExoPlayer, PlayerView) and the uploads' video shrink (Transformer).
 media3 = "1.11.1"
+# Push (lurker-android#16). The BoM pins every Firebase artifact; only messaging is used. The
+# google-services plugin reads app/google-services.json, which is gitignored — see app/build.gradle.kts.
+firebaseBom = "34.19.0"
+googleServices = "4.5.0"
+# Not used directly: Play services (under firebase-messaging) brings Fragment 1.1.0, and lint refuses the
+# activity-result API (the notification-permission prompt) beside a Fragment older than 1.3.0.
+fragment = "1.8.9"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -52,6 +59,9 @@ androidx-media3-transformer = { group = "androidx.media3", name = "media3-transf
 androidx-media3-effect = { group = "androidx.media3", name = "media3-effect", version.ref = "media3" }
 androidx-media3-common = { group = "androidx.media3", name = "media3-common", version.ref = "media3" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
+firebase-messaging = { group = "com.google.firebase", name = "firebase-messaging" }
+androidx-fragment = { group = "androidx.fragment", name = "fragment", version.ref = "fragment" }
 # Real org.json for local unit tests — the android.jar stub throws "not mocked".
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -65,3 +75,4 @@ android-library = { id = "com.android.library", version.ref = "agp" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }

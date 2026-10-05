@@ -30,6 +30,29 @@ class AppEventsTest {
     }
 
     @Test
+    fun aNotificationTapWaitsForTheScreen() = runBlocking {
+        // A tap that cold-launches the app lands before MainScaffold attaches; dropping it, as a
+        // plain OpenBuffer is, would open the app on the list instead of the conversation.
+        val events = AppEvents()
+        events.openFromNotification(AppEvent.OpenBuffer(a, jumpTo = 7))
+        events.openFromNotification(AppEvent.OpenBuffer(b, jumpTo = 9))
+        events.attach()
+        // Only the latest tap: the first was superseded before anything could show it.
+        assertEquals(AppEvent.OpenBuffer(b, jumpTo = 9), events.events.first())
+    }
+
+    @Test
+    fun signOutDropsAParkedTap() = runBlocking {
+        val events = AppEvents()
+        events.openFromNotification(AppEvent.OpenBuffer(a))
+        events.drain()
+        events.attach()
+        events.send(AppEvent.BufferRenamed(a, b))
+        // The rename is first out: the parked tap belonged to the previous session.
+        assertEquals(AppEvent.BufferRenamed(a, b), events.events.first())
+    }
+
+    @Test
     fun anAttachedScreenTakesNavigationInOrder() = runBlocking {
         val events = AppEvents()
         events.attach()
