@@ -144,6 +144,15 @@ class ChatViewModel(
     private val httpClient: OkHttpClient = LurkerClient.bearerOnlyConfiguration(),
     /** Where preview bytes are cached on disk, or null for none — see `LurkerClient`. */
     mediaCacheDirectory: File? = null,
+    /**
+     * Whether the process starts with the app on screen. Port note: not in LurkerKit, where nothing
+     * launches the app without it becoming active (an alert push never does). An Android process
+     * can start with no activity at all — FCM starts it for every push that arrives while it's dead
+     * (lurker-android#16) — and a restore that connected there would open a socket and pull a
+     * snapshot for a phone in someone's pocket, then keep reconnecting it. False holds a restored
+     * session's connect until the first [enterForeground].
+     */
+    startsInForeground: Boolean = true,
 ) {
 
     /** Where the account stands with the server. */
@@ -171,8 +180,11 @@ class ChatViewModel(
 
     private var reconnectTask: Job? = null
     private var reconnectAttempt = 0
-    private var isForeground = true
+    private var isForeground = startsInForeground
     private var backgroundedAt: Instant? = null
+
+    /** A restored session whose first connect waits for [enterForeground] (see `startsInForeground`). */
+    private var startDeferred = false
 
     /** Buffer keys with an older-history page in flight, so scroll-up can't spam requests. */
     private val loadingOlder = mutableSetOf<String>()
@@ -323,6 +335,9 @@ class ChatViewModel(
     ): Boolean {
         sessionSubject.value = SessionState.LoggingIn
         statusSubject.value = null
+        // A restored session that never came to the foreground was signed out since; this one
+        // connects itself, and a held start for the old one must not open a second socket.
+        startDeferred = false
         // The previous session's media purge finishes before this one can cache or stage anything.
         awaitMediaPurge()
         val server = ServerAddress.normalize(server)
@@ -2067,6 +2082,13 @@ class ChatViewModel(
         // nothing needs reopening — and that path returns early. A new socket re-asserts
         // presence itself, so sending here too is at worst a duplicate the server folds.
         client.setPresence(true)
+        // A restore held for this moment (`startsInForeground`): start it now, as the restore would
+        // have. Not a reconnect — that resumes from `since`, and there is nothing yet to resume.
+        if (startDeferred) {
+            startDeferred = false
+            startRestored()
+            return false
+        }
         val stale = backgroundedAt?.let { Duration.between(it, Instant.now()) > staleAfter } ?: false
         if (store.state.connection == SocketStatus.Connected && !stale) return true
         reconnectAttempt = 0
@@ -2208,6 +2230,11 @@ class ChatViewModel(
         }
         sessionSubject.value = SessionState.LoggedIn
         client.restore(server = saved.server, token = saved.token)
+        if (isForeground) startRestored() else startDeferred = true
+    }
+
+    /** A restored session's first connect: a fresh start (a snapshot), not a resume. */
+    private fun startRestored() {
         scope.task { loadConfig() }
         store.setSocketOpening()
         scope.task { client.start() }

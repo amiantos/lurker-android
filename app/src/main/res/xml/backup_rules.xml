@@ -7,8 +7,11 @@
    lurker_defaults holds the kit's settings cache, which is an account's preferences, and this
    install's OAuth client ids (see PrefsDefaultsStorage). A restored device starts signed out,
    so whoever signs in there next would inherit the settings; they stay here too.
+   push holds whether this install has asked for notification permission (PushRegistrar). The
+   grant itself doesn't travel, so a restored "asked" would never ask again on the new device.
 -->
 <full-backup-content>
     <exclude domain="sharedpref" path="lurker_session.xml" />
     <exclude domain="sharedpref" path="lurker_defaults.xml" />
+    <exclude domain="sharedpref" path="push.xml" />
 </full-backup-content>

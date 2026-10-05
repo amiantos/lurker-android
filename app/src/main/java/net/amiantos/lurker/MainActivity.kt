@@ -6,12 +6,14 @@ package net.amiantos.lurker
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import net.amiantos.lurker.platform.AppEvent
 import net.amiantos.lurker.platform.push.PushMessage
@@ -152,6 +154,17 @@ class MainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         app.browserSignIn.onHostResumed()
+    }
+
+    override fun onDestroy() {
+        // Gone for good with the dialog maybe still up: its answer has nowhere to land, so settle the
+        // registrar's wait with what the system now says, or it would wait for the process's life.
+        if (isFinishing) {
+            val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+            app.push.onPermissionResult(granted)
+        }
+        super.onDestroy()
     }
 
     override fun onStop() {

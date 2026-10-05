@@ -82,6 +82,18 @@
         </activity>
 
         <!--
+            A server older than lurker#1046 sends a `notification` block, which the system draws
+            itself while the app is in the background: give it our status-bar icon and the
+            catch-all channel rather than the launcher icon (a solid blob) and Firebase's own.
+        -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_stat_lurker" />
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="other" />
+
+        <!--
             Receives push (lurker-android#16). The server sends data-only messages, so this runs for
             every one, foreground or not, and draws the notification itself (PushNotifier).
         -->

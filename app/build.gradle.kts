@@ -15,8 +15,13 @@ if (googleServicesJson.exists()) {
     apply(plugin = libs.plugins.google.services.get().pluginId)
 }
 gradle.taskGraph.whenReady {
-    val buildsRelease = allTasks.any { it.project == project && it.name.contains("Release") }
-    if (buildsRelease && !googleServicesJson.exists()) {
+    // Packaging only: `./gradlew build` or `check` also runs release lint and unit tests, which a
+    // build without the file must still pass.
+    val packagesRelease = allTasks.any { task ->
+        task.project == project && task.name.contains("Release") &&
+            listOf("assemble", "bundle", "package").any(task.name::startsWith)
+    }
+    if (packagesRelease && !googleServicesJson.exists()) {
         throw GradleException(
             "app/google-services.json is missing: a release built without it can't receive push. " +
                 "Download it from the Firebase console (project lurker-4cec0).",
@@ -88,6 +93,7 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)
     implementation(libs.androidx.fragment)
+    implementation(libs.kotlinx.coroutines.play.services)
     implementation(libs.kotlinx.coroutines.android)
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

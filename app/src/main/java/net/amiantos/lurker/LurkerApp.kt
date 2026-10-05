@@ -117,6 +117,10 @@ class LurkerApp : Application() {
             oauthClients = OAuthClients(defaults),
             formatExpiry = ExpiryText(this),
             mediaCacheDirectory = File(cacheDir, "preview-media-cache"),
+            // FCM starts this process for every push that arrives while it's dead, with no activity.
+            // A restored session connects on the first foreground instead (`ProcessLifecycleOwner`'s
+            // start, below), not for a phone in someone's pocket.
+            startsInForeground = false,
         )
 
         // Keep the badge honest (lurker#490, lurker-ios#134), driven off state so it follows
@@ -257,17 +261,23 @@ class LurkerApp : Application() {
                 if (session == ChatViewModel.SessionState.LoggedOut) {
                     uiPreferences.forgetLastOpenBuffer()
                     events.drain()
-                    // The previous account's messages must not stay on the lock screen. (The kit's
-                    // `logout` already took this install's token off the server.)
+                    // The previous account's messages must not stay on the lock screen. (The token
+                    // goes too: `push.signedOut`, below.)
                     PushNotifier.clearAll(this@LurkerApp)
                 }
                 // Only a session ENDING: a share received while signed out waits through a sign-in
                 // attempt that fails (LoggingIn → LoggedOut) for the one that works.
-                if (was == ChatViewModel.SessionState.LoggedIn && session != ChatViewModel.SessionState.LoggedIn) uploads.reset()
+                if (was == ChatViewModel.SessionState.LoggedIn && session != ChatViewModel.SessionState.LoggedIn) {
+                    uploads.reset()
+                    push.signedOut()
+                }
+                // Signing in is the moment push becomes askable. Only the transition: a restored
+                // session is replayed here as LoggedIn at launch, which may be FCM starting the process
+                // in the background, and `MainActivity.onStart` asks for that one.
+                if (was != ChatViewModel.SessionState.LoggedIn && session == ChatViewModel.SessionState.LoggedIn) {
+                    push.enableIfSignedIn(mayPrompt = true)
+                }
                 was = session
-                // Signing in is the moment push becomes askable. On a restored launch this and
-                // `MainActivity.onStart` both ask; the registrar runs one at a time.
-                if (session == ChatViewModel.SessionState.LoggedIn) push.enableIfSignedIn(mayPrompt = true)
             }
         }
     }

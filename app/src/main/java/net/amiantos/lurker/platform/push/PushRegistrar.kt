@@ -13,17 +13,14 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import com.google.android.gms.common.ConnectionResult
 import com.google.android.gms.common.GoogleApiAvailabilityLight
-import com.google.android.gms.tasks.Task
 import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.tasks.await
 import net.amiantos.lurkerkit.session.ChatViewModel
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 /**
  * Owns this install's relationship with FCM: asking the server, asking the user, fetching the token
@@ -92,12 +89,21 @@ class PushRegistrar(
         permissionAnswer = null
     }
 
-    /**
-     * In flight, if any. Two paths want to enable push at once on a restored launch — the session
-     * publisher replaying `LoggedIn` and the activity starting — and each would otherwise do the full
-     * round trip.
-     */
+    /** In flight, if any: one run at a time. */
     private var inFlight: Job? = null
+
+    /**
+     * A call that could prompt arrived while a run that couldn't was in flight — a push woke the
+     * process (a token rotation, no screen), then the user opened the app. Run again once it ends,
+     * or this foreground would never ask.
+     */
+    private var rerunWithPrompt = false
+
+    /**
+     * The token the server has from this session, so a foreground or a rotation of the SCREEN
+     * doesn't post it again. Cleared at sign-out ([signedOut]).
+     */
+    private var registeredToken: String? = null
 
     /**
      * Run the sequence, once signed in and never before: a prompt on the sign-in screen asks the user
@@ -106,8 +112,42 @@ class PushRegistrar(
      * re-prompt. [mayPrompt] is false where there is no screen to ask on (a token rotation).
      */
     fun enableIfSignedIn(mayPrompt: Boolean) {
-        if (model.session != ChatViewModel.SessionState.LoggedIn || inFlight?.isActive == true) return
-        inFlight = scope.launch { log(enable(mayPrompt)) }
+        if (model.session != ChatViewModel.SessionState.LoggedIn) return
+        if (inFlight?.isActive == true) {
+            if (mayPrompt) rerunWithPrompt = true
+            return
+        }
+        inFlight = scope.launch {
+            log(enable(mayPrompt))
+            inFlight = null
+            if (rerunWithPrompt) {
+                rerunWithPrompt = false
+                enableIfSignedIn(mayPrompt = true)
+            }
+        }
+    }
+
+    /**
+     * Sign-out, deliberate or a revoked session: invalidate this install's token with FCM. The kit's
+     * `logout` takes the token off the server when this process registered it, but not when it never
+     * got that far (the server was unreachable at launch), nor after a 401, when there's no session to
+     * ask with — and the server files tokens by account, so the next account's phone would keep
+     * getting this one's DMs. A deleted token makes the server's next push fail UNREGISTERED, and the
+     * server drops it. The next sign-in fetches a new one.
+     */
+    fun signedOut() {
+        registeredToken = null
+        rerunWithPrompt = false
+        inFlight?.cancel()
+        inFlight = null
+        if (FirebaseApp.getApps(context).isEmpty()) return
+        scope.launch {
+            try {
+                FirebaseMessaging.getInstance().deleteToken().await()
+            } catch (e: Exception) {
+                Log.w(TAG, "couldn't delete the push token: ${e.message}")
+            }
+        }
     }
 
     private suspend fun enable(mayPrompt: Boolean): Outcome {
@@ -122,7 +162,10 @@ class PushRegistrar(
         } catch (e: Exception) {
             return Outcome.Failed(e.message ?: e.javaClass.simpleName)
         }
-        return if (model.registerPushDevice(token)) Outcome.Registered else Outcome.Rejected
+        if (token == registeredToken) return Outcome.Registered
+        if (!model.registerPushDevice(token)) return Outcome.Rejected
+        registeredToken = token
+        return Outcome.Registered
     }
 
     /** Null when notifications may be posted; otherwise why not. */
@@ -168,14 +211,3 @@ class PushRegistrar(
     }
 }
 
-/** A Play services [Task] as a suspend call — the one place this app awaits one. */
-private suspend fun <T> Task<T>.await(): T = suspendCancellableCoroutine { continuation ->
-    addOnCompleteListener { task ->
-        val error = task.exception
-        when {
-            error != null -> continuation.resumeWithException(error)
-            task.isCanceled -> continuation.cancel()
-            else -> continuation.resume(task.result)
-        }
-    }
-}

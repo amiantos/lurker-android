@@ -28,8 +28,14 @@ object PushNotifier {
     /** Every notification shares this id; the tag is what tells them apart. */
     private const val NOTIFICATION_ID = 1
 
-    /** The action on a tap's intent. `MainActivity` reads the extras, not this; it's for logs. */
-    const val ACTION_OPEN = "net.amiantos.lurker.OPEN_NOTIFICATION"
+    /**
+     * The action on a tap's intent, suffixed with the tag. `MainActivity` reads the extras, not this:
+     * it's what keeps two buffers' taps apart. PendingIntents whose intents differ only in extras are
+     * the SAME PendingIntent to the system, so without a per-buffer action every notification's tap
+     * would point at the latest buffer. (Not a request code from the tag's hash: two tags can share
+     * one. Not a data URI: `MainActivity` reads intent data as the sign-in redirect.)
+     */
+    private const val ACTION_OPEN = "net.amiantos.lurker.OPEN_NOTIFICATION"
 
     /**
      * Create (or update the names of) one channel per kind. Idempotent, and cheap enough for every
@@ -54,13 +60,11 @@ object PushNotifier {
         ) {
             return
         }
-        val tap = Intent(context, MainActivity::class.java).setAction(ACTION_OPEN)
+        val tap = Intent(context, MainActivity::class.java).setAction("$ACTION_OPEN/${message.tag}")
         message.tap.forEach { (key, value) -> tap.putExtra(key, value) }
-        // A request code per tag: PendingIntents that differ only in extras are the SAME PendingIntent
-        // to the system, so a shared code would point every notification's tap at the latest buffer.
         val open = PendingIntent.getActivity(
             context,
-            message.tag.hashCode(),
+            0,
             tap,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
