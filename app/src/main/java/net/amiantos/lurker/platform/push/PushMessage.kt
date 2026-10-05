@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.platform.push
 
+import net.amiantos.lurkerkit.store.ChatState
 import java.time.Instant
 import java.time.format.DateTimeParseException
 
@@ -48,6 +49,14 @@ data class PushMessage(
         companion object {
             fun of(wire: String?): Kind = entries.firstOrNull { it.wire != null && it.wire == wire } ?: OTHER
         }
+    }
+
+    /** Whether [state] says the message this is about has been read (see [ReadMarkers]). */
+    fun readIn(state: ChatState): Boolean {
+        val networkId = tap["networkId"]?.toIntOrNull() ?: return false
+        val target = tap["target"] ?: return false
+        val messageId = tap["messageId"]?.toLongOrNull() ?: return false
+        return ReadMarkers.readPast(state, networkId, target, messageId)
     }
 
     companion object {

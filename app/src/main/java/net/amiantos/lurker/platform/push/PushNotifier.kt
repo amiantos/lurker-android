@@ -11,11 +11,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import net.amiantos.lurker.MainActivity
 import net.amiantos.lurker.R
+import net.amiantos.lurkerkit.store.ChatState
 
 /**
  * Draws a [PushMessage] as a system notification (lurker-android#16).
@@ -36,6 +38,10 @@ object PushNotifier {
      * one. Not a data URI: `MainActivity` reads intent data as the sign-in redirect.)
      */
     private const val ACTION_OPEN = "net.amiantos.lurker.OPEN_NOTIFICATION"
+
+    private const val EXTRA_NETWORK_ID = "net.amiantos.lurker.networkId"
+    private const val EXTRA_TARGET = "net.amiantos.lurker.target"
+    private const val EXTRA_MESSAGE_ID = "net.amiantos.lurker.messageId"
 
     /**
      * Create (or update the names of) one channel per kind. Idempotent, and cheap enough for every
@@ -80,6 +86,14 @@ object PushNotifier {
             builder.setContentText(message.body).setStyle(NotificationCompat.BigTextStyle().bigText(message.body))
         }
         message.sentAt?.let { builder.setWhen(it).setShowWhen(true) }
+        // What it's about, for `clearRead` to ask the store once it's on the shade.
+        builder.addExtras(
+            Bundle().apply {
+                message.tap["networkId"]?.let { putString(EXTRA_NETWORK_ID, it) }
+                message.tap["target"]?.let { putString(EXTRA_TARGET, it) }
+                message.tap["messageId"]?.let { putString(EXTRA_MESSAGE_ID, it) }
+            },
+        )
         // No `setNumber`: a launcher that shows a count sums its notifications' numbers, so the
         // server's account-wide total on each one would count it once per buffer. Left at the default,
         // the icon counts buffers with something new, and goes down as they're read (`clearRead`).
@@ -87,18 +101,19 @@ object PushNotifier {
     }
 
     /**
-     * The buffers [bufferIds] (`BufferKey.id`) were read, here or on another device: take their
-     * notifications down, which is what brings a launcher's badge down with them (see
-     * [ReadTransitions]). A message notification's tag is the server's `"<networkId>::<target>"` —
-     * the id's shape before the fold — so it's matched folded. A kick's and a came-online's tags carry
-     * a suffix and stay: reading the channel doesn't answer either.
+     * Take down every message notification whose message [state] says has been read — here, on another
+     * device, or by "mark all as read" — which is what brings a launcher's badge down (see
+     * [ReadMarkers]). A came-online carries no message and stays.
      */
-    fun clearRead(context: Context, bufferIds: Set<String>) {
-        if (bufferIds.isEmpty()) return
+    fun clearRead(context: Context, state: ChatState) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         for (posted in manager.activeNotifications) {
-            val tag = posted.tag ?: continue
-            if (posted.id == NOTIFICATION_ID && tag.lowercase() in bufferIds) manager.cancel(tag, NOTIFICATION_ID)
+            if (posted.id != NOTIFICATION_ID) continue
+            val about = posted.notification.extras
+            val networkId = about.getString(EXTRA_NETWORK_ID)?.toIntOrNull() ?: continue
+            val target = about.getString(EXTRA_TARGET) ?: continue
+            val messageId = about.getString(EXTRA_MESSAGE_ID)?.toLongOrNull() ?: continue
+            if (ReadMarkers.readPast(state, networkId, target, messageId)) manager.cancel(posted.tag, NOTIFICATION_ID)
         }
     }
 

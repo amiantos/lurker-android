@@ -22,7 +22,6 @@ import net.amiantos.lurker.platform.NoticeAction
 import net.amiantos.lurker.platform.ReachabilityMonitor
 import net.amiantos.lurker.platform.push.PushNotifier
 import net.amiantos.lurker.platform.push.PushRegistrar
-import net.amiantos.lurker.platform.push.ReadTransitions
 import net.amiantos.lurker.prefs.PrefsDefaultsStorage
 import net.amiantos.lurker.prefs.SharedStringPrefs
 import net.amiantos.lurker.prefs.UiPreferences
@@ -98,16 +97,12 @@ class LurkerApp : Application() {
      * Same shape as reachability and push: the kit decides the number, the app makes the platform
      * call. Android has no first-party launcher badge outside notifications — a launcher draws a
      * dot or a count from the app's *notifications* — so there is nothing for this to write to, and
-     * it only logs. What a launcher shows is the app's notifications, so those follow the reading
-     * instead ([readTransitions]). No third-party badge library: they poke private launcher APIs.
+     * it only logs. What a launcher shows is the app's notifications, so those come down as their
+     * messages are read instead (`PushNotifier.clearRead`). No third-party badge library: they poke
+     * private launcher APIs.
      */
     private val badge = AppBadge { count -> Log.d(TAG, "badge: $count") }
 
-    /**
-     * A buffer read — here, on another device, or by "mark all as read" — takes its notification
-     * down, which is the only way to bring a launcher's badge down (see [ReadTransitions]).
-     */
-    private val readTransitions = ReadTransitions()
 
     override fun onCreate() {
         super.onCreate()
@@ -134,8 +129,16 @@ class LurkerApp : Application() {
         // is a `task`, so it starts only after this returns, and on `Main.immediate` this collector
         // subscribes now, not later — so no state published by the restore can slip past it.
         badge.follow(model.statePublisher, scope)
+        // A notification comes down once its message is read, here or anywhere (`PushNotifier.clearRead`).
+        // Only when the buffers changed: the publisher emits for every typing and presence frame, and
+        // reading the shade is a call into the system.
         scope.launch {
-            model.statePublisher.collect { state -> PushNotifier.clearRead(this@LurkerApp, readTransitions.observe(state)) }
+            var buffers: Any? = null
+            model.statePublisher.collect { state ->
+                if (state.buffers === buffers) return@collect
+                buffers = state.buffers
+                PushNotifier.clearRead(this@LurkerApp, state)
+            }
         }
 
         dccOffers = DccOffers(model, scope) { refusal -> events.send(AppEvent.Notice(refusal)) }
@@ -273,7 +276,6 @@ class LurkerApp : Application() {
                     // The previous account's messages must not stay on the lock screen. (The token
                     // goes too: `push.signedOut`, below.)
                     PushNotifier.clearAll(this@LurkerApp)
-                    readTransitions.reset()
                 }
                 // Only a session ENDING: a share received while signed out waits through a sign-in
                 // attempt that fails (LoggingIn → LoggedOut) for the one that works.

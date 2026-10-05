@@ -36,6 +36,9 @@ class LurkerMessagingService : FirebaseMessagingService() {
             // a client reports itself visible; this covers one in flight as the app came forward —
             // iOS's `willPresent`, which shows nothing but the badge.
             if (ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@runBlocking
+            // Already read: FCM can hold a push (Doze) past the read on another device, and nothing would
+            // take a notification posted now back down.
+            if (push.readIn(app.model.state)) return@runBlocking
             PushNotifier.show(app, push)
         }
     }
