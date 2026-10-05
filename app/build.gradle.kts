@@ -9,21 +9,18 @@ plugins {
 // build without it is a normal build with push switched off: CI, and anyone building the app
 // themselves. `PushRegistrar` reads that as "Firebase isn't here" and never asks for permission.
 //
-// A RELEASE without it would be the published app silently unable to receive push, so that refuses.
+// The PLAY bundle without it would be the published app silently unable to receive push, so that
+// refuses. Only the bundle: Play takes nothing else, and `./gradlew build` (which assembles a
+// release APK) has to keep working without the file.
 val googleServicesJson = file("google-services.json")
 if (googleServicesJson.exists()) {
     apply(plugin = libs.plugins.google.services.get().pluginId)
 }
 gradle.taskGraph.whenReady {
-    // Packaging only: `./gradlew build` or `check` also runs release lint and unit tests, which a
-    // build without the file must still pass.
-    val packagesRelease = allTasks.any { task ->
-        task.project == project && task.name.contains("Release") &&
-            listOf("assemble", "bundle", "package").any(task.name::startsWith)
-    }
-    if (packagesRelease && !googleServicesJson.exists()) {
+    val bundlesRelease = allTasks.any { it.project == project && it.name == "bundleRelease" }
+    if (bundlesRelease && !googleServicesJson.exists()) {
         throw GradleException(
-            "app/google-services.json is missing: a release built without it can't receive push. " +
+            "app/google-services.json is missing: a Play bundle built without it can't receive push. " +
                 "Download it from the Firebase console (project lurker-4cec0).",
         )
     }
