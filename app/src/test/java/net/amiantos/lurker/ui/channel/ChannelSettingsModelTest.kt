@@ -7,7 +7,6 @@ import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.ChannelModeDrafts
-import net.amiantos.lurkerkit.model.ChannelModeForm
 import net.amiantos.lurkerkit.model.ChannelModeState
 import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.EventType
@@ -133,81 +132,6 @@ class ChannelSettingsModelTest {
         assertFalse(slice(joined = false).keyReady)
         val down = slice().copy(linkUp = false)
         assertFalse(down.keyReady)
-    }
-
-    // MARK: - Edits made while a Save is out
-
-    @Test
-    fun anUndoWhileTheSaveIsOutSurvivesTheEcho() {
-        val s = slice()
-        val inFlight = EditsInFlight()
-        fun render(drafts: ChannelModeDrafts, live: ChannelModeForm.Live, topic: String = "Hello") =
-            inFlight.restore(drafts.reconcile(live = live, liveTopic = topic), live, topic)
-
-        val before = ChannelSettingsModel.live(s.modes, null) // -m
-        var drafts = ChannelModeDrafts().setOn("m", true, before)
-        val changes = ChannelSettingsModel.pending(s.access, before, drafts, "Hello").changes
-        val sending = drafts.sending(changes, live = before)
-        drafts = drafts.noteSending(sending)
-        inFlight.sent(setOf("m"), before, topicWas = null)
-        drafts = drafts.settle(sending, wentOut = true)
-        // Untick before +m comes back: it matches the channel as it still is…
-        drafts = drafts.setOn("m", false, before)
-        inFlight.edited("m", drafts)
-        drafts = render(drafts, before)
-        assertFalse(drafts.shown("m", before).on)
-        // …and +m lands. The switch stays off, and Save would take it back off.
-        val after = ChannelSettingsModel.live(ChannelModeState(modes = "ntm"), null)
-        drafts = render(drafts, after)
-        assertFalse(drafts.shown("m", after).on)
-        assertEquals(listOf(OutgoingModeChange('-', "m")), ChannelSettingsModel.pending(s.access, after, drafts, "Hello").changes)
-    }
-
-    @Test
-    fun withoutTheGuardTheKitDropsThatUndo() {
-        // The bug the guard exists for, pinned so it's visible if the kit ever changes.
-        val before = ChannelSettingsModel.live(slice().modes, null)
-        val drafts = ChannelModeDrafts().setOn("m", true, before).setOn("m", false, before).reconcile(before, "Hello")
-        assertNull(drafts.rows["m"])
-    }
-
-    @Test
-    fun aTopicTypedBackWhileTheNewOneIsOutSurvivesItsEcho() {
-        val s = slice()
-        val live = ChannelSettingsModel.live(s.modes, null)
-        val inFlight = EditsInFlight()
-        var drafts = ChannelModeDrafts().setTopic("New").noteTopicSending("New", liveTopic = "Hello")
-        inFlight.sent(emptyList(), live, topicWas = "Hello")
-        drafts = drafts.settleTopic("New", wentOut = true)
-        drafts = drafts.setTopic("Hello")
-        inFlight.editedTopic("Hello")
-        drafts = inFlight.restore(drafts.reconcile(live, "Hello"), live, "Hello")
-        assertEquals("Hello", drafts.topic)
-        // The new topic lands: the typed-back one is a change again.
-        drafts = inFlight.restore(drafts.reconcile(live, "New"), live, "New")
-        assertEquals("Hello", ChannelSettingsModel.pending(s.access, live, drafts, "New").topic)
-    }
-
-    @Test
-    fun aSaveThatNeverLeftKeepsNothingAndARetickEndsQuietly() {
-        val s = slice()
-        val before = ChannelSettingsModel.live(s.modes, null)
-        val unsent = EditsInFlight()
-        unsent.sent(setOf("m"), before, topicWas = null)
-        unsent.settled(setOf("m"), topic = false, wentOut = false)
-        var drafts = ChannelModeDrafts().setOn("m", false, before)
-        unsent.edited("m", drafts)
-        drafts = unsent.restore(drafts.reconcile(before, "Hello"), before, "Hello")
-        assertNull(drafts.rows["m"])
-
-        // Re-ticked while out: once +m lands there's nothing left to send.
-        val retick = EditsInFlight()
-        retick.sent(setOf("m"), before, topicWas = null)
-        var d = ChannelModeDrafts().setOn("m", true, before)
-        retick.edited("m", d)
-        val after = ChannelSettingsModel.live(ChannelModeState(modes = "ntm"), null)
-        d = retick.restore(d.reconcile(after, "Hello"), after, "Hello")
-        assertTrue(ChannelSettingsModel.pending(s.access, after, d, "Hello").changes.isEmpty())
     }
 
     // MARK: - What Save sends

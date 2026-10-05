@@ -14,7 +14,6 @@ import net.amiantos.lurkerkit.model.OutgoingModeChange
 import net.amiantos.lurkerkit.model.channelAccess
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.support.Result
-import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import java.time.Instant
 
 /** What the channel settings page draws from the store — only this channel's slice (iOS's `Slice`). */
@@ -322,98 +321,5 @@ class KeyLookup {
         configKey = null
         asked = false
         generation += 1
-    }
-}
-
-/**
- * Edits made while an earlier Save is still unanswered, kept from being thrown away for matching the
- * channel as it was BEFORE that Save.
- *
- * ⚠ The kit's `ChannelModeDrafts.reconcile` drops an edit the moment it matches the live state. Save
- * +m while the channel is -m, untick it before the +m comes back, and the -m matches the channel as it
- * still is — so it's dropped; then +m lands and the switch turns back on, the undo lost. The same goes
- * for a topic typed back to what it was while the new one is on its way. The kit is not this slice's to
- * change, so the page keeps those edits here and puts them back after every reconcile, until the change
- * they're answering resolves:
- *  - the channel MOVES off the baseline (the echo landed): the edit goes back in once more, now a real
- *    difference from the channel, so it shows and Save sends it — the undo, kept;
- *  - the send is known never to have left ([settled] with `wentOut` false): the channel never moves, the
- *    edit already matches it, and there's nothing to keep.
- *
- * Pure and immutable-in-use like the kit's drafts, so the race is a test rather than a hope.
- */
-class EditsInFlight {
-    /** Per letter sent: the channel's row when the Save went out. */
-    private val baselines = mutableMapOf<String, ChannelModeForm.DraftRow>()
-
-    /** Per letter: the newest edit made while that letter's change was out. */
-    private val held = mutableMapOf<String, ChannelModeForm.DraftRow>()
-    private var topicBaseline: String? = null
-    private var heldTopic: String? = null
-
-    /** A Save is going out: these letters (and the topic, when [topicWas] is given) are now unanswered. */
-    fun sent(letters: Collection<String>, live: ChannelModeForm.Live, topicWas: String?) {
-        for (letter in letters) {
-            baselines[letter] = live.row(letter)
-            held.remove(letter)
-        }
-        if (topicWas != null) {
-            topicBaseline = topicWas
-            heldTopic = null
-        }
-    }
-
-    /** The answer said nothing can have reached IRC: those changes aren't outstanding any more. */
-    fun settled(letters: Collection<String>, topic: Boolean, wentOut: Boolean) {
-        if (wentOut) return
-        for (letter in letters) {
-            baselines.remove(letter)
-            held.remove(letter)
-        }
-        if (topic) {
-            topicBaseline = null
-            heldTopic = null
-        }
-    }
-
-    /** The user changed a row; [drafts] is the drafts after the change. */
-    fun edited(letter: String, drafts: ChannelModeDrafts) {
-        if (letter !in baselines) return
-        drafts.rows[letter]?.let { held[letter] = it }
-    }
-
-    fun editedTopic(text: String) {
-        if (topicBaseline != null) heldTopic = text
-    }
-
-    /** After every reconcile: put back what it dropped, and retire what has resolved. */
-    fun restore(drafts: ChannelModeDrafts, live: ChannelModeForm.Live, liveTopic: String): ChannelModeDrafts {
-        var out = drafts
-        for (letter in baselines.keys.toList()) {
-            val baseline = baselines.getValue(letter)
-            val edit = held[letter]
-            val now = live.row(letter)
-            val resolved = now != baseline
-            // Once resolved, an edit the channel already matches has nothing left to say.
-            val stillDiffers = edit != null && (edit.on != now.on || (edit.on && edit.value.trimmingWhitespacesAndNewlines() != now.value))
-            if (edit != null && out.rows[letter] == null && (!resolved || stillDiffers)) {
-                out = out.setOn(letter, edit.on, live).setValue(letter, edit.value, live)
-            }
-            if (resolved) {
-                baselines.remove(letter)
-                held.remove(letter)
-            }
-        }
-        val baseline = topicBaseline
-        if (baseline != null) {
-            val edit = heldTopic
-            val resolved = liveTopic != baseline
-            if (edit != null && out.topic == null && (!resolved || ChannelModeForm.topicToSend(edit) != liveTopic)) out = out.setTopic(edit)
-            if (resolved) {
-                topicBaseline = null
-                heldTopic = null
-            }
-        }
-        return out
     }
 }

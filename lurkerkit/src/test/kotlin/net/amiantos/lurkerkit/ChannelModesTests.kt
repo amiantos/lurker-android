@@ -562,6 +562,104 @@ class ChannelModesTests {
         assertNotNull(drafts.rows["s"], "a row nobody answered stands")
     }
 
+    /**
+     * ⚠⚠ The same undo, reconciled BEFORE the echo too — which is what a screen does, on every
+     * state change. The untick matches the channel as it still is, and was dropped there; then +m
+     * landed and the switch turned back on. (L52; the app carried this as EditsInFlight.)
+     */
+    @Test
+    fun testAnUndoWhileTheSaveIsOutSurvivesTheEcho() {
+        val before = ChannelModeForm.Live(modes = "nt", params = emptyMap())
+        var drafts = ChannelModeDrafts().setOn("m", true, live = before)
+        val sending = drafts.sending(listOf(OutgoingModeChange(sign = '+', letter = "m")), live = before)
+        drafts = drafts.noteSending(sending)
+        drafts = drafts.settle(sending, wentOut = true)
+        drafts = drafts.setOn("m", false, live = before)
+        drafts = drafts.reconcile(live = before, liveTopic = "")
+        assertFalse(drafts.shown("m", live = before).on)
+        assertNotNull(drafts.rows["m"], "kept while the +m is still out")
+
+        val after = ChannelModeForm.Live(modes = "ntm", params = emptyMap())
+        drafts = drafts.reconcile(live = after, liveTopic = "")
+        assertFalse(drafts.shown("m", live = after).on, "the switch stays off")
+        assertEquals(
+            listOf(OutgoingModeChange(sign = '-', letter = "m")),
+            changes(after, drafts.rows).get(),
+            "and Save takes it back off",
+        )
+    }
+
+    @Test
+    fun testATopicTypedBackWhileTheNewOneIsOutSurvivesItsEcho() {
+        val live = ChannelModeForm.Live(modes = "", params = emptyMap())
+        var drafts = ChannelModeDrafts().setTopic("New").noteTopicSending("New", liveTopic = "Hello")
+        drafts = drafts.settleTopic("New", wentOut = true)
+        drafts = drafts.setTopic("Hello")
+        drafts = drafts.reconcile(live = live, liveTopic = "Hello")
+        assertEquals("Hello", drafts.topic, "kept while the new topic is out")
+        drafts = drafts.reconcile(live = live, liveTopic = "New")
+        assertEquals("Hello", drafts.topicChange(live = "New"), "the new one landed: typed-back is a change again")
+    }
+
+    /** A value row: +l 50, Save +l 60, type it back to 50 while that's out. */
+    @Test
+    fun testAValueTypedBackWhileItsSaveIsOutSurvivesTheEcho() {
+        val fifty = ChannelModeForm.Live(modes = "l", params = mapOf("l" to "50"))
+        var drafts = ChannelModeDrafts().setValue("l", "60", live = fifty)
+        val sending = drafts.sending(listOf(OutgoingModeChange(sign = '+', letter = "l", param = "60")), live = fifty)
+        drafts = drafts.noteSending(sending).settle(sending, wentOut = true)
+        drafts = drafts.setValue("l", " 50 ", live = fifty).reconcile(live = fifty, liveTopic = "")
+        assertEquals(" 50 ", drafts.rows["l"]?.value, "kept while the +l 60 is out")
+        val sixty = ChannelModeForm.Live(modes = "l", params = mapOf("l" to "60"))
+        drafts = drafts.reconcile(live = sixty, liveTopic = "")
+        assertEquals(
+            listOf(OutgoingModeChange(sign = '+', letter = "l", param = "50")),
+            changes(sixty, drafts.rows).get(),
+        )
+    }
+
+    /**
+     * ⚠⚠ A refused Save never moves the channel. Without `refused`, the kept undo lingered — and when
+     * another op later made the same change, it turned into a revert of theirs.
+     */
+    @Test
+    fun testARefusedSaveLetsAKeptUndoGo() {
+        val before = ChannelModeForm.Live(modes = "nt", params = emptyMap())
+        var drafts = ChannelModeDrafts().setOn("m", true, live = before)
+        val sending = drafts.sending(listOf(OutgoingModeChange(sign = '+', letter = "m")), live = before)
+        drafts = drafts.noteSending(sending).settle(sending, wentOut = true)
+        drafts = drafts.setOn("m", false, live = before).reconcile(live = before, liveTopic = "")
+        assertNotNull(drafts.rows["m"])
+        drafts = drafts.refused().reconcile(live = before, liveTopic = "")
+        assertNull(drafts.rows["m"], "the channel won't move for a refused Save")
+        val otherOp = ChannelModeForm.Live(modes = "ntm", params = emptyMap())
+        drafts = drafts.reconcile(live = otherOp, liveTopic = "")
+        assertTrue(changes(otherOp, drafts.rows).get().isEmpty(), "another op's +m stands")
+
+        var topic = ChannelModeDrafts().setTopic("New").noteTopicSending("New", liveTopic = "Hello")
+        topic = topic.settleTopic("New", wentOut = true).setTopic("Hello").reconcile(live = before, liveTopic = "Hello")
+        assertEquals("Hello", topic.topic)
+        topic = topic.refused().reconcile(live = before, liveTopic = "Hello")
+        assertNull(topic.topic)
+    }
+
+    /** A send that never left has nothing for an undo to outlive; and re-ticking what's on its way ends quietly once it lands. */
+    @Test
+    fun testAnUndoOfASaveThatNeverLeftDissolvesAndARetickEndsQuietly() {
+        val before = ChannelModeForm.Live(modes = "nt", params = emptyMap())
+        var unsent = ChannelModeDrafts().setOn("m", true, live = before)
+        val sending = unsent.sending(listOf(OutgoingModeChange(sign = '+', letter = "m")), live = before)
+        unsent = unsent.noteSending(sending).settle(sending, wentOut = false)
+        unsent = unsent.setOn("m", false, live = before).reconcile(live = before, liveTopic = "")
+        assertNull(unsent.rows["m"])
+
+        var retick = ChannelModeDrafts().setOn("m", true, live = before)
+        val out = retick.sending(listOf(OutgoingModeChange(sign = '+', letter = "m")), live = before)
+        retick = retick.noteSending(out).setOn("m", false, live = before).setOn("m", true, live = before)
+        retick = retick.reconcile(live = ChannelModeForm.Live(modes = "ntm", params = emptyMap()), liveTopic = "")
+        assertNull(retick.rows["m"], "nothing left to send")
+    }
+
     @Test
     fun testTheTopicDraft() {
         var drafts = ChannelModeDrafts()
