@@ -93,11 +93,22 @@ class PushRegistrar(
     private var inFlight: Job? = null
 
     /**
-     * A call that could prompt arrived while a run that couldn't was in flight — a push woke the
-     * process (a token rotation, no screen), then the user opened the app. Run again once it ends,
-     * or this foreground would never ask.
+     * Calls that arrived while a run was in flight, owed one more run when it ends. A token rotation
+     * mid-registration would otherwise leave the server with the old token (the run in flight fetched
+     * it before the rotation); a foreground behind a run that couldn't prompt (a push woke the
+     * process, then the user opened the app) would never ask.
      */
-    private var rerunWithPrompt = false
+    private var rerunOwed = false
+
+    /** Whether any call owed a rerun could prompt. */
+    private var rerunMayPrompt = false
+
+    /**
+     * The sign-out's token deletion. A run waits for it before fetching a token: until it lands,
+     * Firebase still hands out the old cached token, the next session would register it, and the
+     * deletion landing afterwards would invalidate the token that session just registered.
+     */
+    private var deletion: Job? = null
 
     /**
      * The token the server has from this session, so a foreground or a rotation of the SCREEN
@@ -114,15 +125,18 @@ class PushRegistrar(
     fun enableIfSignedIn(mayPrompt: Boolean) {
         if (model.session != ChatViewModel.SessionState.LoggedIn) return
         if (inFlight?.isActive == true) {
-            if (mayPrompt) rerunWithPrompt = true
+            rerunOwed = true
+            rerunMayPrompt = rerunMayPrompt || mayPrompt
             return
         }
         inFlight = scope.launch {
             log(enable(mayPrompt))
             inFlight = null
-            if (rerunWithPrompt) {
-                rerunWithPrompt = false
-                enableIfSignedIn(mayPrompt = true)
+            if (rerunOwed) {
+                val prompt = rerunMayPrompt
+                rerunOwed = false
+                rerunMayPrompt = false
+                enableIfSignedIn(prompt)
             }
         }
     }
@@ -137,11 +151,12 @@ class PushRegistrar(
      */
     fun signedOut() {
         registeredToken = null
-        rerunWithPrompt = false
+        rerunOwed = false
+        rerunMayPrompt = false
         inFlight?.cancel()
         inFlight = null
         if (FirebaseApp.getApps(context).isEmpty()) return
-        scope.launch {
+        deletion = scope.launch {
             try {
                 FirebaseMessaging.getInstance().deleteToken().await()
             } catch (e: Exception) {
@@ -157,6 +172,7 @@ class PushRegistrar(
         val supported = model.serverSupportsAPNs() ?: return Outcome.ServerUnreachable
         if (!supported) return Outcome.UnsupportedByServer
         permission(mayPrompt)?.let { return it }
+        deletion?.join()
         val token = try {
             FirebaseMessaging.getInstance().token.await()
         } catch (e: Exception) {

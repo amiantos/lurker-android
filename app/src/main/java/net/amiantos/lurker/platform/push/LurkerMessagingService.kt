@@ -7,7 +7,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import net.amiantos.lurker.LurkerApp
 import net.amiantos.lurkerkit.session.ChatViewModel
 
@@ -20,17 +22,22 @@ import net.amiantos.lurkerkit.session.ChatViewModel
 class LurkerMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
-        // Signed out, nothing is shown: sign-out deletes this install's token (`PushRegistrar.signedOut`),
-        // but a push already in flight, or one sent before the delete reached FCM, still lands here,
-        // and it's the previous account's. (`session` is safe to read off the main thread.)
-        val app = application as LurkerApp
-        if (app.model.session != ChatViewModel.SessionState.LoggedIn) return
-        // Someone looking at the app sees the message there. The server already holds pushes while a
-        // client reports itself visible; this covers one that was in flight as the app came forward —
-        // iOS's `willPresent`, which shows nothing but the badge.
-        if (ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return
         val push = PushMessage.parse(message.data) ?: return
-        PushNotifier.show(this, push)
+        val app = application as LurkerApp
+        // On the main thread, where sign-out clears notifications (`LurkerApp.observeSession`): checked
+        // and posted there, a sign-out can't land between the check and the post and leave the
+        // departing account's message on the lock screen. Blocking this worker briefly is fine; it's
+        // FCM's thread for exactly this.
+        runBlocking(Dispatchers.Main) {
+            // Signed out, nothing is shown: sign-out deletes the token (`PushRegistrar.signedOut`), but a
+            // push already in flight, or sent before the delete reached FCM, still lands here.
+            if (app.model.session != ChatViewModel.SessionState.LoggedIn) return@runBlocking
+            // Someone looking at the app sees the message there. The server already holds pushes while
+            // a client reports itself visible; this covers one in flight as the app came forward —
+            // iOS's `willPresent`, which shows nothing but the badge.
+            if (ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) return@runBlocking
+            PushNotifier.show(app, push)
+        }
     }
 
     /**
