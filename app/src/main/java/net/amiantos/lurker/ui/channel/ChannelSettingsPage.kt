@@ -86,7 +86,6 @@ class ChannelSettingsState(
 
     private var slice = ChannelSlice.of(model.state, key)
     private var drafts = ChannelModeDrafts()
-    private val inFlight = EditsInFlight()
     private val keyLookup = KeyLookup()
 
     /**
@@ -155,8 +154,7 @@ class ChannelSettingsState(
     private fun render() {
         askForKeyIfKeyed()
         val live = live()
-        // The kit's reconcile, then what it shouldn't have dropped put back — see `EditsInFlight`.
-        drafts = inFlight.restore(drafts.reconcile(live = live, liveTopic = liveTopic()), live, liveTopic())
+        drafts = drafts.reconcile(live = live, liveTopic = liveTopic())
         val pending = ChannelSettingsModel.pending(slice.access, live, drafts, liveTopic())
         val errors = listOfNotNull(saveError) + refusals.current
         screen = ChannelSettingsScreen(
@@ -168,19 +166,16 @@ class ChannelSettingsState(
 
     fun setTopic(text: String) {
         drafts = drafts.setTopic(text)
-        inFlight.editedTopic(text)
         render()
     }
 
     fun setOn(letter: String, on: Boolean) {
         drafts = drafts.setOn(letter, on, live = live())
-        inFlight.edited(letter, drafts)
         render()
     }
 
     fun setValue(letter: String, value: String) {
         drafts = drafts.setValue(letter, value, live = live())
-        inFlight.edited(letter, drafts)
         render()
     }
 
@@ -204,7 +199,6 @@ class ChannelSettingsState(
             return
         }
         val sending = drafts.sending(changes, live = live)
-        val letters = changes.map { it.letter }.toSet()
         refusals = refusals.arm()
         saving = true
         render()
@@ -213,19 +207,15 @@ class ChannelSettingsState(
                 var failure: ChatViewModel.ChannelSaveFailure? = null
                 if (topic != null) {
                     drafts = drafts.noteTopicSending(topic, liveTopic = topicWas)
-                    inFlight.sent(emptyList(), live, topicWas = topicWas)
                     failure = model.setTopic(key, topic = topic)
                     val wentOut = failure?.certainlyUnsent != true
                     drafts = drafts.settleTopic(topic, wentOut = wentOut)
-                    inFlight.settled(emptyList(), topic = true, wentOut = wentOut)
                 }
                 if (failure == null && changes.isNotEmpty()) {
                     drafts = drafts.noteSending(sending)
-                    inFlight.sent(letters, live, topicWas = null)
                     failure = model.setChannelModes(key, changes = changes)
                     val wentOut = failure?.certainlyUnsent != true
                     drafts = drafts.settle(sending, wentOut = wentOut)
-                    inFlight.settled(letters, topic = false, wentOut = wentOut)
                 }
                 saving = false
                 saveError = failure?.message

@@ -502,7 +502,8 @@ data class ChannelModeDrafts private constructor(
     /**
      * Per saved row: the live state it was saved from, and the edit that went out. Only that
      * edit is the echo's to clear — the fields stay editable while the ack is out, and a newer
-     * edit (untick +m again before +m comes back) is the user's to keep.
+     * edit (untick +m again before +m comes back) is the user's to keep, even when it matches
+     * the channel as it still is — see `reconcile`.
      */
     private val savedRows: Map<String, SavedRow>,
     private val savedTopic: SavedTopic?,
@@ -655,8 +656,14 @@ data class ChannelModeDrafts private constructor(
             val moved = saved?.let { it.live != was } ?: false
             if (moved) savedRows.remove(letter)
             if (matches) {
-                // The channel is as the user wanted, whatever happens to the send.
-                rows.remove(letter)
+                // The channel is as the user wanted, whatever happens to the send — unless that
+                // send is still out and this is an undo of it. Untick +m before +m comes back and
+                // the untick matches the channel as it still is; dropped here, the +m then lands
+                // and the switch turns back on, the undo lost. Kept until the channel moves off
+                // the state it was saved from: then it's a real difference, shown, and Save sends
+                // it. (A send that never left is taken back by `settle`, and the edit goes then.)
+                val undoWhileOut = saved?.let { !moved && it.sent != want } ?: false
+                if (!undoWhileOut) rows.remove(letter)
             } else if (moved && saved?.sent == want) {
                 if (pendingLetters.contains(letter)) dissolvedWhilePending[letter] = want
                 rows.remove(letter)
@@ -669,7 +676,10 @@ data class ChannelModeDrafts private constructor(
         var typed: String? = topic
         var topicDissolvedWhilePending = topicDissolvedWhilePending
         if (sending == liveTopic) {
-            typed = null
+            // Typed back to the old topic while the new one is out: kept until the new one lands,
+            // as for the modes above.
+            val undoWhileOut = savedTopic?.let { !moved && it.sent != sending } ?: false
+            if (!undoWhileOut) typed = null
         } else if (moved && savedTopic?.sent == sending) {
             if (topicPending) topicDissolvedWhilePending = topic
             typed = null
