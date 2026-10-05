@@ -506,9 +506,15 @@ internal sealed interface ServerFrame {
     /**
      * An `invite` ephemeral naming us: `from` invited us to `channel`. Network-scoped via a
      * `:server:<id>` carrier, like the DCC offer. Nothing is stored; the system buffer's line
-     * is the record, and this is only the moment to offer a Join.
+     * is the record, and this is only the moment to offer a Join. `userhost` is the inviter's,
+     * for the ignore check.
      */
-    data class Invited(val networkId: Int, val channel: String, val from: String) : ServerFrame
+    data class Invited(
+        val networkId: Int,
+        val channel: String,
+        val from: String,
+        val userhost: String? = null,
+    ) : ServerFrame
 
     /**
      * WS `pins-changed`: this network's pinned buffers, in the user's order.

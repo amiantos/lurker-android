@@ -1198,12 +1198,16 @@ internal object FrameParser {
         // `nick` or `invited`, so `isRenderable` drops it — and with it the only chance to offer
         // a Join. The other `invite`, someone else invited on a channel we're in, is a real
         // channel line with neither field, and falls through.
-        val inviter = obj.stringOrNull("from")
-        if (obj.string("type") == "invite" && !inviter.isNullOrEmpty()) {
-            val networkId = obj.intOrNull("networkId") ?: return ServerFrame.Ignored
-            val channel = obj.string("channel")
-            if (channel.isEmpty()) return ServerFrame.Ignored
-            return ServerFrame.Invited(networkId = networkId, channel = channel, from = inviter)
+        if (obj.string("type") == "invite") {
+            val from = obj.stringOrNull("from")
+            if (!from.isNullOrEmpty()) {
+                val networkId = obj.intOrNull("networkId") ?: return ServerFrame.Ignored
+                val channel = obj.string("channel")
+                if (channel.isEmpty()) return ServerFrame.Ignored
+                return ServerFrame.Invited(
+                    networkId = networkId, channel = channel, from = from, userhost = obj.stringOrNull("userhost"),
+                )
+            }
         }
         // `react-support` is network-scoped state on a `:server:<id>` carrier, like those above.
         if (obj.string("type") == "react-support") {

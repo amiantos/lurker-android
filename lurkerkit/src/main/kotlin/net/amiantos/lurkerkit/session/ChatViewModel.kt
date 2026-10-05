@@ -32,6 +32,7 @@ import net.amiantos.lurkerkit.client.VerbReply
 import net.amiantos.lurkerkit.commands.CommandEffect
 import net.amiantos.lurkerkit.commands.CommandParser
 import net.amiantos.lurkerkit.commands.ParsedInput
+import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.CertificateExport
@@ -232,11 +233,12 @@ class ChatViewModel(
     var onInvited: ((networkId: Int, channel: String, from: String) -> Unit)? = null
 
     /**
-     * Where each raw line this device sent was typed, by network and verb, until a 421 names
-     * that verb — see `noteUnknownCommand`. One entry per verb, the latest send's buffer, so it
-     * stays as small as the set of raw verbs anyone types.
+     * Where each raw line this device sent was typed, and when, by network and verb, until a
+     * 421 names that verb — see `noteUnknownCommand`. One entry per verb, the latest send's.
      */
-    private val rawCommandOrigins = HashMap<String, BufferKey>()
+    private val rawCommandOrigins = HashMap<String, RawCommandOrigin>()
+
+    private class RawCommandOrigin(val key: BufferKey, val sentAt: Instant)
 
     /**
      * The buffer we just opened, until its row exists — see `PendingOpens`. Giving up is quiet.
@@ -1308,8 +1310,10 @@ class ChatViewModel(
                         val sent = sendRawSeam?.invoke(effect.line)
                             ?: client.sendRaw(networkId = networkId, line = effect.line)
                         if (!sent) return@wire false
-                        val verb = effect.line.split(' ').firstOrNull { it.isNotEmpty() }
-                        if (networkId != null && verb != null) rawCommandOrigins[rawCommandKey(networkId, verb)] = key
+                        val verb = rawVerb(effect.line)
+                        if (networkId != null && verb != null) {
+                            rawCommandOrigins[rawCommandKey(networkId, verb)] = RawCommandOrigin(key, Instant.now())
+                        }
                         true
                     }
                 is CommandEffect.ShowProfile ->
@@ -2542,7 +2546,13 @@ class ChatViewModel(
                 channelEventsSubject.tryEmit(ChannelEvent.Resynced)
             is ServerFrame.Invited -> {
                 val joined = store.state.buffers[BufferKey(networkId = frame.networkId, target = frame.channel).id]?.joined == true
-                if (!joined) onInvited?.invoke(frame.networkId, frame.channel, frame.from)
+                // Someone ignored outright doesn't get to put a prompt in front of us; their
+                // invitation is still in the system buffer. There's no INVITES level, so only a
+                // whole-identity rule counts — scoped to the channel they invited us to.
+                val ignored = store.state.ignores.isIgnored(
+                    networkId = frame.networkId, nick = frame.from, userhost = frame.userhost, channel = frame.channel,
+                )
+                if (!joined && !ignored) onInvited?.invoke(frame.networkId, frame.channel, frame.from)
             }
             else -> Unit
         }
@@ -2552,15 +2562,18 @@ class ChatViewModel(
      * A 421 for a command this device sent raw: say so where it was typed. The server's own
      * line goes to the network's server log, which isn't where anyone is looking when
      * `/frobnicate` in a channel seems to do nothing. A 421 for a line sent from another device
-     * matches nothing here, and that device says so itself.
+     * matches nothing here (past `unknownCommandWindow`), and that device says so itself.
      */
-    private fun noteUnknownCommand(networkId: Int?, message: Message) {
+    internal fun noteUnknownCommand(networkId: Int?, message: Message, now: Instant = Instant.now()) {
         if (networkId == null) return
         val verb = message.unknownCommand ?: return
-        val key = rawCommandOrigins.remove(rawCommandKey(networkId, verb)) ?: return
+        val origin = rawCommandOrigins.remove(rawCommandKey(networkId, verb)) ?: return
+        if (Duration.between(origin.sentAt, now) > unknownCommandWindow) return
+        // Typed in the server log: the server's own line is already right there.
+        if (origin.key.target == Buffer.serverTarget(networkId)) return
         // Closed since: a line for a buffer that's gone would sit in the side table unseen.
-        if (store.state.buffers[key.id] == null) return
-        store.appendLocal(key, text = "Unknown command: /${verb.lowercase()}")
+        if (store.state.buffers[origin.key.id] == null) return
+        store.appendLocal(origin.key, text = "Unknown command: /${verb.lowercase()}")
     }
 
     /** IRC verbs are case-insensitive, and the ircd echoes one in whatever case it likes. */
@@ -2739,6 +2752,20 @@ class ChatViewModel(
         private const val maxBackoff: Double = 30.0
         private const val maxShift = 5 // 1s << 5 = 32s, clamped to 30s
         private val staleAfter: Duration = Duration.ofSeconds(30)
+
+        /**
+         * How long a raw line waits for its 421. The ircd answers within a round trip; past this
+         * the line was accepted, or its answer was lost with the socket, and a 421 that matches
+         * now is someone else's — another device typing the same verb.
+         */
+        val unknownCommandWindow: Duration = Duration.ofSeconds(30)
+
+        /**
+         * The command of a raw line: its first word, past any IRCv3 tag block (`@label=x`) or
+         * source prefix (`:me`) that `/raw` let the user type in front of it.
+         */
+        fun rawVerb(line: String): String? =
+            line.split(' ').firstOrNull { it.isNotEmpty() && !it.startsWith("@") && !it.startsWith(":") }
 
         fun saveFailure(reply: VerbReply): ChannelSaveFailure? {
             val message = saveError(reply) ?: return null

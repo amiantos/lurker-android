@@ -11,15 +11,18 @@ import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.EventType
+import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.store.LurkerStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import java.time.Instant
 
 /**
  * Wire fields the kit wasn't reading (the client sweep's protocol batch, L10/L21/L22/L41): the
@@ -30,7 +33,7 @@ class ProtocolSweepTests {
 
     private val channel = BufferKey(networkId = 1, target = "#lurker")
 
-    private fun viewModel(): ChatViewModel {
+    private fun viewModel(ignoring: List<IgnoreRule> = emptyList()): ChatViewModel {
         val model = testViewModel()
         model.handle(ServerFrame.SocketOpen)
         model.handle(
@@ -39,6 +42,7 @@ class ProtocolSweepTests {
                     NetworkSnapshot(
                         id = 1, state = ConnectionState.Connected, nick = "me",
                         channels = listOf(ChannelSnapshot(name = "#lurker", topic = null, members = emptyList())),
+                        ignoredMasks = ignoring,
                     ),
                 ),
                 globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
@@ -194,6 +198,43 @@ class ProtocolSweepTests {
         assertNull(model.state.messages[channel.id]?.lastOrNull())
     }
 
+    /** Typed in the server log, the 421 already shows where it was typed: one line, not two. */
+    @Test
+    fun testA421ForALineTypedInTheServerLogAddsNothing() {
+        val model = viewModel()
+        model.sendRawSeam = { true }
+        val server = BufferKey(networkId = 1, target = ":server:1")
+        model.send(server, text = "/frobnicate")
+        model.handle(unknownCommand("FROBNICATE"))
+        assertNotNull(model.state.buffers[server.id], "the 421 made the row, so only the guard is left to say no")
+        assertEquals(0, model.state.messages[server.id]?.count { it.id == 0L } ?: 0, "only the server's own line")
+    }
+
+    /**
+     * A raw line the ircd accepted, or whose 421 was lost with the socket, doesn't wait forever:
+     * past the window, a 421 for that verb is another device's.
+     */
+    @Test
+    fun testA421PastTheWindowIsSomeoneElses() {
+        val model = viewModel()
+        model.sendRawSeam = { true }
+        model.send(channel, text = "/frobnicate")
+        val frame = unknownCommand("FROBNICATE") as ServerFrame.Live
+        model.noteUnknownCommand(
+            frame.networkId, frame.message, now = Instant.now().plus(ChatViewModel.unknownCommandWindow).plusSeconds(1),
+        )
+        assertNull(model.state.messages[channel.id]?.lastOrNull())
+    }
+
+    /** `/raw` lets a tag block or a source prefix come first; the command is the word after them. */
+    @Test
+    fun testTheRawVerbSkipsTagsAndPrefix() {
+        assertEquals("frobnicate", ChatViewModel.rawVerb("frobnicate now"))
+        assertEquals("FROBNICATE", ChatViewModel.rawVerb("@label=x FROBNICATE now"))
+        assertEquals("FROBNICATE", ChatViewModel.rawVerb("@label=x :me FROBNICATE"))
+        assertNull(ChatViewModel.rawVerb("@label=x"))
+    }
+
     /** A line that went nowhere came back to the composer; there is no 421 to wait for. */
     @Test
     fun testARawLineThatWentNowhereIsntWaitedOn() {
@@ -209,9 +250,9 @@ class ProtocolSweepTests {
     @Test
     fun testAnInviteNamingUsIsItsOwnFrameAndAChannelsInviteLineIsALine() {
         assertEquals(
-            ServerFrame.Invited(networkId = 1, channel = "#secret", from = "bob"),
+            ServerFrame.Invited(networkId = 1, channel = "#secret", from = "bob", userhost = "bob!b@example.org"),
             FrameParser.parseWs(
-                """{"kind":"irc","networkId":1,"target":":server:1","type":"invite","channel":"#secret","from":"bob","userhost":"bob@example.org"}""",
+                """{"kind":"irc","networkId":1,"target":":server:1","type":"invite","channel":"#secret","from":"bob","userhost":"bob!b@example.org"}""",
             ),
         )
         val line = FrameParser.parseWs(
@@ -231,5 +272,16 @@ class ProtocolSweepTests {
         model.handle(ServerFrame.Invited(networkId = 1, channel = "#secret", from = "bob"))
         model.handle(ServerFrame.Invited(networkId = 1, channel = "#lurker", from = "bob"))
         assertEquals(listOf("1 #secret bob"), offered)
+    }
+
+    /** Someone ignored outright doesn't get a prompt; the system buffer still has the line. */
+    @Test
+    fun testAnIgnoredInvitersInvitationIsNotOffered() {
+        val model = viewModel(ignoring = listOf(IgnoreRule(mask = "troll!*@*")))
+        val offered = mutableListOf<String>()
+        model.onInvited = { _, channel, from -> offered.add("$channel $from") }
+        model.handle(ServerFrame.Invited(networkId = 1, channel = "#spam", from = "troll", userhost = "troll!t@example.org"))
+        model.handle(ServerFrame.Invited(networkId = 1, channel = "#secret", from = "bob", userhost = "bob!b@example.org"))
+        assertEquals(listOf("#secret bob"), offered)
     }
 }
