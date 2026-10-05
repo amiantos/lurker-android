@@ -13,10 +13,10 @@ import java.time.Instant
  * Port note: immutable, with a private `copy`. In LurkerKit every field is either a `let` or
  * `private(set)`, so nothing outside `Message.swift` can change a line; the three transforms
  * below (`unhighlighted`, `relayed`, `showingReply`) are the only writers. Here the primary
- * constructor — all 28 fields — is private and `copy` is private with it, and the public
- * constructor is LurkerKit's `init`: the 24 wire fields, without the four that only a
+ * constructor — all 29 fields — is private and `copy` is private with it, and the public
+ * constructor is LurkerKit's `init`: the 25 wire fields, without the four that only a
  * transform sets (`replyQuote`, `unstrippedText`, `relayBot`, `relaySource`). Equality covers
- * all 28, as the Swift's does.
+ * all 29, as the Swift's does.
  *
  * Port note: `id` is a message id, so it is a `Long` here (PORTING.md, Types).
  */
@@ -145,6 +145,11 @@ data class Message private constructor(
      */
     val replyToSelf: Boolean,
     /**
+     * On an `error` line from a 421, the command the ircd didn't know (`FROBNICATE`). The line
+     * lands in the server log; this is what lets the buffer the command was typed in say so too.
+     */
+    val unknownCommand: String?,
+    /**
      * The reply's quote as it should SHOW — set by `showingReply`, the one producer, from
      * `Replies.shown`: null on a reply means "original message unavailable" (gone, never held, or
      * from someone ignored since). Meaningless on a line that isn't a reply.
@@ -198,6 +203,7 @@ data class Message private constructor(
         reactions: List<MessageReaction>? = null,
         replyTo: ReplyContext? = null,
         replyToSelf: Boolean = false,
+        unknownCommand: String? = null,
     ) : this(
         id = id,
         type = type,
@@ -223,6 +229,7 @@ data class Message private constructor(
         reactions = reactions,
         replyTo = replyTo,
         replyToSelf = replyToSelf,
+        unknownCommand = unknownCommand,
         replyQuote = null,
         unstrippedText = null,
         relayBot = null,

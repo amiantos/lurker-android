@@ -66,11 +66,16 @@ internal sealed interface ServerFrame {
      * They belong to the account rather than to any network, so they ride the frame the way
      * `globalIgnores` does — grouped as one class, because a third and fourth positional
      * value is where a parameter list stops being readable.
+     *
+     * `cursor` is the global max message id, sent on a fresh connect only (§4.3). The shell
+     * backlogs that follow carry no rows, so it is the only thing that moves the resume
+     * cursor past the server logs; null on a resume, which already has one.
      */
     data class Snapshot(
         val networks: List<NetworkSnapshot>,
         val globalIgnores: List<IgnoreRule>,
         val uploadLimits: UploadLimits,
+        val cursor: Long? = null,
     ) : ServerFrame
 
     /**
@@ -192,8 +197,16 @@ internal sealed interface ServerFrame {
      * server sends it on our own join and re-broadcasts it whenever it re-learns the
      * list wholesale (a prefix-mode change, a WHO ident/host backfill, an away flip via
      * away-notify). Ephemeral and silent, like `channelTopic` — state, not a line.
+     *
+     * `pending` is the server's `membersPending` (§9.1): it hasn't heard this channel's NAMES
+     * since it last connected or attached, so `members` is only who it has learned of so far.
      */
-    data class ChannelMembers(val networkId: Int?, val target: String, val members: List<Member>) : ServerFrame
+    data class ChannelMembers(
+        val networkId: Int?,
+        val target: String,
+        val members: List<Member>,
+        val pending: Boolean = false,
+    ) : ServerFrame
 
     /**
      * A `member-update` event: one member's current snapshot, patched onto the list in
@@ -491,6 +504,13 @@ internal sealed interface ServerFrame {
     data class DccChatState(val networkId: Int, val nick: String, val live: Boolean) : ServerFrame
 
     /**
+     * An `invite` ephemeral naming us: `from` invited us to `channel`. Network-scoped via a
+     * `:server:<id>` carrier, like the DCC offer. Nothing is stored; the system buffer's line
+     * is the record, and this is only the moment to offer a Join.
+     */
+    data class Invited(val networkId: Int, val channel: String, val from: String) : ServerFrame
+
+    /**
      * WS `pins-changed`: this network's pinned buffers, in the user's order.
      *
      * Authoritative and wholesale — the server re-sends the whole list on every pin, unpin
@@ -661,6 +681,8 @@ internal data class ChannelSnapshot(
     val members: List<Member>,
     /** Modes, param values, creation time and the topic's setter — never the key. */
     val modeState: ChannelModeState = ChannelModeState(),
+    /** The server's `membersPending` (§9.1) — see `ServerFrame.ChannelMembers`. */
+    val membersPending: Boolean = false,
 )
 
 /** Who set a channel's topic and when — 333, or a live TOPIC. Either half may be null. */

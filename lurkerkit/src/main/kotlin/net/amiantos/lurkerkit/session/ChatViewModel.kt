@@ -225,6 +225,20 @@ class ChatViewModel(
     var onBufferOpened: ((key: BufferKey) -> Unit)? = null
 
     /**
+     * Someone invited us to a channel we aren't in (lurker#261). The app offers a Join, which is
+     * `requestJoin(…, opens = true)`; the system buffer already holds the line, so a prompt that
+     * is never answered loses nothing. Not fired for a channel we're already in.
+     */
+    var onInvited: ((networkId: Int, channel: String, from: String) -> Unit)? = null
+
+    /**
+     * Where each raw line this device sent was typed, by network and verb, until a 421 names
+     * that verb — see `noteUnknownCommand`. One entry per verb, the latest send's buffer, so it
+     * stays as small as the set of raw verbs anyone types.
+     */
+    private val rawCommandOrigins = HashMap<String, BufferKey>()
+
+    /**
      * The buffer we just opened, until its row exists — see `PendingOpens`. Giving up is quiet.
      * A DCC chat's notices say what happened, in a buffer the list will show; a DM's refused
      * `open-buffer` comes back as the server's `error` frame, which already says so.
@@ -553,6 +567,9 @@ class ChatViewModel(
      * test can have a line that went — target and text in, whether it went out.
      */
     internal var sendMessageSeam: ((String, String) -> Boolean)? = null
+
+    /** Test seam: stands in for the socket a raw line goes out on (`/frobnicate`). */
+    internal var sendRawSeam: ((String) -> Boolean)? = null
 
     /**
      * Open a DM and go there once its row exists (lurker-ios#201): Send Message on a profile, a
@@ -1287,7 +1304,14 @@ class ChatViewModel(
                     wire { client.sendNotice(networkId = networkId, target = effect.target, text = effect.text, clientId = clientId) }
                 }
                 is CommandEffect.Raw ->
-                    wire { client.sendRaw(networkId = networkId, line = effect.line) }
+                    wire {
+                        val sent = sendRawSeam?.invoke(effect.line)
+                            ?: client.sendRaw(networkId = networkId, line = effect.line)
+                        if (!sent) return@wire false
+                        val verb = effect.line.split(' ').firstOrNull { it.isNotEmpty() }
+                        if (networkId != null && verb != null) rawCommandOrigins[rawCommandKey(networkId, verb)] = key
+                        true
+                    }
                 is CommandEffect.ShowProfile ->
                     // Nothing goes out here — the screen asks when it opens. A `/whois` typed in
                     // the system buffer has no connection to ask on and is silently no-op'd, the
@@ -2508,15 +2532,39 @@ class ChatViewModel(
         primePreviews(frame)
 
         when (frame) {
-            is ServerFrame.Live ->
+            is ServerFrame.Live -> {
                 channelEventsSubject.tryEmit(
                     ChannelEvent.Line(BufferKey(networkId = frame.networkId, target = frame.target), frame.message),
                 )
+                noteUnknownCommand(frame.networkId, frame.message)
+            }
             is ServerFrame.Snapshot ->
                 channelEventsSubject.tryEmit(ChannelEvent.Resynced)
+            is ServerFrame.Invited -> {
+                val joined = store.state.buffers[BufferKey(networkId = frame.networkId, target = frame.channel).id]?.joined == true
+                if (!joined) onInvited?.invoke(frame.networkId, frame.channel, frame.from)
+            }
             else -> Unit
         }
     }
+
+    /**
+     * A 421 for a command this device sent raw: say so where it was typed. The server's own
+     * line goes to the network's server log, which isn't where anyone is looking when
+     * `/frobnicate` in a channel seems to do nothing. A 421 for a line sent from another device
+     * matches nothing here, and that device says so itself.
+     */
+    private fun noteUnknownCommand(networkId: Int?, message: Message) {
+        if (networkId == null) return
+        val verb = message.unknownCommand ?: return
+        val key = rawCommandOrigins.remove(rawCommandKey(networkId, verb)) ?: return
+        // Closed since: a line for a buffer that's gone would sit in the side table unseen.
+        if (store.state.buffers[key.id] == null) return
+        store.appendLocal(key, text = "Unknown command: /${verb.lowercase()}")
+    }
+
+    /** IRC verbs are case-insensitive, and the ircd echoes one in whatever case it likes. */
+    private fun rawCommandKey(networkId: Int, verb: String): String = "$networkId ${verb.uppercase()}"
 
     /**
      * Whether a roster re-read is already in flight. Without it a burst of `state` events
