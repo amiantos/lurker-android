@@ -138,7 +138,17 @@ internal fun UploadsPage(
     // One formatter for the page, rebuilt only when the locale changes — not one per tile per frame.
     val relative = rememberRelativeAge()
     val gridState = rememberLazyGridState()
-    LaunchedEffect(state.scrollToTop) { if (state.scrollToTop > 0) gridState.scrollToItem(0) }
+    // Once per answer, not once per composition: this state outlives a rotation, and a bare
+    // "scrollToTop > 0" threw the restored position back to the top on every one after a search.
+    LaunchedEffect(state.scrollToTop) {
+        val answer = state.scrollToTop
+        if (answer > state.scrolledToTop) {
+            gridState.scrollToItem(0)
+            // After, not before: a page torn down mid-scroll hasn't been to the top, and its
+            // successor should go.
+            state.scrolledToTop = answer
+        }
+    }
     // Scrolling puts the keyboard away: this screen is read while being typed at, and the gesture for
     // getting rid of the keyboard should be the one the reader is already making.
     LaunchedEffect(gridState) {

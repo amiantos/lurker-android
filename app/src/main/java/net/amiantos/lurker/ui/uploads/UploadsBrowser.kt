@@ -119,6 +119,9 @@ class UploadsBrowserState(private val model: ChatViewModel, private val scope: C
     var scrollToTop by mutableIntStateOf(0)
         private set
 
+    /** The last [scrollToTop] the grid went back to the top for — see `UploadsPage`. Not state: nothing draws it. */
+    var scrolledToTop = 0
+
     var alert by mutableStateOf<UploadsAlert?>(null)
 
     /** The row whose delete is being confirmed. */

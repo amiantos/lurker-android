@@ -4,6 +4,7 @@
 package net.amiantos.lurker.ui.composer
 
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
@@ -12,9 +13,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.text.TextRange
@@ -28,9 +31,11 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import net.amiantos.lurker.platform.AppEvent
 import net.amiantos.lurker.platform.LocalAppEvents
+import net.amiantos.lurker.platform.findActivity
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.ComposerDraft
+import net.amiantos.lurkerkit.model.Drafts
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.NickCompletion
 import net.amiantos.lurkerkit.model.OutgoingTyping
@@ -73,6 +78,11 @@ internal class ComposerState(
     val key: BufferKey,
     val kind: BufferKind,
     private val scope: CoroutineScope,
+    /**
+     * The field — saved by the screen (`rememberComposerState`), so a rotation or a process death
+     * hands back what was typed, caret included. Opened on the buffer's draft ([openField]).
+     */
+    val field: TextFieldState = openField(model, key),
 ) {
     // MARK: - What the screen hands in (set every composition — see `rememberComposerState`)
 
@@ -97,8 +107,19 @@ internal class ComposerState(
 
     private val initialDraft: ComposerDraft? = model.draft(key)
 
-    /** The field. Opened on the buffer's draft — this device's unflushed edit, else the server's. */
-    val field = TextFieldState(initialText = initialDraft?.body ?: "")
+    init {
+        // Where drafts sync, the stored draft is the truth and the saved field only lends its caret:
+        // leaving flushes what was typed, so a rebuilt composer opens on the draft as a fresh one
+        // would — another device's edit, or its clear or send (no draft at all), included. Saved
+        // text typed over either would come back and sync the deleted words back up. Where they
+        // agree the caret stands. After a process death nothing is held yet and the field opens
+        // empty until the server's draft repaints it, as it always did. Buffers whose drafts don't
+        // sync (the Lurker console, a server log) have only what was saved, and keep it.
+        if (Drafts.syncs(key)) {
+            val stored = initialDraft?.body ?: ""
+            if (stored != field.text.toString()) field.setTextAndPlaceCursorAtEnd(stored)
+        }
+    }
 
     val focusRequester = FocusRequester()
 
@@ -287,6 +308,13 @@ internal class ComposerState(
         }
     }
 
+    /** Downgrade an `active` claim to `paused` now — see [leave]. Silent when we weren't. */
+    private fun pauseTyping() {
+        typingIdle?.cancel()
+        typingIdle = null
+        typing.idled(field.text.toString(), Instant.now())
+    }
+
     /** Stop claiming to type — on send, and on leaving. Silent when we weren't. */
     private fun endTyping() {
         typingIdle?.cancel()
@@ -368,8 +396,13 @@ internal class ComposerState(
      *
      * Ends the edit too — see [endEditing].
      */
-    internal fun leave() {
-        endTyping()
+    internal fun leave(changingConfiguration: Boolean = false) {
+        // A rotation isn't leaving: the same text is back in the field a frame later, and telling the
+        // channel `done` mid-sentence on every turn of the phone was a lie. It does end THIS state's
+        // claim, though — the rebuilt composer starts knowing nothing was said, and could never end
+        // an `active` left standing. `paused` is what's true of text sitting in the field, and it
+        // lapses on its own; the next keystroke claims `active` again.
+        if (changingConfiguration) pauseTyping() else endTyping()
         endEditing()
     }
 
@@ -584,6 +617,9 @@ internal class ComposerState(
     }
 }
 
+/** A field opened on [key]'s draft: this device's unflushed edit, else the server's. */
+internal fun openField(model: ChatViewModel, key: BufferKey) = TextFieldState(initialText = model.draft(key)?.body ?: "")
+
 /**
  * The composer for [key], kept for the life of the conversation screen, with the effects that keep
  * it current: the field's own changes, the stored draft, the chrome, the refused-line nudge, and
@@ -601,7 +637,12 @@ internal fun rememberComposerState(
     onShowProfile: (networkId: Int, nick: String) -> Unit,
 ): ComposerState {
     val scope = rememberCoroutineScope()
-    val state = remember(model, key) { ComposerState(model, key, kind, scope) }
+    // Saved, not just remembered: a rotation, a theme or font-size change, or a fold rebuilds the
+    // screen, and a remembered field came back as the stored draft — empty in the Lurker console and a
+    // server log, whose drafts don't sync, and with the caret thrown to the end everywhere else.
+    val field = rememberSaveable(saver = TextFieldState.Saver) { openField(model, key) }
+    val state = remember(model, key) { ComposerState(model, key, kind, scope, field) }
+    val activity = LocalContext.current.findActivity()
     val keyboard = LocalSoftwareKeyboardController.current
     val events = LocalAppEvents.current
     SideEffect {
@@ -657,7 +698,7 @@ internal fun rememberComposerState(
     // looked at (iOS's `viewDidAppear`); leaving — the buffer, or the app — ends typing and flushes.
     LifecycleStartEffect(state) {
         state.restoreRefused()
-        onStopOrDispose { state.leave() }
+        onStopOrDispose { state.leave(changingConfiguration = activity?.isChangingConfigurations == true) }
     }
     return state
 }

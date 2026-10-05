@@ -51,8 +51,18 @@ class BufferRouteTest {
         val second = BufferRoute.of(key, jump = JumpRequest.to(42))
         assertNotEquals(first.jump, second.jump)
         assertEquals(first.key.id, second.key.id)
-        assertEquals(BufferRoute.of(key), first.copy(jump = null))
+        assertEquals(BufferRoute.of(key).copy(visit = first.visit), first.copy(jump = null))
     }
+
+    /** Each open is its own visit (sweep L11); an in-place jump amends the visit it was given on. */
+    @Test
+    fun `two opens of one buffer are two visits, and a copy keeps its visit`() {
+        val key = BufferKey(networkId = 3, target = "#lurker")
+        val first = BufferRoute.of(key)
+        assertNotEquals(first.visit, BufferRoute.of(key).visit)
+        assertEquals(first.visit, first.copy(jump = JumpRequest.to(42)).visit)
+    }
+
 
     /**
      * Notification-jump to #a, push #b, back: #a's screen is rebuilt from the same route, request

@@ -18,6 +18,11 @@ import kotlin.random.Random
  * conversation is opened from — before any frame has arrived to correct the case, the same reason
  * `UiPreferences.lastOpenBufferKey` stores parts. Compare two routes' buffers by [key]'s `id`:
  * two routes to one buffer with different [jump]s are different routes but the same conversation.
+ *
+ * [visit] tells one open of a buffer from the next (sweep L11): the conversation's saved state —
+ * where the list was, the latched "New messages" divider — is kept per visit, so a rotation
+ * restores it and a fresh open starts fresh. `copy` keeps it: an
+ * in-place jump is the same visit. A route saved before the field existed restores with 0.
  */
 data class BufferRoute(
     /** Null only for the system buffer. */
@@ -25,6 +30,7 @@ data class BufferRoute(
     val target: String,
     /** The message to open at rather than the bottom (lurker-ios#42), or null for a plain open. */
     val jump: JumpRequest? = null,
+    val visit: Long = Random.nextLong(),
 ) : java.io.Serializable {
     val key: BufferKey get() = BufferKey(networkId = networkId, target = target)
 
