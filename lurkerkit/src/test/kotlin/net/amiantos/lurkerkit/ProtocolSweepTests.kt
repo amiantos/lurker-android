@@ -190,6 +190,38 @@ class ProtocolSweepTests {
         assertEquals(count, model.state.messages[channel.id]?.size, "one send, one notice")
     }
 
+    /**
+     * The same unknown command typed in two buffers before either answer: the 421s come back in
+     * send order, and each lands where its own line was typed.
+     */
+    @Test
+    fun testTwoSendsOfOneVerbAnswerInTheirOwnBuffers() {
+        val model = testViewModel()
+        model.handle(ServerFrame.SocketOpen)
+        model.handle(
+            ServerFrame.Snapshot(
+                listOf(
+                    NetworkSnapshot(
+                        id = 1, state = ConnectionState.Connected, nick = "me",
+                        channels = listOf(
+                            ChannelSnapshot(name = "#lurker", topic = null, members = emptyList()),
+                            ChannelSnapshot(name = "#other", topic = null, members = emptyList()),
+                        ),
+                    ),
+                ),
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
+            ),
+        )
+        val other = BufferKey(networkId = 1, target = "#other")
+        model.sendRawSeam = { true }
+        model.send(channel, text = "/frobnicate")
+        model.send(other, text = "/frobnicate")
+        model.handle(unknownCommand("FROBNICATE", id = 50))
+        model.handle(unknownCommand("FROBNICATE", id = 51))
+        assertEquals(listOf("Unknown command: /frobnicate"), model.state.messages[channel.id]?.map { it.text })
+        assertEquals(listOf("Unknown command: /frobnicate"), model.state.messages[other.id]?.map { it.text })
+    }
+
     /** Another device's `/frobnicate` 421s on this socket too; that device says so, not this one. */
     @Test
     fun testA421ForALineThisDeviceDidntSendSaysNothing() {

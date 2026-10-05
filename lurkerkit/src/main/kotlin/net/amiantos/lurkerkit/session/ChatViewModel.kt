@@ -233,10 +233,12 @@ class ChatViewModel(
     var onInvited: ((networkId: Int, channel: String, from: String) -> Unit)? = null
 
     /**
-     * Where each raw line this device sent was typed, and when, by network and verb, until a
-     * 421 names that verb — see `noteUnknownCommand`. One entry per verb, the latest send's.
+     * Where each raw line this device sent was typed, and when, by network and verb, oldest
+     * first, until a 421 names that verb — see `noteUnknownCommand`. A queue rather than the
+     * latest send: `/foo` in #a then in #b answers twice, in that order, and each answer belongs
+     * where its line was typed. Entries past `unknownCommandWindow` are dropped as it's touched.
      */
-    private val rawCommandOrigins = HashMap<String, RawCommandOrigin>()
+    private val rawCommandOrigins = HashMap<String, List<RawCommandOrigin>>()
 
     private class RawCommandOrigin(val key: BufferKey, val sentAt: Instant)
 
@@ -467,6 +469,8 @@ class ChatViewModel(
         unsent.abandonAll()
         // Drafts are account data too, and a timer left armed would flush into the next session.
         resetDrafts()
+        // A raw line's origin names a buffer of this account; the next one's ids may reuse it.
+        rawCommandOrigins.clear()
         // Joins too: a pending one names a channel the next account never asked for, and its timer
         // would otherwise toast "No response" over the sign-in screen (lurker-ios#57).
         pendingJoins.removeAll()
@@ -1312,7 +1316,9 @@ class ChatViewModel(
                         if (!sent) return@wire false
                         val verb = rawVerb(effect.line)
                         if (networkId != null && verb != null) {
-                            rawCommandOrigins[rawCommandKey(networkId, verb)] = RawCommandOrigin(key, Instant.now())
+                            val now = Instant.now()
+                            val pending = live(rawCommandOrigins[rawCommandKey(networkId, verb)].orEmpty(), now)
+                            rawCommandOrigins[rawCommandKey(networkId, verb)] = pending + RawCommandOrigin(key, now)
                         }
                         true
                     }
@@ -2567,14 +2573,21 @@ class ChatViewModel(
     internal fun noteUnknownCommand(networkId: Int?, message: Message, now: Instant = Instant.now()) {
         if (networkId == null) return
         val verb = message.unknownCommand ?: return
-        val origin = rawCommandOrigins.remove(rawCommandKey(networkId, verb)) ?: return
-        if (Duration.between(origin.sentAt, now) > unknownCommandWindow) return
+        val rawKey = rawCommandKey(networkId, verb)
+        val pending = live(rawCommandOrigins[rawKey].orEmpty(), now)
+        val origin = pending.firstOrNull()
+        if (pending.size > 1) rawCommandOrigins[rawKey] = pending.drop(1) else rawCommandOrigins.remove(rawKey)
+        if (origin == null) return
         // Typed in the server log: the server's own line is already right there.
         if (origin.key.target == Buffer.serverTarget(networkId)) return
         // Closed since: a line for a buffer that's gone would sit in the side table unseen.
         if (store.state.buffers[origin.key.id] == null) return
         store.appendLocal(origin.key, text = "Unknown command: /${verb.lowercase()}")
     }
+
+    /** `origins` without the ones too old to be answered now. */
+    private fun live(origins: List<RawCommandOrigin>, now: Instant): List<RawCommandOrigin> =
+        origins.filter { Duration.between(it.sentAt, now) <= unknownCommandWindow }
 
     /** IRC verbs are case-insensitive, and the ircd echoes one in whatever case it likes. */
     private fun rawCommandKey(networkId: Int, verb: String): String = "$networkId ${verb.uppercase()}"
@@ -2714,6 +2727,8 @@ class ChatViewModel(
         unsent.abandonAll()
         // Drafts are account data too, and a timer left armed would flush into the next session.
         resetDrafts()
+        // A raw line's origin names a buffer of this account; the next one's ids may reuse it.
+        rawCommandOrigins.clear()
         // Joins too: a pending one names a channel the next account never asked for, and its timer
         // would otherwise toast "No response" over the sign-in screen (lurker-ios#57).
         pendingJoins.removeAll()
