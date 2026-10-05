@@ -4,16 +4,32 @@
 package net.amiantos.lurkerkit.session
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import net.amiantos.lurkerkit.support.utf8OrNull
 import okio.ByteString
 import okio.ByteString.Companion.encodeUtf8
+import java.time.Instant
 
 /** What we persist to survive a relaunch: enough to reconnect without signing in again. */
 @Serializable
 data class PersistedSession(
     val server: String,
     val token: String,
+)
+
+/**
+ * A session signed out of on this device whose server hasn't confirmed the revoke (lurker-ios#218),
+ * and since when — an owed revoke is given up after `ChatViewModel.revokeRetryWindow`.
+ *
+ * Port note: [since] is epoch milliseconds where LurkerKit stores a `Date`. Each platform's store is
+ * its own, so the two never read each other's.
+ */
+@Serializable
+data class PendingRevoke(
+    val server: String,
+    val token: String,
+    val since: Long,
 )
 
 /**
@@ -93,6 +109,39 @@ class SessionStore(private val storage: SecureStorage) {
         storage.delete(account)
     }
 
+    // MARK: - Revokes owed (lurker-ios#218)
+
+    /**
+     * Sessions signed out of on this device whose server hasn't confirmed the revoke yet.
+     *
+     * A sign-out forgets the token at once and revokes it in the background. If that request never
+     * lands — offline, the server down, the app killed first — the token stays live on the server for
+     * good (OAuth tokens don't expire; revoking deletes them). Each one waits here, in secure storage
+     * beside the live session, until the server answers.
+     */
+    fun pendingRevokes(): List<PendingRevoke> {
+        val data = storage.read(pendingRevokesAccount) ?: return emptyList()
+        return SessionCodec.decodeList(data)
+    }
+
+    internal fun addPendingRevoke(session: PersistedSession, now: Instant = Instant.now()) {
+        val pending = pendingRevokes()
+        if (pending.any { it.token == session.token }) return
+        writePendingRevokes(pending + PendingRevoke(server = session.server, token = session.token, since = now.toEpochMilli()))
+    }
+
+    internal fun removePendingRevoke(token: String) {
+        writePendingRevokes(pendingRevokes().filter { it.token != token })
+    }
+
+    private fun writePendingRevokes(pending: List<PendingRevoke>) {
+        if (pending.isEmpty()) {
+            storage.delete(pendingRevokesAccount)
+            return
+        }
+        storage.write(pendingRevokesAccount, SessionCodec.encodeList(pending))
+    }
+
     internal companion object {
         /**
          * A new name for the OAuth sign-in's session, so the password sign-in's is never restored.
@@ -102,6 +151,9 @@ class SessionStore(private val storage: SecureStorage) {
 
         /** Where the password sign-in kept its session. */
         const val legacyAccount = "session"
+
+        /** Sessions signed out of whose server revoke hasn't been answered yet (lurker-ios#218). */
+        const val pendingRevokesAccount = "pending-revokes"
     }
 }
 
@@ -131,5 +183,22 @@ internal object SessionCodec {
         }
         if (session.server.isEmpty() || session.token.isEmpty()) return null
         return session
+    }
+
+    fun encodeList(pending: List<PendingRevoke>): ByteString =
+        json.encodeToString(ListSerializer(PendingRevoke.serializer()), pending).encodeUtf8()
+
+    /**
+     * The same tolerance per entry: one with an empty server or token is dropped, and an unreadable
+     * blob is an empty list — there's nothing to revoke with either.
+     */
+    fun decodeList(data: ByteString): List<PendingRevoke> {
+        val text = data.utf8OrNull() ?: return emptyList()
+        val pending = try {
+            json.decodeFromString(ListSerializer(PendingRevoke.serializer()), text)
+        } catch (_: IllegalArgumentException) {
+            return emptyList()
+        }
+        return pending.filter { it.server.isNotEmpty() && it.token.isNotEmpty() }
     }
 }
