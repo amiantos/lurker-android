@@ -394,8 +394,9 @@ internal class LurkerClient(
      * mean the token died in the intervening milliseconds, and treating it as an auth failure
      * would bounce the user to sign-in over a settings fetch. The socket upgrade is the next
      * thing to run and it will find out for itself.
+     *
+     * Internal for tests.
      */
-    /** Internal for tests. */
     internal suspend fun fetchSettings() {
         val token = token ?: return
         val url = (baseURL + "/api/settings/bootstrap").toHttpUrlOrNull() ?: return
