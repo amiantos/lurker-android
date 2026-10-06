@@ -20,7 +20,7 @@ class TabCompletionTests {
 
     private fun begin(text: String, caret: Int? = null, channels: List<String> = emptyList(), punctuation: String = ":"): TabCompletion? =
         TabCompletion.begin(
-            text = text, caret = caret ?: text.length, nicks = ::nicks, channels = channels, punctuation = punctuation,
+            text = text, caret = caret ?: text.length, nicks = ::nicks, channels = { channels }, punctuation = punctuation,
         )
 
     @Test
@@ -111,6 +111,17 @@ class TabCompletionTests {
         assertNull(begin("hi ", caret = 3))
         assertNull(begin("zz"))
         assertNull(begin("#zz", channels = listOf("#lurker")))
+    }
+
+    @Test
+    fun testChannelsAreAskedOnlyForAHash() {
+        // Most Tabs complete a nick; the network's channels are only worth gathering for a `#`.
+        var asked = 0
+        val channels = { asked += 1; listOf("#lurker") }
+        TabCompletion.begin(text = "al", caret = 2, nicks = ::nicks, channels = channels, punctuation = ":")
+        assertEquals(0, asked)
+        TabCompletion.begin(text = "#lu", caret = 3, nicks = ::nicks, channels = channels, punctuation = ":")
+        assertEquals(1, asked)
     }
 
     @Test

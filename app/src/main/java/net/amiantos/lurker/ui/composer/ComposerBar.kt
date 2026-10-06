@@ -5,7 +5,6 @@ package net.amiantos.lurker.ui.composer
 
 import android.icu.text.SimpleDateFormat
 import android.text.format.DateFormat
-import android.view.KeyCharacterMap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -46,6 +45,9 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
@@ -199,7 +201,8 @@ internal fun ComposerBarContent(
             leading?.invoke(collapsed)
             Field(
                 field, placeholder, capitalizes, enterSends, collapsed, focusRequester, onFocusChange,
-                FieldKeys(onSend, onTab, onCancelReply), isComposing, strip is Strip.Reply, fieldModifier,
+                remember(onSend, onTab, onCancelReply) { FieldKeys(onSend, onTab, onCancelReply) },
+                isComposing, strip is Strip.Reply, fieldModifier,
             )
             // Derived, so the bar recomposes when the answer flips rather than on every keystroke.
             val canSend by remember(field) { derivedStateOf { ComposerModel.sendable(field.text.toString()) != null } }
@@ -274,6 +277,7 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
                         key = key,
                         down = down,
                         shift = event.isShiftPressed,
+                        otherModifier = event.isCtrlPressed || event.isAltPressed || event.isMetaPressed,
                         // Of every key: it decides Enter, and whether a composition holds any key back.
                         hardware = isHardwareKey(event),
                         composing = isComposing(),
@@ -332,13 +336,10 @@ private fun composerKey(event: KeyEvent): ComposerKeys.Key = when (event.key) {
 /**
  * Whether [event] came from a physical keyboard. ⚠ Some on-screen keyboards send a real
  * `KEYCODE_ENTER` rather than text or an editor action, and that Enter must follow "Enter to send"
- * rather than always sending. Theirs arrive from the virtual keyboard device (`VIRTUAL_KEYBOARD`, a
- * device that says it `isVirtual`); an event with no device at all is treated as theirs too.
+ * rather than always sending. Theirs arrive from a virtual device: `VIRTUAL_KEYBOARD` (-1), and
+ * `InputDevice.isVirtual` is exactly "a negative id", so the id alone answers it.
  */
-private fun isHardwareKey(event: KeyEvent): Boolean {
-    val native = event.nativeKeyEvent
-    return native.deviceId != KeyCharacterMap.VIRTUAL_KEYBOARD && native.device?.isVirtual == false
-}
+private fun isHardwareKey(event: KeyEvent): Boolean = event.nativeKeyEvent.deviceId >= 0
 
 /**
  * Round, and lit in the accent when there's something to send — the "lights up when it goes live"

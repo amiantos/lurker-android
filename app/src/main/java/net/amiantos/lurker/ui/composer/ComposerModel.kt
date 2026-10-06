@@ -232,12 +232,6 @@ internal object ComposerModel {
     /** How many channel chips a channel argument offers. */
     const val CHANNEL_LIMIT = 4
 
-    /**
-     * How many nicks Tab cycles through (`TabCompletion`, lurker-android#63) — far past the pills'
-     * four, since Tab reaches the rest by pressing it again rather than by reading a row of them.
-     */
-    const val TAB_NICK_LIMIT = 50
-
     // MARK: - Completion
 
     /**
@@ -282,14 +276,16 @@ internal object ComposerModel {
      */
     fun channelCandidates(buffers: Collection<Buffer>, networkId: Int?, query: String, limit: Int = CHANNEL_LIMIT): List<String> {
         val needle = ChannelName.fold(query)
-        return buffers.asSequence()
-            .filter { it.networkId == networkId && it.kind == BufferKind.Channel }
-            .map { it.target }
+        return networkChannels(buffers, networkId)
             .filter { ChannelName.fold(it).startsWith(needle) }
-            .sortedBy { it.lowercase() }
             .take(limit)
-            .toList()
     }
+
+    /** [networkId]'s channels, case-insensitively sorted — the one list the pills and Tab both draw from. */
+    private fun networkChannels(buffers: Collection<Buffer>, networkId: Int?): List<String> =
+        buffers.filter { it.networkId == networkId && it.kind == BufferKind.Channel }
+            .map { it.target }
+            .sortedBy { it.lowercase() }
 
     /**
      * The channels Tab offers for a `#` word (`TabCompletion`, lurker-android#63), best first: the
@@ -299,10 +295,10 @@ internal object ComposerModel {
      * what was typed.
      */
     fun tabChannels(buffers: Collection<Buffer>, networkId: Int?, current: BufferKey): List<String> {
-        val channels = buffers.filter { it.networkId == networkId && it.kind == BufferKind.Channel }
-        val here = channels.firstOrNull { it.key.id == current.id }
-        val rest = channels.filter { it !== here }.map { it.target }.sortedBy { it.lowercase() }
-        return if (here != null) listOf(here.target) + rest else rest
+        val channels = networkChannels(buffers, networkId)
+        val here = buffers.firstOrNull { it.key.id == current.id && it.networkId == networkId && it.kind == BufferKind.Channel }
+            ?: return channels
+        return listOf(here.target) + channels.filter { it != here.target }
     }
 
     /**

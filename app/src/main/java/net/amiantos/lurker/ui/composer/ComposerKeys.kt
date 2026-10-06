@@ -59,8 +59,13 @@ internal class ComposerKeys {
         val key: Key,
         /** KeyDown; false is KeyUp. */
         val down: Boolean,
-        /** Shift. Any other modifier changes nothing: Ctrl+Enter sends, as on the web. */
+        /** Shift. Any other modifier changes nothing for Enter: Ctrl+Enter sends, as on the web. */
         val shift: Boolean = false,
+        /**
+         * Ctrl, Alt or Meta. Tab with one is someone else's — Ctrl+Tab switches things on ChromeOS and
+         * DeX — so it's passed on rather than completing into the draft.
+         */
+        val otherModifier: Boolean = false,
         /** From a physical keyboard — never the on-screen one, even when it sends real key events. */
         val hardware: Boolean = true,
         val composing: Boolean = false,
@@ -79,14 +84,22 @@ internal class ComposerKeys {
     }
 
     private fun decide(event: Event): Action {
-        if (event.composing && !event.hardware) return Action.Pass
+        if (event.composing && !event.hardware) {
+            // The IME sent it as a key: Enter and the rest are its own business mid-word. Tab is
+            // swallowed rather than passed, or the multi-line field would type a tab character.
+            return if (event.key == Key.Tab) Action.Swallow else Action.Pass
+        }
         return when (event.key) {
             Key.Enter -> when {
                 event.shift -> Action.Pass
                 event.hardware || event.enterSends -> Action.Send
                 else -> Action.Pass
             }
-            Key.Tab -> if (event.shift) Action.CompleteBackward else Action.Complete
+            Key.Tab -> when {
+                event.otherModifier -> Action.Pass
+                event.shift -> Action.CompleteBackward
+                else -> Action.Complete
+            }
             Key.Escape -> if (event.replyPending) Action.CancelReply else Action.Pass
             Key.Other -> Action.Pass
         }

@@ -50,9 +50,10 @@ class TabCompletion private constructor(
          * under it or nothing matches.
          *
          * `nicks` answers the nick candidates for what's been typed, best first — pass
-         * `NickCompletion.candidates` with a limit high enough to cycle through. `channels` is the
-         * network's channels, best first (the one you're in leads); this filters them by the typed
-         * prefix. `punctuation` is `NickCompletion.addressPunctuation(settings)`.
+         * `NickCompletion.candidates` with no limit to speak of, so Tab can cycle through every match,
+         * as the web's can. `channels` answers the network's channels, best first (the one you're in
+         * leads), asked only when the word starts with `#`; this filters them by the typed prefix.
+         * `punctuation` is `NickCompletion.addressPunctuation(settings)`.
          *
          * Port note: the token, `prefix` and `tail` are `substring`s where the Swift rebuilds each
          * from its UTF-16 units. The cuts land only at whitespace or at the ends of the text, so
@@ -64,7 +65,7 @@ class TabCompletion private constructor(
             text: String,
             caret: Int,
             nicks: (String) -> List<String>,
-            channels: List<String>,
+            channels: () -> List<String>,
             punctuation: String,
         ): TabCompletion? {
             val at = min(max(0, caret), text.length)
@@ -84,7 +85,7 @@ class TabCompletion private constructor(
             val matches: List<String>
             if (isChannel) {
                 val typed = token.lowercase()
-                matches = channels.filter { it.lowercase().startsWith(typed) }
+                matches = channels().filter { it.lowercase().startsWith(typed) }
             } else {
                 // Port note: `dropFirst()` drops one `Character`; an `@` is one UTF-16 unit.
                 val query = if (token.startsWith("@")) token.substring(1) else token

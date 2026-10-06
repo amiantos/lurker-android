@@ -195,6 +195,13 @@ internal class ComposerState(
 
     /** The field changed — by the user (observed) or by the composer itself (called directly). */
     internal fun fieldChanged(now: Snapshot) {
+        // Any edit or caret move Tab didn't make ends its session, as any other key does on the web —
+        // `continues` alone would revive it after a letter typed and deleted.
+        tabCompletion?.let { session ->
+            if (now.selection.min != now.selection.max || !session.continues(text = now.text, caret = now.selection.min)) {
+                tabCompletion = null
+            }
+        }
         val textChanged = now.text != lastSeenText
         lastSeenText = now.text
         // What the channel was told is `ComposerTyping`'s to dedupe against — and to forget when typing
@@ -213,7 +220,9 @@ internal class ComposerState(
      * composition the way any edit does.
      */
     private fun emitCompletion(now: Snapshot) {
-        val computed = ComposerModel.completion(now.text, now.selection.min, now.selection.max)
+        // A live Tab completion owns the field: no pills while it cycles (the web closes its pickers
+        // on Tab), or a mid-sentence one would float them over the nick it just finished.
+        val computed = if (tabCompletion != null) null else ComposerModel.completion(now.text, now.selection.min, now.selection.max)
         val last = lastCompletion
         if (last != null && last[0] == computed) return
         lastCompletion = arrayOf(computed)
@@ -239,8 +248,8 @@ internal class ComposerState(
         )
 
     /**
-     * Who a nick query offers here: the pills' four (the kit's default), or Tab's longer list to cycle
-     * through ([ComposerModel.TAB_NICK_LIMIT]). One call, so the two can't disagree about who's here.
+     * Who a nick query offers here: the pills' four (the kit's default), or every match for Tab to cycle
+     * through, as the web's does. One call, so the two can't disagree about who's here.
      */
     private fun nickCandidates(query: String, limit: Int = 4): List<String> {
         val state = model.state
@@ -542,6 +551,8 @@ internal class ComposerState(
      * complete leaves the field alone (the key is still taken — see `ComposerKeys`).
      */
     fun tabComplete(backward: Boolean) {
+        // A selection has no caret to complete at: Tab is still taken, and changes nothing.
+        if (!field.selection.collapsed) return
         val text = field.text.toString()
         val caret = field.selection.min
         val session = tabCompletion
@@ -551,8 +562,8 @@ internal class ComposerState(
             val fresh = TabCompletion.begin(
                 text = text,
                 caret = caret,
-                nicks = { query -> nickCandidates(query, limit = ComposerModel.TAB_NICK_LIMIT) },
-                channels = ComposerModel.tabChannels(model.state.buffers.values, key.networkId, key),
+                nicks = { query -> nickCandidates(query, limit = Int.MAX_VALUE) },
+                channels = { ComposerModel.tabChannels(model.state.buffers.values, key.networkId, key) },
                 punctuation = punctuation,
             )
             tabCompletion = fresh

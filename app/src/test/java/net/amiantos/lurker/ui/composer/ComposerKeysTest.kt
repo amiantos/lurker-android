@@ -70,11 +70,23 @@ class ComposerKeysTest {
     // MARK: - Composition
 
     @Test
-    fun `nothing from the on-screen keyboard is taken while an IME is composing`() {
-        for (key in listOf(Key.Enter, Key.Tab, Key.Escape)) {
+    fun `nothing from the on-screen keyboard acts while an IME is composing`() {
+        for (key in listOf(Key.Enter, Key.Escape)) {
             val event = Event(key, down = true, hardware = false, composing = true, enterSends = true, replyPending = true)
             assertEquals("$key", Action.Pass to Action.Pass, press(ComposerKeys(), event))
         }
+        // Tab is swallowed instead — passed, the multi-line field would type a tab character.
+        val tab = Event(Key.Tab, down = true, hardware = false, composing = true)
+        assertEquals(Action.Swallow to Action.Swallow, press(ComposerKeys(), tab))
+    }
+
+    /** Ctrl+Tab and the like belong to the system (ChromeOS, DeX): never a completion. */
+    @Test
+    fun `tab with ctrl alt or meta is passed on`() {
+        assertEquals(Action.Pass to Action.Pass, press(ComposerKeys(), Event(Key.Tab, down = true, otherModifier = true)))
+        assertEquals(Action.Pass to Action.Pass, press(ComposerKeys(), Event(Key.Tab, down = true, shift = true, otherModifier = true)))
+        // Enter doesn't care: Ctrl+Enter sends, as on the web.
+        assertEquals(Action.Send, ComposerKeys().onKey(Event(Key.Enter, down = true, otherModifier = true)))
     }
 
     /**
