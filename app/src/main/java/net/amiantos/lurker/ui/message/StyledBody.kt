@@ -149,8 +149,14 @@ internal class StyledBody : AttributedBody {
                     addStringAnnotation(MessageText.SPOILER_TAG, kind.ordinal.toString(), mark.start, mark.end)
                     if (onToggleSpoiler != null) {
                         val ordinal = kind.ordinal
+                        // ⚠ Styles that style nothing, never null (lurker-android#70). Material's `Text`
+                        // gives a link with null styles its own — the theme's primary colour and an
+                        // underline — which painted a hidden spoiler's text purple over its box, in plain
+                        // sight. A spoiler is a tap target, not a link: its colours are the run's own.
                         addLink(
-                            LinkAnnotation.Clickable("${MessageText.SPOILER_TAG}:$ordinal") { onToggleSpoiler(ordinal) },
+                            LinkAnnotation.Clickable("${MessageText.SPOILER_TAG}:$ordinal", spoilerStyles) {
+                                onToggleSpoiler(ordinal)
+                            },
                             mark.start,
                             mark.end,
                         )
@@ -161,5 +167,10 @@ internal class StyledBody : AttributedBody {
             }
         }
         if (paragraph != null && length > 0) addStyle(paragraph, 0, length)
+    }
+
+    private companion object {
+        /** A spoiler's tap target, unstyled — see the ⚠ in [toAnnotatedString]. */
+        val spoilerStyles = TextLinkStyles(style = SpanStyle())
     }
 }

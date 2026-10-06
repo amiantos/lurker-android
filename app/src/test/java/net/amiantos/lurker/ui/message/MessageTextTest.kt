@@ -30,6 +30,7 @@ import net.amiantos.lurkerkit.rendering.NickHighlighter
 import net.amiantos.lurkerkit.support.TextRange
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -256,6 +257,24 @@ class MessageTextTest {
         clickables.forEach { it.linkInteractionListener?.onClick(it) }
         assertEquals(listOf(0, 1), tapped)
         assertEquals(listOf(0, 1), MessageText.hiddenSpoilerOrdinals(line))
+    }
+
+    /**
+     * lurker-android#70: a link with null styles gets Material `Text`'s own — the theme's primary
+     * colour and an underline — which painted a hidden spoiler's text purple over its box. Its tap
+     * target must carry styles that style nothing, so the run's own colours stand.
+     */
+    @Test
+    fun `a spoiler's tap target styles nothing of its own`() {
+        val line = body("\u000301,01secret\u0003", onToggle = { })
+        val clickable = line.getLinkAnnotations(0, line.length).map { it.item }.filterIsInstance<LinkAnnotation.Clickable>().single()
+        assertNotNull("null styles let Material's link styling in", clickable.styles)
+        val styles = clickable.styles!!
+        assertEquals(androidx.compose.ui.graphics.Color.Unspecified, styles.style?.color ?: androidx.compose.ui.graphics.Color.Unspecified)
+        assertNull(styles.style?.textDecoration)
+        // And the box is still a box: the text is its own fill.
+        val at = line.indexOf("secret")
+        assertEquals(line.styleAt(at).background, line.styleAt(at).color)
     }
 
     @Test
