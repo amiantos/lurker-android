@@ -70,11 +70,22 @@ class ComposerKeysTest {
     // MARK: - Composition
 
     @Test
-    fun `nothing is taken while an IME is composing`() {
+    fun `nothing from the on-screen keyboard is taken while an IME is composing`() {
         for (key in listOf(Key.Enter, Key.Tab, Key.Escape)) {
-            val event = Event(key, down = true, composing = true, enterSends = true, replyPending = true)
+            val event = Event(key, down = true, hardware = false, composing = true, enterSends = true, replyPending = true)
             assertEquals("$key", Action.Pass to Action.Pass, press(ComposerKeys(), event))
         }
+    }
+
+    /**
+     * A physical key reaches the composer only after the IME passed on it, so a composing region —
+     * which Gboard keeps on the word being typed, Latin included — doesn't stop it.
+     */
+    @Test
+    fun `a hardware key acts over a composing region`() {
+        assertEquals(Action.Send, ComposerKeys().onKey(Event(Key.Enter, down = true, composing = true)))
+        assertEquals(Action.Complete, ComposerKeys().onKey(Event(Key.Tab, down = true, composing = true)))
+        assertEquals(Action.Pass, ComposerKeys().onKey(Event(Key.Enter, down = true, shift = true, composing = true)))
     }
 
     @Test

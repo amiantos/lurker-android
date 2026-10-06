@@ -98,7 +98,8 @@ import java.util.Locale
  * actually type — unless "Enter to send" is on (lurker-android#64), when it reads "Send" and sends.
  * A hardware keyboard's Enter always sends and Shift+Enter is the newline; Tab completes a nick or a
  * channel in place, the web's way; Escape cancels a pending reply (lurker-android#63, `ComposerKeys`).
- * Nothing acts on a key while an IME is composing.
+ * An on-screen key is left alone while an IME is composing; a hardware key, which reaches the field
+ * only after the IME passed on it, isn't (see `ComposerKeys`).
  *
  * Rides the keyboard: the bar pads itself by the IME (and the navigation bar under it), so it sits
  * on top of whichever is taller, and the list above — laid out in reverse, item 0 at the bottom —
@@ -273,8 +274,8 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
                         key = key,
                         down = down,
                         shift = event.isShiftPressed,
-                        // Asked of Enter alone, the one key where it matters.
-                        hardware = key != ComposerKeys.Key.Enter || isHardwareKey(event),
+                        // Of every key: it decides Enter, and whether a composition holds any key back.
+                        hardware = isHardwareKey(event),
                         composing = isComposing(),
                         enterSends = enterSends,
                         replyPending = replyPending,

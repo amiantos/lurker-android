@@ -19,8 +19,12 @@ package net.amiantos.lurker.ui.composer
  *    on-screen kind is only told apart for Enter, the one key with a setting.
  *  - **Escape** cancels a pending reply, and only then.
  *
- * ⚠ None of it during an IME composition: the key belongs to the IME then (Enter commits the word),
- * and taking it would cut the word or send half of it.
+ * ⚠ An ON-SCREEN key during an IME composition is the IME's (Enter commits the word), and is left
+ * alone. A HARDWARE key isn't gated on the composing region at all: Android hands a physical key to
+ * the IME before the app (ViewRootImpl's pre-IME → IME → post-IME stages; `onPreviewKeyEvent` runs
+ * post-IME), so a CJK IME that is composing consumes Enter itself and the composer never sees it. A
+ * hardware key that does arrive has been passed on by the IME — and Gboard keeps a composing region
+ * on the word being typed even in Latin, so gating on it would make Enter a newline mid-word.
  *
  * Holds one piece of state: which keys it took the KeyDown of, so their KeyUp is taken too. A KeyUp
  * let through for a key the composer already acted on would reach whatever handles the release —
@@ -75,7 +79,7 @@ internal class ComposerKeys {
     }
 
     private fun decide(event: Event): Action {
-        if (event.composing) return Action.Pass
+        if (event.composing && !event.hardware) return Action.Pass
         return when (event.key) {
             Key.Enter -> when {
                 event.shift -> Action.Pass
