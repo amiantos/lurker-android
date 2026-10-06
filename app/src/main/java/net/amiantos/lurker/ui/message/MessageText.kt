@@ -584,18 +584,32 @@ object MessageText {
         line.append(nickName(nick), SpanStyle(color = nickColor(nick, isSelf, style)))
     }
 
+    /** A part, quit or kick reason in parentheses, or nothing when there isn't one. */
+    private fun appendReason(line: StyledBody, message: Message, style: MessageTextStyle, revealed: Set<Int>) =
+        appendActivityBody(line, message, style, revealed, open = " (", close = ")")
+
     /**
-     * A part, quit or kick reason in parentheses, or nothing when there isn't one. Through [body], as a
-     * topic is (sweep L06): a reason carries mIRC colours and links like any message, and as plain text
-     * its colour digits leaked ("(04Leaving") and its URLs couldn't be tapped. Judged empty on its
-     * visible text: a reason of nothing but formatting codes has no words to put in the parentheses.
+     * The text an activity line carries — a topic, a reason — between [open] and [close] in the
+     * narration's grey, or nothing at all when it has no visible text. Through [body] (sweep L06): it
+     * carries mIRC colours and links like any message, and as plain text its colour digits leaked
+     * ("(04Leaving") and its URLs couldn't be tapped. Judged on what [body] drew, so a text of nothing
+     * but formatting codes leaves no empty "()" or dangling ": ".
      */
-    private fun appendReason(line: StyledBody, message: Message, style: MessageTextStyle, revealed: Set<Int>) {
-        val text = message.text
-        if (text == null || IRCFormatting.strip(text).trimmingWhitespacesAndNewlines().isEmpty()) return
-        line.append(" (", muted(style))
-        line.append(body(message, style, fallback = style.colors.fgMuted, revealed = revealed))
-        line.append(")", muted(style))
+    private fun appendActivityBody(
+        line: StyledBody,
+        message: Message,
+        style: MessageTextStyle,
+        revealed: Set<Int>,
+        open: String,
+        close: String = "",
+    ) {
+        val text = message.text ?: return
+        if (text.isEmpty()) return
+        val drawn = body(message, style, fallback = style.colors.fgMuted, revealed = revealed)
+        if (drawn.string.trimmingWhitespacesAndNewlines().isEmpty()) return
+        line.append(open, muted(style))
+        line.append(drawn)
+        if (close.isNotEmpty()) line.append(close, muted(style))
     }
 
     /**
@@ -637,8 +651,9 @@ object MessageText {
      * A structural line — "alice joined", "bob is now bob_afk", "ChanServ gave op to dave". The actor
      * and any nicks it names are coloured; the connective words are muted, so the line reads as
      * narration about the room rather than something someone said in it.
+     *
+     * [revealed] reaches the one body a line can carry — a topic or a reason — so a spoiler in it opens.
      */
-    /** [revealed] reaches the one body a line can carry — a topic or a reason — so a spoiler in it opens. */
     private fun activity(message: Message, style: MessageTextStyle, settings: Settings, revealed: Set<Int>): StyledBody {
         val line = StyledBody()
         val actor = { nickToken(line, message.nick, style, isSelf = message.isSelf) }
@@ -703,13 +718,9 @@ object MessageText {
             EventType.Topic -> {
                 actor()
                 line.append(" set the topic", muted)
-                val text = message.text
-                if (text != null && text.trimmingWhitespacesAndNewlines().isNotEmpty()) {
-                    line.append(": ", muted)
-                    // The same muted as the ": " before it — two greys mid-sentence read as a seam,
-                    // and the topic is a continuation of the narration, not a quote.
-                    line.append(body(message, style, fallback = style.colors.fgMuted, revealed = revealed))
-                }
+                // The same muted as the ": " before it — two greys mid-sentence read as a seam, and the
+                // topic is a continuation of the narration, not a quote.
+                appendActivityBody(line, message, style, revealed, open = ": ")
             }
             EventType.Invite -> {
                 actor()

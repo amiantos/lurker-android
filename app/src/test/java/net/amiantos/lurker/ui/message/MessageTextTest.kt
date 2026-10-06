@@ -378,8 +378,13 @@ class MessageTextTest {
     }
 
     @Test
-    fun `a reason of nothing but codes has no parentheses`() {
+    fun `a reason or topic of nothing but codes draws no body`() {
         assertEquals("alice left", activity(message("\u0002\u0002\u000f", type = EventType.Part)))
+        assertEquals("alice set the topic", activity(message("\u0003\u000f", type = EventType.Topic)))
+        assertEquals(
+            "bob was kicked by alice (out)",
+            activity(message("\u0002out\u0002", type = EventType.Kick, kicked = "bob")),
+        )
     }
 
     @Test
