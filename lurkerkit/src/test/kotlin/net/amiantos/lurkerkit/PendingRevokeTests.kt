@@ -166,7 +166,7 @@ class PendingRevokeTests {
     }
 
     @Test
-    fun testATemporaryAnswerKeepsItOwedAndReachabilityAndForegroundAskAgain() = runBlocking {
+    fun testATemporaryAnswerKeepsItOwedAndReachabilityAsksAgain() = runBlocking {
         Harness(Answering(503)).use { h ->
             h.sessions.addPendingRevoke(PersistedSession(server = "https://lurker.test", token = "old"))
             h.launch()
