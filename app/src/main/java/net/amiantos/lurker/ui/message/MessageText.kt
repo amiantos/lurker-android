@@ -159,6 +159,9 @@ object MessageText {
      * not of the person — the split the web's `NickRef` makes — and bold, because the rank hues are
      * ~3.5–4:1 on the light canvas, which clears the bar for large text and not for regular.
      *
+     * The name itself is the body's weight, as the web and lurker-ios draw it. The glyph's bold is
+     * the exception (iOS and Android; the web leaves it at body weight).
+     *
      * The source (#277) is unbracketed and `fgFaint`, a tier below the timestamp at the other end of
      * the row: a hint, not a field. Last on the line on purpose — the name truncates from the tail, so
      * under width pressure the provenance goes before the speaker does.
@@ -166,7 +169,7 @@ object MessageText {
     fun headerName(header: CompactHeader, style: MessageTextStyle): AnnotatedString = buildAnnotatedString {
         val prefix = header.modePrefix
         val rank = style.colors.memberPrefix(prefix)
-        withStyle(SpanStyle(color = header.color, fontWeight = FontWeight.SemiBold)) {
+        withStyle(SpanStyle(color = header.color)) {
             if (rank != null && prefix.isNotEmpty() && header.nick.startsWith(prefix)) {
                 withStyle(SpanStyle(color = rank, fontWeight = FontWeight.Bold)) { append(prefix) }
                 append(header.nick.substring(prefix.length))
