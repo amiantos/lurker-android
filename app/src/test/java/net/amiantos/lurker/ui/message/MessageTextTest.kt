@@ -360,6 +360,8 @@ class MessageTextTest {
         val name = MessageText.headerName(CompactHeader("alice", Color.Red, time = null, relaySource = "github"), style)
         assertEquals("alice github", name.text)
         assertEquals(colors.fgFaint, name.styleAt(name.indexOf("github")).color)
+        // A plain nick is the body's weight too.
+        assertNull(name.styleAt(0).fontWeight)
     }
 
     // MARK: - Activity and consolidation

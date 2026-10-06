@@ -159,9 +159,8 @@ object MessageText {
      * not of the person — the split the web's `NickRef` makes — and bold, because the rank hues are
      * ~3.5–4:1 on the light canvas, which clears the bar for large text and not for regular.
      *
-     * The name itself is the body's weight, as the web and lurker-ios draw it. LurkerKit's cell asks
-     * for semibold, but on its monospaced face that request never takes (its comment says so), so the
-     * port's SemiBold made Android the one client with heavy nicks.
+     * The name itself is the body's weight, as the web and lurker-ios draw it. The glyph's bold is
+     * the exception (iOS and Android; the web leaves it at body weight).
      *
      * The source (#277) is unbracketed and `fgFaint`, a tier below the timestamp at the other end of
      * the row: a hint, not a field. Last on the line on purpose — the name truncates from the tail, so
