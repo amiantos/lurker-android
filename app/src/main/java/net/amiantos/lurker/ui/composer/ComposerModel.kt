@@ -27,8 +27,8 @@ import net.amiantos.lurkerkit.model.SpeakerMap
 import net.amiantos.lurkerkit.model.member
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.support.TextRange
-import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import net.amiantos.lurkerkit.model.PrefixMode
+import net.amiantos.lurkerkit.commands.CommandParser
 
 /*
  * The composer's decisions, with no Compose in them — lurker-ios's `ComposerBar`, `SuggestionsView`
@@ -477,13 +477,14 @@ internal object ComposerModel {
     // MARK: - Send
 
     /**
-     * The line the send button sends: the field trimmed, or null when there's nothing but
-     * whitespace — the button is off then anyway.
+     * The line the send button sends, or null when there's nothing but whitespace — the button is off
+     * then anyway. The kit's `CommandParser.sendable`: trailing whitespace dropped, LEADING kept, since
+     * ` /whois bob` is text to the channel (lurker-ios#210).
      */
-    fun sendable(text: String): String? = text.trimmingWhitespacesAndNewlines().ifEmpty { null }
+    fun sendable(text: String): String? = CommandParser.sendable(text)
 
     /** Whether the field is empty — nothing typed, nothing but whitespace. */
-    fun isBlank(text: String): Boolean = text.trimmingWhitespacesAndNewlines().isEmpty()
+    fun isBlank(text: String): Boolean = CommandParser.sendable(text) == null
 
     /**
      * Whether the screen should leave the reader where they are rather than carrying them to the

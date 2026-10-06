@@ -215,9 +215,10 @@ class NickCompletionTests {
     @Test
     fun testACommandLineAsksOnlyForMeOrAnAt() {
         assertNull(NickCompletion.activeMention("/msg NickServ IDENTIFY hu", caret = 25))
-        assertNull(
-            NickCompletion.activeMention("  /nick al", caret = 10),
-            "the composer trims, so leading whitespace is still a command",
+        assertEquals(
+            "al",
+            NickCompletion.activeMention("  /nick al", caret = 10)?.query,
+            "a leading space makes the line text to the channel (lurker-ios#210)",
         )
         assertEquals("al", NickCompletion.activeMention("/me waves at al", caret = 15)?.query)
         assertEquals("al", NickCompletion.activeMention("/ME waves at al", caret = 15)?.query)

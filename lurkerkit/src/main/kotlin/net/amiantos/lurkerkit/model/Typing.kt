@@ -3,7 +3,7 @@
 
 package net.amiantos.lurkerkit.model
 
-import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
+import net.amiantos.lurkerkit.support.isInWhitespacesAndNewlines
 import java.time.Duration
 import java.time.Instant
 
@@ -124,9 +124,9 @@ enum class TypingSignal(val rawValue: String) {
  *
  * A leading `/` counts as not-composing on purpose: a command is not a message to the
  * channel, and telling everyone you're typing while you run `/whois` leaks that you're doing
- * *something* and then never delivers a line to justify it. "Leading" is judged on the trimmed
- * text the composer sends, so ` /whois` is a command (the web checks the raw draft, and
- * announces it), and a `//`-escaped line is a message, so it is announced.
+ * *something* and then never delivers a line to justify it. "Leading" means the draft's very
+ * first character, as the send decides it: ` /whois` goes to the channel as text and is announced
+ * (lurker-ios#210, as on the web), and a `//`-escaped line is a message, so it is announced too.
  *
  * Port note: a value type in LurkerKit, whose methods both mutate it and return the signal.
  * ⚠ Here it is a plain mutable class — a small state machine with exactly one owner (the
@@ -194,13 +194,16 @@ class OutgoingTyping {
         val idle: Duration = Duration.ofSeconds(3)
 
         /**
-         * Whether `draft` is something we'd tell the network we're composing. Asked of the
-         * trimmed text, which is what the composer sends: ` /whois bob` runs as a command, and
-         * `//shrug` goes to the channel as `/shrug`.
+         * Whether `draft` is something we'd tell the network we're composing: what the composer sends
+         * as a line to the channel (`CommandParser.sendable`, then `CommandParser.parse`). Decided on
+         * the untrimmed draft, as the send is: ` /whois bob` goes to the channel as text
+         * (lurker-ios#210), and `//shrug` as `/shrug`; only a draft that opens with a lone `/` is a
+         * command.
          */
         private fun isComposing(draft: String): Boolean {
-            val trimmed = draft.trimmingWhitespacesAndNewlines()
-            return trimmed.isNotEmpty() && (!trimmed.startsWith("/") || trimmed.startsWith("//"))
+            // `sendable`'s blank test, without its copy: this runs on every keystroke.
+            if (draft.none { !it.isInWhitespacesAndNewlines() }) return false
+            return !draft.startsWith("/") || draft.startsWith("//")
         }
     }
 }

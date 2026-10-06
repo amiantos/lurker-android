@@ -57,14 +57,13 @@ object CommandCompletion {
         if (caret < 0 || caret > chars.length) return null
         val slash = '/'
 
-        // The command must open the line. Leading whitespace is skipped (the send path trims
-        // it too), so " /join" still completes.
-        var start = 0
-        while (start < chars.length && isWhitespace(chars[start])) start += 1
+        // The command must open the line — its very first character, as on the web, irssi and
+        // gamja: " /join" is text to the channel (lurker-ios#210), so it completes nothing here.
+        val start = 0
         if (start >= chars.length || chars[start] != slash) return null
         // `//…` is an escaped literal, not a command.
         if (start + 1 < chars.length && chars[start + 1] == slash) return null
-        // Caret sitting in the leading whitespace or on the slash has nothing to complete.
+        // Caret sitting on the slash has nothing to complete.
         if (caret <= start) return null
 
         // The verb token: from the slash to the first whitespace.

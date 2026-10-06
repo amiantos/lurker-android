@@ -10,6 +10,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * The outgoing half of `+typing`: which signals our own draft emits, and when.
@@ -117,13 +118,15 @@ class OutgoingTypingTests {
     }
 
     @Test
-    fun testACommandAfterLeadingWhitespaceIsStillACommand() {
-        // lurker-ios#202: the composer trims before sending, so ` /whois al` runs as a command;
-        // announcing typing for it would be the same leak as for `/whois al`.
+    fun testALeadingSpaceMakesASlashLineAMessageAndIsAnnounced() {
+        // lurker-ios#210: ` /whois al` goes to the channel as text, as on the web, irssi and gamja
+        // (the composer keeps leading whitespace, `CommandParser.sendable`), so it is composing like
+        // any other line. lurker-ios#202 had it the other way round, to match a send that trimmed.
         val typing = OutgoingTyping()
-        assertNull(typing.draftChanged(" /whois al", t0))
-        assertNull(typing.draftChanged("\n/join #x", t0.addingTimeInterval(1.0)))
-        assertFalse(typing.isSignalling)
+        assertEquals(TypingSignal.Active, typing.draftChanged(" /whois al", t0))
+        assertTrue(typing.isSignalling)
+        val newline = OutgoingTyping()
+        assertEquals(TypingSignal.Active, newline.draftChanged("\n/join #x", t0))
     }
 
     @Test

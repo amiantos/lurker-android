@@ -279,9 +279,11 @@ class ComposerModelTest {
     // MARK: - Send
 
     @Test
-    fun `only something other than whitespace sends, trimmed`() {
+    fun `only something other than whitespace sends, trailing whitespace trimmed`() {
         assertNull(ComposerModel.sendable(" \n\t"))
-        assertEquals("hi", ComposerModel.sendable("  hi\n"))
+        // Leading whitespace stays: it decides whether a line is a command (lurker-ios#210).
+        assertEquals("  hi", ComposerModel.sendable("  hi\n"))
+        assertEquals(" /whois bob", ComposerModel.sendable(" /whois bob"))
         assertTrue(ComposerModel.isBlank("\u00A0\n"))
     }
 

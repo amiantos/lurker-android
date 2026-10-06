@@ -1,5 +1,5 @@
 {
-  "pin": "caaeab24723d3cb4413ce44c95c2a8a6c38072fd",
+  "pin": "13536276a6de4edeaf710465536c9a4c0b6d7284",
   "tranches": [
     {
       "id": "T1",
@@ -214,7 +214,7 @@
     "Model/PreviewText.swift": "`stripHiddenUrls` takes an `AttributedBody` interface for `:app` to implement, where LurkerKit takes an `NSMutableAttributedString`.",
     "Model/Consolidation.swift": "Returns structure, not sentences: the wording is the app's renderer's.",
     "Model/MessageRows.swift": "`AwayDivider`'s reason is `awayMessage`. Day boundaries depend on time-zone data; verify on a device.",
-    "Commands/CommandParser.swift": "`parse` takes the app's date formatter, for the `/ignore` listing. Lines are cut by UTF-16 unit; differs from Swift only where a combining mark follows a slash, a space or a sigil. `argLine` and `body()` trim newlines too (lurker-ios#197). `awayFlag` (lurker#994): a space wearing a combining mark leaves the mark behind here, where Swift drops it with the separator — Port note + port-only test.",
+    "Commands/CommandParser.swift": "`parse` takes the app's date formatter, for the `/ignore` listing. Lines are cut by UTF-16 unit; differs from Swift only where a combining mark follows a slash, a space or a sigil. `argLine` and `body()` trim newlines too (lurker-ios#197). `awayFlag` (lurker#994): a space wearing a combining mark leaves the mark behind here, where Swift drops it with the separator — Port note + port-only test. lurker-ios#210: `sendable` trims and tests by `Char` where the Swift walks scalars — every whitespace character is in the BMP, so the two agree.",
     "Commands/Command.swift": "`CommandEffect` is a sealed interface of 23 cases in Swift order.",
     "Model/NickCompletion.swift": "`spokenPunctuation` and `isMarkScalar` read the JDK's Unicode tables; verify on a device.",
     "Model/Drafts.swift": "`DraftSync` is a mutable class (case 3).",
@@ -237,7 +237,8 @@
     "Client/JSONTextRepair.swift": "Not ported: a workaround for Foundation's `JSONSerialization` (it refuses a lone surrogate escape and strips a leading U+FEFF), and kotlinx does neither (PORTING.md, JSON). The one visible difference: a lone surrogate the server sent reads as U+FFFD on iOS and as the lone unit here.",
     "Model/Speakers.swift": "Entries keep each nick as last spelled, for nick completion (`recent`, newest first, case-folded tiebreak).",
     "Client/ImageAnimation.swift": "UTIs → MIME types (PORTING.md), as `ImageShrink`: gif/png/webp/heic-sequence. `public.avis` has no MIME (a still and an AVIF sequence are both `image/avif`, and allowing that would let a gain-map AVIF play), so it is left out; `ImageAnimationTests.animationsPlay` checks the other four. Unused on Android: `ImageDecoder` returns an `AnimatedImageDrawable` only for a picture that animates.",
-    "Model/TabCompletion.swift": "A mutable class (case 3): `cycle` moves the session and returns the edit. The token and its surroundings are `substring`s; the cuts fall only at whitespace or the text's ends, so no surrogate pair splits."
+    "Model/TabCompletion.swift": "A mutable class (case 3): `cycle` moves the session and returns the edit. The token and its surroundings are `substring`s; the cuts fall only at whitespace or the text's ends, so no surrogate pair splits.",
+    "Model/MemberPrefix.swift": "lurker-ios#191: `of`/`order`/`sorted`/`mark` take the network's `List<PrefixMode>?`; `Tier` is an enum class (Owner…Voice, Kotlin casing) and `Mark` a data class. `sorted`'s Port note (UTF-16 compare, stable sort) carries over."
   },
   "testNotes": {
     "NotificationTapTests.swift": {

@@ -32,6 +32,13 @@ class CommandCompletionTests {
         )
     }
 
+    /** lurker-ios#210: ` /jo` sends as text, so it offers no commands. */
+    @Test
+    fun testALeadingSpaceIsNotACommand() {
+        assertNull(CommandCompletion.context(" /jo", caret = 4))
+        assertNull(CommandCompletion.context("\n/join #l", caret = 9))
+    }
+
     @Test
     fun testTypingTheVerbFiltersCommands() {
         assertEquals(
@@ -253,13 +260,14 @@ class CommandCompletionTests {
     @Test
     fun testTheCompleterSplitsOnFoundationsWhitespace() {
         // `CharacterSet.whitespacesAndNewlines` here, not `Character.isWhitespace` as in the
-        // parser: a zero-width space and a no-break space both separate.
+        // parser: a zero-width space and a no-break space both separate. (Between the verb and its
+        // argument: a leading one makes the line text, lurker-ios#210.)
         assertEquals(
             CommandCompletion.Context.Argument(
                 verb = "msg", index = 0, kind = ArgKind.Nick, query = "al",
-                range = TextRange.of(location = 6, length = 2),
+                range = TextRange.of(location = 5, length = 2),
             ),
-            CommandCompletion.context("\u200B/msg al", caret = 8),
+            CommandCompletion.context("/msg\u200Bal", caret = 7),
         )
         assertEquals(
             CommandCompletion.Context.Argument(
