@@ -92,6 +92,28 @@ class ComposerModelTest {
         assertEquals(listOf("&lisp"), ComposerModel.channelCandidates(buffers, 1, "#lis"))
     }
 
+    @Test
+    fun `Tab's channels lead with the one you're in, then the network's others alphabetically`() {
+        val buffers = listOf(
+            Buffer(networkId = 1, target = "#zebra", kind = BufferKind.Channel),
+            Buffer(networkId = 1, target = "#Lurker", kind = BufferKind.Channel),
+            Buffer(networkId = 1, target = "#apple", kind = BufferKind.Channel),
+            Buffer(networkId = 1, target = "&local", kind = BufferKind.Channel),
+            Buffer(networkId = 2, target = "#elsewhere", kind = BufferKind.Channel),
+            Buffer(networkId = 1, target = "bob", kind = BufferKind.Dm),
+        )
+        // Matched as an id: `#lurker` is `#Lurker`. Every one, uncapped — Tab filters and cycles.
+        assertEquals(
+            listOf("#Lurker", "#apple", "#zebra", "&local"),
+            ComposerModel.tabChannels(buffers, 1, BufferKey(networkId = 1, target = "#lurker")),
+        )
+        // From a DM, nothing leads.
+        assertEquals(
+            listOf("#apple", "#Lurker", "#zebra", "&local"),
+            ComposerModel.tabChannels(buffers, 1, BufferKey(networkId = 1, target = "bob")),
+        )
+    }
+
     // MARK: - Insertion
 
     @Test

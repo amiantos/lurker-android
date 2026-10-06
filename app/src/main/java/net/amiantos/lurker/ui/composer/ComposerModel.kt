@@ -232,6 +232,12 @@ internal object ComposerModel {
     /** How many channel chips a channel argument offers. */
     const val CHANNEL_LIMIT = 4
 
+    /**
+     * How many nicks Tab cycles through (`TabCompletion`, lurker-android#63) — far past the pills'
+     * four, since Tab reaches the rest by pressing it again rather than by reading a row of them.
+     */
+    const val TAB_NICK_LIMIT = 50
+
     // MARK: - Completion
 
     /**
@@ -283,6 +289,20 @@ internal object ComposerModel {
             .sortedBy { it.lowercase() }
             .take(limit)
             .toList()
+    }
+
+    /**
+     * The channels Tab offers for a `#` word (`TabCompletion`, lurker-android#63), best first: the
+     * buffer you're in leads when it's a channel, then the rest of [networkId]'s channels sorted
+     * case-insensitively. The web ranks the rest by recency; the apps keep no recency list of
+     * channels, so they go alphabetically, as the pills do. Unfiltered — `TabCompletion` filters by
+     * what was typed.
+     */
+    fun tabChannels(buffers: Collection<Buffer>, networkId: Int?, current: BufferKey): List<String> {
+        val channels = buffers.filter { it.networkId == networkId && it.kind == BufferKind.Channel }
+        val here = channels.firstOrNull { it.key.id == current.id }
+        val rest = channels.filter { it !== here }.map { it.target }.sortedBy { it.lowercase() }
+        return if (here != null) listOf(here.target) + rest else rest
     }
 
     /**

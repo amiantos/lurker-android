@@ -5,6 +5,7 @@ package net.amiantos.lurker.ui.composer
 
 import android.icu.text.SimpleDateFormat
 import android.text.format.DateFormat
+import android.view.KeyCharacterMap
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -25,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.KeyboardActionHandler
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.material3.Icon
@@ -42,7 +44,9 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
@@ -58,6 +62,7 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
@@ -89,9 +94,11 @@ import java.util.Locale
  * the log's own ground at the bottom of the screen and the list's reservation includes it, which is
  * the same arrangement without a material Android doesn't have.
  *
- * Return inserts a newline, on the soft keyboard and a hardware one alike — sending is the button's
- * job alone, as on iOS, so a multi-line message is something you can actually type, and nothing
- * ever acts on an Enter while an IME is composing. Escape cancels a pending reply.
+ * The on-screen keyboard's return inserts a newline, so a multi-line message is something you can
+ * actually type — unless "Enter to send" is on (lurker-android#64), when it reads "Send" and sends.
+ * A hardware keyboard's Enter always sends and Shift+Enter is the newline; Tab completes a nick or a
+ * channel in place, the web's way; Escape cancels a pending reply (lurker-android#63, `ComposerKeys`).
+ * Nothing acts on a key while an IME is composing.
  *
  * Rides the keyboard: the bar pads itself by the IME (and the navigation bar under it), so it sits
  * on top of whichever is taller, and the list above — laid out in reverse, item 0 at the bottom —
@@ -106,20 +113,25 @@ import java.util.Locale
 internal fun ComposerBar(
     state: ComposerState,
     autocapitalizes: StateFlow<Boolean>,
+    /** "Enter to send" (`UiPreferences.composerEnterSends`). */
+    enterSends: StateFlow<Boolean>,
     /** Changes when the day or the zone does — "Away since 2:32 PM" stops being true at midnight. */
     clockKey: Any?,
     modifier: Modifier = Modifier,
     attachments: Attachments? = null,
 ) {
     val capitalizes by autocapitalizes.collectAsStateWithLifecycle()
+    val sends by enterSends.collectAsStateWithLifecycle()
     val away = rememberAwayStrip(state.chrome.away, clockKey)
     ComposerBarContent(
         field = state.field,
         placeholder = ComposerModel.placeholder(state.chrome, state.key, state.kind),
         strip = ComposerModel.strip(state.reply, away),
         capitalizes = capitalizes,
+        enterSends = sends,
         focusRequester = state.focusRequester,
         onSend = state::send,
+        onTab = state::tabComplete,
         onCancelReply = state::cancelReply,
         onBack = state::back,
         onFocusChange = { focused ->
@@ -141,8 +153,12 @@ internal fun ComposerBarContent(
     placeholder: String,
     strip: Strip,
     capitalizes: Boolean,
+    /** The on-screen keyboard's return sends rather than starting a new line. */
+    enterSends: Boolean,
     focusRequester: FocusRequester,
     onSend: () -> Unit,
+    /** Tab from a hardware keyboard: complete in place, backward with Shift. */
+    onTab: (backward: Boolean) -> Unit,
     onCancelReply: () -> Unit,
     onBack: () -> Unit,
     /** The field gained (true) or lost (false) focus — only on a change, never for the initial state. */
@@ -180,7 +196,10 @@ internal fun ComposerBarContent(
             verticalAlignment = Alignment.Bottom,
         ) {
             leading?.invoke(collapsed)
-            Field(field, placeholder, capitalizes, collapsed, focusRequester, onFocusChange, onCancelReply, isComposing, strip is Strip.Reply, fieldModifier)
+            Field(
+                field, placeholder, capitalizes, enterSends, collapsed, focusRequester, onFocusChange,
+                FieldKeys(onSend, onTab, onCancelReply), isComposing, strip is Strip.Reply, fieldModifier,
+            )
             // Derived, so the bar recomposes when the answer flips rather than on every keystroke.
             val canSend by remember(field) { derivedStateOf { ComposerModel.sendable(field.text.toString()) != null } }
             SendButton(enabled = canSend, size = collapsed, onClick = onSend)
@@ -202,15 +221,19 @@ internal fun collapsedHeight(): Dp {
 private val FIELD_INSET_VERTICAL = 10.dp
 private val FIELD_INSET_HORIZONTAL = 14.dp
 
+/** What the field's keys do — see `ComposerKeys`. */
+private class FieldKeys(val onSend: () -> Unit, val onTab: (backward: Boolean) -> Unit, val onCancelReply: () -> Unit)
+
 @Composable
 private fun androidx.compose.foundation.layout.RowScope.Field(
     field: TextFieldState,
     placeholder: String,
     capitalizes: Boolean,
+    enterSends: Boolean,
     collapsed: Dp,
     focusRequester: FocusRequester,
     onFocusChange: (Boolean) -> Unit,
-    onCancelReply: () -> Unit,
+    actions: FieldKeys,
     isComposing: () -> Boolean,
     replyPending: Boolean,
     modifier: Modifier,
@@ -218,6 +241,7 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
     val colors = LurkerTheme.colors
     val text = MaterialTheme.typography.bodyLarge
     val focused = remember { booleanArrayOf(false) }
+    val keys = remember { ComposerKeys() }
     BasicTextField(
         state = field,
         modifier = Modifier
@@ -235,22 +259,53 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
                 }
             }
             .onPreviewKeyEvent { event ->
-                // Escape cancels a pending reply — and only then, so otherwise it does whatever it
-                // would. Never mid-composition, where Escape is the IME's.
-                if (event.type == KeyEventType.KeyDown && event.key == Key.Escape && replyPending && !isComposing()) {
-                    onCancelReply()
-                    true
-                } else {
-                    false
+                // Enter sends, Tab completes, Escape cancels a pending reply — each only when
+                // `ComposerKeys` says so, and never mid-composition, where the key is the IME's.
+                // Anything it passes does whatever it would.
+                val down = when (event.type) {
+                    KeyEventType.KeyDown -> true
+                    KeyEventType.KeyUp -> false
+                    else -> return@onPreviewKeyEvent false
                 }
+                val key = composerKey(event)
+                val action = keys.onKey(
+                    ComposerKeys.Event(
+                        key = key,
+                        down = down,
+                        shift = event.isShiftPressed,
+                        // Asked of Enter alone, the one key where it matters.
+                        hardware = key != ComposerKeys.Key.Enter || isHardwareKey(event),
+                        composing = isComposing(),
+                        enterSends = enterSends,
+                        replyPending = replyPending,
+                    ),
+                )
+                when (action) {
+                    ComposerKeys.Action.Pass -> return@onPreviewKeyEvent false
+                    ComposerKeys.Action.Send -> actions.onSend()
+                    ComposerKeys.Action.Complete -> actions.onTab(false)
+                    ComposerKeys.Action.CompleteBackward -> actions.onTab(true)
+                    ComposerKeys.Action.CancelReply -> actions.onCancelReply()
+                    ComposerKeys.Action.Swallow -> Unit
+                }
+                true
             },
         textStyle = text.copy(color = colors.fg),
         cursorBrush = SolidColor(colors.accent),
         // Capitals per the device setting (`UiPreferences.composerAutocapitalizes`); autocorrect left
         // at the keyboard's own default — the user's system-wide preference stays the boss.
+        //
+        // "Enter to send" (`UiPreferences.composerEnterSends`) asks for the Send action: the field stays
+        // multi-line (a hardware Shift+Enter, or a pasted line break, still makes one), but the
+        // keyboard's return key reads "Send" and fires `onKeyboardAction` instead of typing a newline.
+        // Off, the action is left at Default, which a multi-line field turns into a plain newline key.
         keyboardOptions = KeyboardOptions(
             capitalization = if (capitalizes) KeyboardCapitalization.Sentences else KeyboardCapitalization.None,
+            imeAction = if (enterSends) ImeAction.Send else ImeAction.Default,
         ),
+        // The Send button's own path, checks and all: an empty draft does nothing — and, the default
+        // action never being run, no newline goes in either.
+        onKeyboardAction = if (enterSends) KeyboardActionHandler { actions.onSend() } else null,
         lineLimits = TextFieldLineLimits.MultiLine(minHeightInLines = 1, maxHeightInLines = ComposerModel.MAX_LINES),
         decorator = { inner ->
             Box(Modifier.padding(horizontal = FIELD_INSET_HORIZONTAL, vertical = FIELD_INSET_VERTICAL)) {
@@ -263,6 +318,25 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
             }
         },
     )
+}
+
+/** The key as `ComposerKeys` names it — the numpad's Enter is Enter. */
+private fun composerKey(event: KeyEvent): ComposerKeys.Key = when (event.key) {
+    Key.Enter, Key.NumPadEnter -> ComposerKeys.Key.Enter
+    Key.Tab -> ComposerKeys.Key.Tab
+    Key.Escape -> ComposerKeys.Key.Escape
+    else -> ComposerKeys.Key.Other
+}
+
+/**
+ * Whether [event] came from a physical keyboard. ⚠ Some on-screen keyboards send a real
+ * `KEYCODE_ENTER` rather than text or an editor action, and that Enter must follow "Enter to send"
+ * rather than always sending. Theirs arrive from the virtual keyboard device (`VIRTUAL_KEYBOARD`, a
+ * device that says it `isVirtual`); an event with no device at all is treated as theirs too.
+ */
+private fun isHardwareKey(event: KeyEvent): Boolean {
+    val native = event.nativeKeyEvent
+    return native.deviceId != KeyCharacterMap.VIRTUAL_KEYBOARD && native.device?.isVirtual == false
 }
 
 /**
@@ -437,8 +511,10 @@ private fun ComposerPreview(
                 placeholder = placeholder,
                 strip = strip,
                 capitalizes = true,
+                enterSends = false,
                 focusRequester = remember { FocusRequester() },
                 onSend = {},
+                onTab = {},
                 onCancelReply = {},
                 onBack = {},
                 onFocusChange = {},

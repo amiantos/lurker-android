@@ -65,6 +65,27 @@ class UiPreferences(private val prefs: StringPrefs) {
      */
     private fun readComposerAutocapitalizes(): Boolean = prefs.getString(COMPOSER_AUTOCAPITALIZATION) != "false"
 
+    private val enterSends = MutableStateFlow(readComposerEnterSends())
+
+    /**
+     * "Enter to send" (lurker-android#64): whether the on-screen keyboard's return key sends — it
+     * reads "Send" then — rather than starting a new line. Off by default, so a multi-line message
+     * stays something you can type without knowing about a setting.
+     *
+     * Only the on-screen keyboard's: a hardware keyboard's Enter always sends and Shift+Enter starts
+     * a new line (lurker-android#63), whatever this says. Device-local, and a flow, for the same
+     * reasons as [composerAutocapitalizes] beside it.
+     */
+    val composerEnterSends: StateFlow<Boolean> = enterSends.asStateFlow()
+
+    fun setComposerEnterSends(on: Boolean) {
+        prefs.putString(COMPOSER_ENTER_SENDS, on.toString())
+        enterSends.value = on
+    }
+
+    /** Only a stored `true` is on: absent, or anything unreadable, is the default — off. */
+    private fun readComposerEnterSends(): Boolean = prefs.getString(COMPOSER_ENTER_SENDS) == "true"
+
     /**
      * The buffer that was on screen when the app was last used, so a relaunch lands where you
      * left off (lurker-ios#49). Written when a conversation appears and forgotten when the reader
@@ -139,5 +160,7 @@ class UiPreferences(private val prefs: StringPrefs) {
 
         /** iOS's key, kept so the two apps' preference files read the same. */
         private const val COMPOSER_AUTOCAPITALIZATION = "composerAutocapitalization"
+
+        private const val COMPOSER_ENTER_SENDS = "composerEnterSends"
     }
 }
