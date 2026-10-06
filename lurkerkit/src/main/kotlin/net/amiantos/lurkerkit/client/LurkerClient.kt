@@ -1734,6 +1734,44 @@ internal class LurkerClient(
     }
 
     /**
+     * Is [endpoint] still filed for this account (`POST /api/push/heartbeat`, which also marks it
+     * seen)? The server deletes relay subscriptions when its admin turns the relay off, which this
+     * app never hears about — so the registrar asks rather than trusting what it filed. True or false
+     * as the server says (a 404, an older server without the route, reads false: file it again); null
+     * when it didn't answer, which says nothing either way.
+     */
+    suspend fun relayHeartbeat(endpoint: String): Boolean? {
+        val sessionToken = this.token ?: return null
+        val url = (baseURL + "/api/push/heartbeat").toHttpUrlOrNull() ?: return null
+        val request = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer $sessionToken")
+            .header("Content-Type", "application/json")
+            .post(jsonBody(buildJsonObject { put("endpoint", endpoint) }))
+            .build()
+        val (code, data) = try {
+            session.await(request)
+        } catch (_: IOException) {
+            return null
+        }
+        if (code == 404) return false
+        if (code !in 200..<300) return null
+        return FrameParser.jsonObject(data)?.bool("present") ?: false
+    }
+
+    /** Take a direct FCM token off this account now — the route moved to the relay. */
+    suspend fun dropDevice(deviceToken: String) {
+        val sessionToken = this.token ?: return
+        deregisterDevice(session = session, baseURL = baseURL, sessionToken = sessionToken, deviceToken = deviceToken)
+    }
+
+    /** Take a relay endpoint off this account now — the route moved to direct FCM. */
+    suspend fun dropRelaySubscription(endpoint: String) {
+        val sessionToken = this.token ?: return
+        deregisterRelaySubscription(session = session, baseURL = baseURL, sessionToken = sessionToken, endpoint = endpoint)
+    }
+
+    /**
      * File a push.lurker.chat endpoint as a Web Push subscription (`POST /api/push/subscriptions`,
      * lurker-dev/RELAY_PLAN.md §6.2) with this install's keys. The status the server answered, or
      * null when it didn't answer at all: a `403` means the admin turned the relay off since the

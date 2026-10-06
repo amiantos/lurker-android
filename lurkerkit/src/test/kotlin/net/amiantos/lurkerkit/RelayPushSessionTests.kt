@@ -221,4 +221,63 @@ class RelayPushSessionTests {
             assertEquals(null, h.onMain { h.model.pushRoute(false) })
         }
     }
+
+    // MARK: - A relay turned off and on unseen
+
+    @Test
+    fun testTheServerSaysWhetherTheEndpointIsStillFiled() = runBlocking {
+        val endpoint = "https://push.lurker.chat/relay-to/fcm/tok123/$key"
+        for ((answer, expected) in listOf(
+            (200 to """{"ok":true,"present":true}""") to true,
+            // Deleted when the admin turned the relay off: file it again.
+            (200 to """{"ok":true,"present":false}""") to false,
+            // An older server without the route.
+            (404 to "") to false,
+            // No real answer: says nothing either way.
+            (503 to "") to null,
+        )) {
+            Harness(Server(mapOf("/api/push/heartbeat" to answer))).use { h ->
+                h.signedIn()
+                assertEquals(expected, h.onMain { h.model.relaySubscriptionPresent(endpoint) }, answer.toString())
+                val sent = h.server.requests.single { it.startsWith("POST /api/push/heartbeat") }
+                assertTrue(sent.contains("\"endpoint\":\"$endpoint\""), sent)
+            }
+        }
+    }
+
+    // MARK: - Switching routes
+
+    @Test
+    fun testMovingToTheRelayTakesTheDirectTokenOff() = runBlocking {
+        Harness(Server(mapOf("/api/push/subscriptions" to (201 to "{}")))).use { h ->
+            h.signedIn()
+            h.onMain { h.model.registerPushDevice("fcm-token-1") }
+            h.onMain { h.model.registerRelaySubscription("https://push.lurker.chat/relay-to/fcm/fcm-token-1/$key", DeviceKeys.generate()) }
+            val delete = h.server.requests.indexOfFirst { it.startsWith("DELETE /api/push/devices") }
+            val file = h.server.requests.indexOfFirst { it.startsWith("POST /api/push/subscriptions") }
+            assertTrue(delete >= 0 && h.server.requests[delete].contains("fcm-token-1"), h.server.requests.toString())
+            assertTrue(delete < file)
+            // And sign-out doesn't try to take the token off again.
+            h.onMain { h.model.logout() }
+            withTimeout(5_000) { while (h.server.requests.none { it.startsWith("POST /api/auth/logout") }) delay(20) }
+            assertEquals(1, h.server.requests.count { it.startsWith("DELETE /api/push/devices") })
+        }
+    }
+
+    @Test
+    fun testMovingToDirectTakesTheRelayEndpointOff() = runBlocking {
+        val endpoint = "https://push.lurker.chat/relay-to/fcm/fcm-token-1/$key"
+        Harness(Server(mapOf("/api/push/subscriptions" to (201 to "{}")))).use { h ->
+            h.signedIn()
+            h.onMain { h.model.registerRelaySubscription(endpoint, DeviceKeys.generate()) }
+            h.onMain { h.model.registerPushDevice("fcm-token-1") }
+            val delete = h.server.requests.indexOfFirst { it.startsWith("DELETE /api/push/subscriptions") }
+            val file = h.server.requests.indexOfFirst { it.startsWith("POST /api/push/devices") }
+            assertTrue(delete >= 0 && h.server.requests[delete].contains(endpoint), h.server.requests.toString())
+            assertTrue(delete < file)
+            h.onMain { h.model.logout() }
+            withTimeout(5_000) { while (h.server.requests.none { it.startsWith("POST /api/auth/logout") }) delay(20) }
+            assertEquals(1, h.server.requests.count { it.startsWith("DELETE /api/push/subscriptions") })
+        }
+    }
 }

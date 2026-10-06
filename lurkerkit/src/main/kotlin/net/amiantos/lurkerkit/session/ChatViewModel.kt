@@ -654,6 +654,13 @@ class ChatViewModel(
      */
     suspend fun registerRelaySubscription(endpoint: String, keys: DeviceKeys): RelayRegistration {
         if (session != SessionState.LoggedIn) return RelayRegistration.Failed
+        // The other way round: a direct token this session filed goes, or pushes arrive twice.
+        deviceToken?.let { old ->
+            deviceToken = null
+            client.dropDevice(old)
+        }
+        // A different endpoint filed earlier (a rotated FCM token, a changed server key) goes too.
+        relayEndpoint?.takeIf { it != endpoint }?.let { client.dropRelaySubscription(it) }
         relayEndpoint = endpoint
         val code = client.registerRelaySubscription(endpoint, keys.p256dh, keys.auth) ?: return RelayRegistration.Failed
         return when {
@@ -667,6 +674,17 @@ class ChatViewModel(
             }
             else -> RelayRegistration.Failed
         }
+    }
+
+    /**
+     * Is [endpoint] still filed for this account? The server deletes relay subscriptions when its
+     * admin turns the relay off — and turned back on while this app was in the background, nothing
+     * here would know. So the registrar asks on every enable rather than trusting what it filed:
+     * false means file it again; null means the server didn't answer.
+     */
+    suspend fun relaySubscriptionPresent(endpoint: String): Boolean? {
+        if (session != SessionState.LoggedIn) return null
+        return client.relayHeartbeat(endpoint)
     }
 
     /**
@@ -686,8 +704,17 @@ class ChatViewModel(
      * token on most launches, and the server upserts.
      */
     suspend fun registerPushDevice(token: String): Boolean {
+        if (session != SessionState.LoggedIn) {
+            deviceToken = token
+            return false
+        }
+        // The server gained FCM since this session filed a relay endpoint (the hosted service, or
+        // an operator adding a key): take the relay one off, or every push arrives twice.
+        relayEndpoint?.let { old ->
+            relayEndpoint = null
+            client.dropRelaySubscription(old)
+        }
         deviceToken = token
-        if (session != SessionState.LoggedIn) return false
         return client.registerDevice(token = token)
     }
 

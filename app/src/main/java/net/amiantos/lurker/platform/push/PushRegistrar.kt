@@ -218,16 +218,23 @@ class PushRegistrar(
         if (token == registeredToken) return Outcome.Registered
         if (!model.registerPushDevice(token)) return Outcome.Rejected
         registeredToken = token
+        // The view model took any relay endpoint off as it filed this; so the cache forgets it.
+        registeredRelay = null
         return Outcome.Registered
     }
 
     private suspend fun registerRelay(endpoint: String): Outcome {
         val keys = pushKeys.loadOrCreate() ?: return Outcome.Failed("couldn't store this device's push keys")
         val filing = endpoint to keys.p256dh
-        if (filing == registeredRelay) return Outcome.Registered
+        // Filed already — but the server deletes relay subscriptions when its admin turns the relay
+        // off, and off-then-on while we were away looks unchanged from here. So ask; an unanswered
+        // ask keeps what we have (re-filing wouldn't get through either).
+        if (filing == registeredRelay && model.relaySubscriptionPresent(endpoint) != false) return Outcome.Registered
         return when (model.registerRelaySubscription(endpoint, keys)) {
             ChatViewModel.RelayRegistration.Registered -> {
                 registeredRelay = filing
+                // The view model took any direct token off as it filed this.
+                registeredToken = null
                 Outcome.Registered
             }
             ChatViewModel.RelayRegistration.RelayOff -> {

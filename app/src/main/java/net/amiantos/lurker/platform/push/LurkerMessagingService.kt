@@ -27,8 +27,15 @@ class LurkerMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         val app = application as LurkerApp
-        val data = message.data["p"]?.let { opened(app, it) ?: return } ?: message.data
-        val push = PushMessage.parse(data) ?: return
+        // Anything at all thrown reading a push drops that push: the body is the network's input,
+        // and nothing from it may escape FCM's callback and take the process down.
+        val push = try {
+            val data = message.data["p"]?.let { opened(app, it) ?: return } ?: message.data
+            PushMessage.parse(data) ?: return
+        } catch (t: Throwable) {
+            Log.w(TAG, "dropped a push that couldn't be read: ${t.javaClass.simpleName}")
+            return
+        }
         // On the main thread, where sign-out clears notifications (`LurkerApp.observeSession`): checked
         // and posted there, a sign-out can't land between the check and the post and leave the
         // departing account's message on the lock screen. Blocking this worker briefly is fine; it's

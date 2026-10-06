@@ -4,8 +4,6 @@
 package net.amiantos.lurkerkit.push
 
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -73,35 +71,33 @@ object RelayPush {
         if (url.encodedPath != "/" || url.query != null || url.username.isNotEmpty()) return null
         // Normalized: host case-folded by HttpUrl, the default port dropped, so
         // `https://PUSH.lurker.chat:443/` is push.lurker.chat.
-        val origin = if (url.port == 443) "https://${url.host}" else "https://${url.host}:${url.port}"
+        // HttpUrl gives an IPv6 host without its brackets; an origin needs them back.
+        val host = if (':' in url.host) "[${url.host}]" else url.host
+        val origin = if (url.port == 443) "https://$host" else "https://$host:${url.port}"
         return if (allowAnyHttps || origin == OFFICIAL_RELAY) origin else null
     }
 
     /**
      * A decrypted relay push as the string map a direct FCM push arrives with, so `PushMessage.parse`
      * reads both. The server builds that map from the same body (`fcmSender.buildFcmMessage`): every
-     * value through JavaScript's `String()`, null left out. Null if [plaintext] isn't a JSON object.
+     * value through JavaScript's `String()`, null left out — and a number or boolean prints as its
+     * JSON text, the way `String()` would.
+     *
+     * The body is flat (`pushBody()`), so only top-level scalars are taken; an array or object is
+     * dropped rather than walked. Null if [plaintext] isn't a JSON object, or can't be parsed at all —
+     * including nesting deep enough to exhaust the stack, which is caught here, not left to escape
+     * the FCM callback.
      */
     fun flatten(plaintext: String): Map<String, String>? {
-        val body = runCatching { Json.parseToJsonElement(plaintext) }.getOrNull() as? JsonObject ?: return null
+        val body = try {
+            Json.parseToJsonElement(plaintext) as? JsonObject
+        } catch (_: Throwable) {
+            null
+        } ?: return null
         val data = LinkedHashMap<String, String>()
         for ((key, value) in body) {
-            if (value is JsonNull) continue
-            data[key] = jsString(value)
+            if (value is JsonPrimitive && value !is JsonNull) data[key] = value.content
         }
         return data
-    }
-
-    /**
-     * JavaScript's `String(value)` on a parsed JSON value. A number or boolean prints as its JSON
-     * text (the server's `JSON.stringify` writes them the way `String()` would); an array joins its
-     * elements with commas, null as nothing; an object is "[object Object]". The push body has no
-     * arrays or objects today — this is here so one added later reads the same on both paths.
-     */
-    private fun jsString(value: JsonElement): String = when (value) {
-        is JsonNull -> "null"
-        is JsonPrimitive -> value.content
-        is JsonArray -> value.joinToString(",") { if (it is JsonNull) "" else jsString(it) }
-        is JsonObject -> "[object Object]"
     }
 }

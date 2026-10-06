@@ -256,4 +256,129 @@ class RelayPushTests {
             route.endpoint("dX7:APA91b-x_y.z"),
         )
     }
+
+    // MARK: - Hostile bodies, properly encrypted
+
+    /**
+     * RFC 8291 encryption for the tests that need a body the decryptor will authenticate: a hostile
+     * plaintext the server never sends but a compromised one could. [recordSize] is the header's;
+     * a body bigger than the 4 KB a push can be still declares a record that fits it.
+     */
+    private fun encrypt(plaintext: ByteArray, to: DeviceKeys, recordSize: Int = 4096): ByteArray {
+        fun hmac(key: ByteArray, data: ByteArray): ByteArray =
+            javax.crypto.Mac.getInstance("HmacSHA256").run {
+                init(javax.crypto.spec.SecretKeySpec(key, "HmacSHA256"))
+                doFinal(data)
+            }
+        val generator = java.security.KeyPairGenerator.getInstance("EC")
+        generator.initialize(java.security.spec.ECGenParameterSpec("secp256r1"))
+        val sender = generator.generateKeyPair()
+        val w = (sender.public as java.security.interfaces.ECPublicKey).w
+        fun fixed(n: java.math.BigInteger) = n.toByteArray().let { if (it.size > 32) it.copyOfRange(it.size - 32, it.size) else ByteArray(32 - it.size) + it }
+        val senderPoint = byteArrayOf(0x04) + fixed(w.affineX) + fixed(w.affineY)
+        val receiver = java.security.KeyFactory.getInstance("EC").generatePublic(
+            java.security.spec.ECPublicKeySpec(
+                java.security.spec.ECPoint(
+                    java.math.BigInteger(1, to.publicKey.copyOfRange(1, 33)),
+                    java.math.BigInteger(1, to.publicKey.copyOfRange(33, 65)),
+                ),
+                (sender.public as java.security.interfaces.ECPublicKey).params,
+            ),
+        )
+        val shared = javax.crypto.KeyAgreement.getInstance("ECDH").run {
+            init(sender.private)
+            doPhase(receiver, true)
+            generateSecret()
+        }
+        val salt = ByteArray(16).also(java.security.SecureRandom()::nextBytes)
+        val ikm = hmac(hmac(to.authSecret, shared), "WebPush: info".toByteArray() + byteArrayOf(0) + to.publicKey + senderPoint + byteArrayOf(1)).copyOf(32)
+        val prk = hmac(salt, ikm)
+        val cek = hmac(prk, "Content-Encoding: aes128gcm".toByteArray() + byteArrayOf(0, 1)).copyOf(16)
+        val nonce = hmac(prk, "Content-Encoding: nonce".toByteArray() + byteArrayOf(0, 1)).copyOf(12)
+        val ciphertext = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding").run {
+            init(javax.crypto.Cipher.ENCRYPT_MODE, javax.crypto.spec.SecretKeySpec(cek, "AES"), javax.crypto.spec.GCMParameterSpec(128, nonce))
+            doFinal(plaintext + byteArrayOf(0x02))
+        }
+        val rs = java.nio.ByteBuffer.allocate(4).putInt(recordSize).array()
+        return salt + rs + byteArrayOf(65) + senderPoint + ciphertext
+    }
+
+    @Test
+    fun testTheTestEncryptorRoundTrips() {
+        val keys = DeviceKeys.generate()
+        val body = encrypt("""{"title":"t","tag":"x"}""".toByteArray(), keys)
+        assertEquals("""{"title":"t","tag":"x"}""", WebPushDecrypt.decrypt(body, keys)?.decodeToString())
+    }
+
+    @Test
+    fun testAnAuthenticatedDeeplyNestedBodyIsDroppedNotACrash() {
+        val keys = DeviceKeys.generate()
+        val depth = 200_000
+        val hostile = """{"title":"t","tag":"x","n":""" + "[".repeat(depth) + "]".repeat(depth) + "}"
+        val body = encrypt(hostile.toByteArray(), keys, recordSize = hostile.length + 1024)
+        val plain = assertNotNull(WebPushDecrypt.decrypt(body, keys)).decodeToString()
+        // Parsing that may exhaust the stack; either way it's an answer, not a thrown error.
+        val flat = RelayPush.flatten(plain)
+        if (flat != null) assertEquals(mapOf("title" to "t", "tag" to "x"), flat)
+    }
+
+    @Test
+    fun testOnlyTopLevelScalarsAreTaken() {
+        // The body is flat; anything nested is dropped, not walked.
+        val flat = assertNotNull(RelayPush.flatten("""{"title":"t","tag":"x","a":[1,[2]],"o":{"k":{"j":1}},"n":3}"""))
+        assertEquals(mapOf("title" to "t", "tag" to "x", "n" to "3"), flat)
+    }
+
+    // MARK: - Debug relay origins
+
+    @Test
+    fun testAnIpv6RelayKeepsItsBrackets() {
+        assertEquals(
+            PushRoute.Relay("https://[::1]:8030", key),
+            RelayPush.route(PushConfig(key, listOf("webpush"), "https://[::1]:8030"), allowAnyHttpsRelay = true),
+        )
+        assertEquals(
+            PushRoute.Relay("https://[fd00::1]", key),
+            RelayPush.route(PushConfig(key, listOf("webpush"), "https://[fd00::1]/"), allowAnyHttpsRelay = true),
+        )
+    }
+
+    // MARK: - Concurrent recovery
+
+    @Test
+    fun testALoadRacingAReplacementCantDeleteIt() {
+        // Android's secure storage deletes a blob it can't decrypt. A worker reading stale keys must
+        // not delete the replacements the registrar wrote while it was reading.
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val storage = object : net.amiantos.lurkerkit.session.SecureStorage {
+            val map = java.util.concurrent.ConcurrentHashMap<String, okio.ByteString>()
+            val first = java.util.concurrent.atomic.AtomicBoolean(true)
+            override fun read(account: String): okio.ByteString? {
+                val blob = map[account] ?: return null
+                if (blob.utf8() != "stale") return blob
+                // The worker's read stalls mid-decrypt; any read after it fails at once.
+                if (first.getAndSet(false)) {
+                    entered.countDown()
+                    release.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                }
+                map.remove(account) // undecryptable: dropped, whatever is there by now
+                return null
+            }
+            override fun write(account: String, data: okio.ByteString) { map[account] = data }
+            override fun delete(account: String) { map.remove(account) }
+        }
+        storage.map["relay-push-keys"] = okio.ByteString.Companion.run { "stale".encodeUtf8() }
+        val keys = RelayPushKeys(storage)
+        val worker = Thread { keys.load() }.apply { start() }
+        entered.await(5, java.util.concurrent.TimeUnit.SECONDS)
+        var made: DeviceKeys? = null
+        val registrar = Thread { made = keys.loadOrCreate() }.apply { start() }
+        Thread.sleep(300) // the registrar, unserialized, would write its keys here
+        release.countDown()
+        worker.join(5_000)
+        registrar.join(5_000)
+        val stored = assertNotNull(RelayPushKeys(storage).load(), "the replacement keys survived")
+        assertEquals(assertNotNull(made).p256dh, stored.p256dh)
+    }
 }

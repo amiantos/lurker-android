@@ -23,13 +23,22 @@ import okio.ByteString.Companion.encodeUtf8
  * Loaded keys are cached: a push wakes the process cold, and the Keystore unwrap plus key parsing
  * would otherwise run for every one. One instance is shared by the registrar and the messaging
  * service, so the cache is theirs alike; a write replaces it.
+ *
+ * Every touch of [storage] holds one lock. A read can delete (Android's secure storage drops a blob
+ * it can't decrypt), so an FCM worker loading stale keys while the registrar writes replacements
+ * would otherwise delete the replacements it raced past.
  */
 class RelayPushKeys(private val storage: SecureStorage) {
+
+    private val lock = Any()
 
     @Volatile private var cached: DeviceKeys? = null
 
     /** The stored keys, or null when there are none yet (or they can't be read). */
-    fun load(): DeviceKeys? = cached ?: readStored()?.also { cached = it }
+    fun load(): DeviceKeys? {
+        cached?.let { return it }
+        return synchronized(lock) { cached ?: readStored()?.also { cached = it } }
+    }
 
     /**
      * The stored keys, making and storing them first if there are none. Null when fresh keys can't
@@ -37,8 +46,11 @@ class RelayPushKeys(private val storage: SecureStorage) {
      * would make every push to this phone unreadable. Unreadable stored keys are replaced; the
      * caller compares the p256dh it last filed and files these.
      */
-    fun loadOrCreate(): DeviceKeys? {
-        load()?.let { return it }
+    fun loadOrCreate(): DeviceKeys? = synchronized(lock) { create() }
+
+    private fun create(): DeviceKeys? {
+        cached?.let { return it }
+        readStored()?.let { cached = it; return it }
         val keys = DeviceKeys.generate()
         val form = keys.persisted()
         val json = buildJsonObject {
