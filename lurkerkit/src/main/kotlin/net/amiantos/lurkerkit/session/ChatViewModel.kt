@@ -335,6 +335,9 @@ class ChatViewModel(
     ): Boolean {
         sessionSubject.value = SessionState.LoggingIn
         statusSubject.value = null
+        // Port-only: a new attempt voids one a killed process left in the browser, even if this one
+        // fails before it saves its own.
+        sessions.clearPendingSignIn()
         // A restored session that never came to the foreground was signed out since; this one
         // connects itself, and a held start for the old one must not open a second socket.
         startDeferred = false
@@ -369,7 +372,58 @@ class ChatViewModel(
         val state = OAuth.randomString()
         val page = OAuth.authorizeURL(server = server, clientId = clientId, challenge = pkce.challenge, state = state)
             ?: return signInFailed("That server URL doesn't look right.")
-        val callback = authorize(page) ?: return signInFailed(null)
+        // Port-only: kept until the page answers, so a redirect that outlives this process can still
+        // finish (`resumeSignIn`).
+        sessions.savePendingSignIn(PendingSignIn(server = server, clientId = clientId, state = state, verifier = pkce.verifier))
+        val callback = authorize(page)
+        sessions.clearPendingSignIn()
+        if (callback == null) return signInFailed(null)
+        return finishSignIn(server = server, clientId = clientId, state = state, verifier = pkce.verifier, callback = callback)
+    }
+
+    /**
+     * Finish a sign-in whose redirect arrived with nothing waiting for it: the process that opened
+     * the approval page was killed while it was up, and the redirect started this one. Returns the
+     * server it signed in to, or null; on failure `statusPublisher` carries the reason. (The app
+     * remembers the server on success, and here it never saw what was typed.)
+     *
+     * Ignored while signed in or already signing in: nothing here may end a live session, and an
+     * attempt in flight has its own redirect coming.
+     *
+     * Port-only: see `PendingSignIn`.
+     */
+    suspend fun resumeSignIn(callback: String): String? {
+        if (session != SessionState.LoggedOut) return null
+        // A failure just shown (a duplicate redirect after a refused exchange) keeps its reason.
+        val pending = sessions.pendingSignIn()
+        if (pending == null) {
+            signInFailed(statusSubject.value ?: "That sign-in has already ended. Try again.")
+            return null
+        }
+        // Kept for a redirect that isn't this attempt's (any app or page can open the scheme), so
+        // the real one can still finish; spent once the redirect is its answer.
+        if (OAuth.callback(callback, state = pending.state) == OAuth.Callback.Invalid) {
+            signInFailed("Sign-in didn't finish. Try again.")
+            return null
+        }
+        sessions.clearPendingSignIn()
+        // `signIn`'s own setup, step for step: a change to one belongs in both.
+        sessionSubject.value = SessionState.LoggingIn
+        statusSubject.value = null
+        startDeferred = false
+        awaitMediaPurge()
+        val signedIn = finishSignIn(
+            server = pending.server,
+            clientId = pending.clientId,
+            state = pending.state,
+            verifier = pending.verifier,
+            callback = callback,
+        )
+        return if (signedIn) pending.server else null
+    }
+
+    /** The approval page's answer, traded for a token and the session it opens. */
+    private suspend fun finishSignIn(server: String, clientId: String, state: String, verifier: String, callback: String): Boolean {
         val code: String
         when (val answer = OAuth.callback(callback, state = state)) {
             is OAuth.Callback.Code -> code = answer.code
@@ -378,7 +432,7 @@ class ChatViewModel(
         }
 
         when (
-            val grant = client.exchangeCode(server = server, clientId = clientId, code = code, verifier = pkce.verifier)
+            val grant = client.exchangeCode(server = server, clientId = clientId, code = code, verifier = verifier)
         ) {
             is OAuth.TokenGrant.Token -> {
                 sessions.save(PersistedSession(server = server, token = grant.token))
@@ -467,6 +521,9 @@ class ChatViewModel(
         // The next sign-in may be against a different server, whose answer differs.
         apnsSupported = null
         sessions.clear()
+        // Port-only: an attempt a killed process left out in the browser goes too, so a late
+        // redirect from its tab can't sign this phone back in after a deliberate sign-out.
+        sessions.clearPendingSignIn()
         // The next account's preferences are not this one's — and a privacy switch in
         // particular must not carry across users. Both this and the deliberate sign-out clear
         // it, because either can be followed by someone else signing in on this phone.

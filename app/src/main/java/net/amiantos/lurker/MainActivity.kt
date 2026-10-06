@@ -75,8 +75,10 @@ class MainActivity : ComponentActivity() {
                     dccOffers = app.dccOffers,
                     uploads = app.uploads,
                     signInNotice = app.browserSignIn.notice,
+                    signInWaiting = app.browserSignIn.waiting,
                     lastServerURL = { app.uiPreferences.lastServerURL },
                     onSignIn = app::signIn,
+                    onCancelSignIn = app.browserSignIn::cancel,
                 )
             }
         }
@@ -84,8 +86,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Always before the `onResume` that follows it — which is what lets that resume read "no
-        // redirect" as "the tab was closed" (see `RedirectWaiter`).
         consumeRedirect(intent)
         consumeShare(intent)
         consumeNotificationTap(intent)
@@ -150,11 +150,6 @@ class MainActivity : ComponentActivity() {
         // token comes back the same and the server upserts. lurker-ios does this on scene activation.
         app.push.permissionPrompt = promptForNotifications
         app.push.enableIfSignedIn(mayPrompt = true)
-    }
-
-    override fun onResume() {
-        super.onResume()
-        app.browserSignIn.onHostResumed()
     }
 
     override fun onDestroy() {

@@ -204,8 +204,9 @@ private fun versionLine(context: Context): String {
 
 /**
  * The server this session is on. Not on iOS, and not something the kit exposes — but the app
- * remembers it: `LurkerApp` writes `lastServerURL` only when a sign-in succeeds, and nothing else
- * signs in, so for a signed-in session it is the server in use. Normalized, as the sign-in made it,
+ * remembers it: `LurkerApp` writes `lastServerURL` whenever a sign-in succeeds (`signIn`, or
+ * `resumeSignIn` after a killed process), and nothing else signs in, so for a signed-in session it
+ * is the server in use. Normalized, as the sign-in made it,
  * so it reads as the address actually being talked to rather than as it was typed.
  */
 private fun serverLine(uiPreferences: UiPreferences): String? =
