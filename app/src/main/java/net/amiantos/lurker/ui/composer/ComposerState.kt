@@ -42,6 +42,7 @@ import net.amiantos.lurkerkit.model.OutgoingTyping
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.SpeakerMap
+import net.amiantos.lurkerkit.model.TabCompletion
 import net.amiantos.lurkerkit.session.ChatViewModel
 import java.time.Instant
 
@@ -69,8 +70,10 @@ import java.time.Instant
  * trackers WITHOUT running the hooks, which is the whole of what makes it silent.
  *
  * IME: a `TextFieldState` handles composition natively (no `v-model` freeze, the web's lurker bug),
- * and the composer never acts on Enter at all — Return inserts a newline and sending is the
- * button's job, as on iOS — so nothing here can commit or cut a word the IME still holds.
+ * and the keys the composer does act on — a hardware Enter sending, Tab completing
+ * (lurker-android#63) — are left alone while the IME is composing (`ComposerKeys`), so nothing here
+ * can commit or cut a word the IME still holds. "Enter to send" (lurker-android#64) is the IME's own
+ * action key, which it fires only once it has committed.
  */
 @Stable
 internal class ComposerState(
@@ -192,6 +195,13 @@ internal class ComposerState(
 
     /** The field changed — by the user (observed) or by the composer itself (called directly). */
     internal fun fieldChanged(now: Snapshot) {
+        // Any edit or caret move Tab didn't make ends its session, as any other key does on the web —
+        // `continues` alone would revive it after a letter typed and deleted.
+        tabCompletion?.let { session ->
+            if (now.selection.min != now.selection.max || !session.continues(text = now.text, caret = now.selection.min)) {
+                tabCompletion = null
+            }
+        }
         val textChanged = now.text != lastSeenText
         lastSeenText = now.text
         // What the channel was told is `ComposerTyping`'s to dedupe against — and to forget when typing
@@ -210,7 +220,9 @@ internal class ComposerState(
      * composition the way any edit does.
      */
     private fun emitCompletion(now: Snapshot) {
-        val computed = ComposerModel.completion(now.text, now.selection.min, now.selection.max)
+        // A live Tab completion owns the field: no pills while it cycles (the web closes its pickers
+        // on Tab), or a mid-sentence one would float them over the nick it just finished.
+        val computed = if (tabCompletion != null) null else ComposerModel.completion(now.text, now.selection.min, now.selection.max)
         val last = lastCompletion
         if (last != null && last[0] == computed) return
         lastCompletion = arrayOf(computed)
@@ -232,20 +244,27 @@ internal class ComposerState(
         ComposerModel.suggestions(
             completion,
             channels = { query -> ComposerModel.channelCandidates(model.state.buffers.values, key.networkId, query) },
-            nicks = { query ->
-                val state = model.state
-                NickCompletion.candidates(
-                    speakers = state.speakers[key.id] ?: SpeakerMap(),
-                    members = state.visibleMembers(key),
-                    selfNick = key.networkId?.let { state.networks[it]?.nick },
-                    query = query,
-                    isChannel = kind == BufferKind.Channel,
-                    ignores = state.ignores,
-                    networkId = key.networkId,
-                    channel = key.target,
-                )
-            },
+            nicks = { query -> nickCandidates(query) },
         )
+
+    /**
+     * Who a nick query offers here: the pills' four (the kit's default), or every match for Tab to cycle
+     * through, as the web's does. One call, so the two can't disagree about who's here.
+     */
+    private fun nickCandidates(query: String, limit: Int = 4): List<String> {
+        val state = model.state
+        return NickCompletion.candidates(
+            speakers = state.speakers[key.id] ?: SpeakerMap(),
+            members = state.visibleMembers(key),
+            selfNick = key.networkId?.let { state.networks[it]?.nick },
+            query = query,
+            isChannel = kind == BufferKind.Channel,
+            limit = limit,
+            ignores = state.ignores,
+            networkId = key.networkId,
+            channel = key.target,
+        )
+    }
 
     /** Tell the draft the field changed, if it did. */
     private fun reportEdit(now: Snapshot) {
@@ -518,6 +537,52 @@ internal class ComposerState(
             field.text.toString(), selection.min, selection.max, activeCompletion, suggestion.value, punctuation,
         ) ?: return
         apply(edit)
+    }
+
+    /**
+     * Shift+Enter from a keyboard: a newline over the selection, as typing one would. The composer's,
+     * because Compose's field doesn't map a shifted Enter (see `ComposerKeys`).
+     */
+    fun insertNewline() {
+        val selection = field.selection
+        field.edit {
+            replace(selection.min, selection.max, "\n")
+            this.selection = TextRange(selection.min + 1)
+        }
+        fieldChanged(snapshot())
+    }
+
+    // MARK: - Tab completion (lurker-android#63)
+
+    /** The completion Tab last applied — what another Tab cycles, while the field still shows it. */
+    private var tabCompletion: TabCompletion? = null
+
+    /**
+     * Tab (or Shift+Tab, [backward]) from a hardware keyboard: cycle the completion the field still
+     * shows, else start one for the word under the caret — the web's Tab. Independent of the pills: the
+     * edit is an ordinary one, so they re-evaluate after it as they would after typing. Nothing to
+     * complete leaves the field alone (the key is still taken — see `ComposerKeys`).
+     */
+    fun tabComplete(backward: Boolean) {
+        // A selection has no caret to complete at: Tab is still taken, and changes nothing.
+        if (!field.selection.collapsed) return
+        val text = field.text.toString()
+        val caret = field.selection.min
+        val session = tabCompletion
+        val edit = if (session != null && session.continues(text = text, caret = caret)) {
+            session.cycle(backward = backward)
+        } else {
+            val fresh = TabCompletion.begin(
+                text = text,
+                caret = caret,
+                nicks = { query -> nickCandidates(query, limit = Int.MAX_VALUE) },
+                channels = { ComposerModel.tabChannels(model.state.buffers.values, key.networkId, key) },
+                punctuation = punctuation,
+            )
+            tabCompletion = fresh
+            fresh?.edit ?: return
+        }
+        apply(FieldEdit(edit.text, edit.caret))
     }
 
     // MARK: - Replies (lurker-ios#184)

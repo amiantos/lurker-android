@@ -171,7 +171,9 @@ class SettingsModelTest {
         assertNull(SettingsModel.header(SettingsSection.Account))
         assertNull(SettingsModel.header(SettingsSection.About))
         assertEquals(
-            "Applies to this device only — not shared with your other Lurker clients.",
+            "Applies to this device only — not shared with your other Lurker clients.\n\n" +
+                "Enter to send: Return on the on-screen keyboard sends the message. A hardware keyboard's " +
+                "Enter always sends; Shift-Enter starts a new line.",
             SettingsModel.footer(SettingsSection.Device),
         )
         assertEquals("Used when Event filter is set to Smart.", SettingsModel.footer(SettingsSection.SmartFilter(emptyList())))

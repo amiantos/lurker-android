@@ -166,7 +166,7 @@ data class SettingRowState(
  * honoring a rule you can't see or reach makes the app's behavior unexplainable from the device it's
  * happening on.
  *
- * **Device preferences and actions** — autocapitalization, sign out, the version — belong to this
+ * **Device preferences and actions** — autocapitalization, Enter to send, sign out, the version — belong to this
  * install and don't sync.
  *
  * Labels are ours, not the registry's, and there is no help text. The registry's `label` and
@@ -326,7 +326,12 @@ object SettingsModel {
      * to explain itself.
      */
     fun footer(section: SettingsSection): String? = when (section) {
-        SettingsSection.Device -> "Applies to this device only — not shared with your other Lurker clients."
+        // The rows have no help text of their own (see above), so "Enter to send" explains itself
+        // here: what it changes is easy to guess, but that a hardware keyboard ignores it is not.
+        SettingsSection.Device ->
+            "Applies to this device only — not shared with your other Lurker clients.\n\n" +
+                "Enter to send: Return on the on-screen keyboard sends the message. A hardware " +
+                "keyboard's Enter always sends; Shift-Enter starts a new line."
         is SettingsSection.SmartFilter -> "Used when Event filter is set to Smart."
         else -> null
     }
@@ -342,8 +347,11 @@ object SettingsModel {
         "Check your connection and reopen Settings."
     }
 
-    /** The one device-local row — iOS's `DeviceSetting.autocapitalize`. */
+    /** A device-local row — iOS's `DeviceSetting.autocapitalize`. */
     const val AUTOCAPITALIZE_LABEL = "Autocapitalize messages"
+
+    /** A device-local row (lurker-android#64), beside [AUTOCAPITALIZE_LABEL]. */
+    const val ENTER_TO_SEND_LABEL = "Enter to send"
 
     /**
      * The value a row shows: the user's pending choice while its write is out, else the value in force

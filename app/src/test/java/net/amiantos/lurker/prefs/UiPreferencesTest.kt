@@ -119,4 +119,23 @@ class UiPreferencesTest {
         val prefs = MapPrefs(mutableMapOf("composerAutocapitalization" to "maybe"))
         assertTrue(UiPreferences(prefs).composerAutocapitalizes.value)
     }
+
+    @Test
+    fun enterToSendIsOffUntilAskedOn() {
+        assertFalse(UiPreferences(MapPrefs()).composerEnterSends.value)
+        assertFalse(UiPreferences(MapPrefs(mutableMapOf("composerEnterSends" to "maybe"))).composerEnterSends.value)
+    }
+
+    @Test
+    fun enterToSendIsRememberedAndMovesTheFlowAtOnce() {
+        val prefs = MapPrefs()
+        val ui = UiPreferences(prefs)
+        ui.setComposerEnterSends(true)
+        // At once, for a composer already on screen.
+        assertTrue(ui.composerEnterSends.value)
+        assertEquals("true", prefs.values["composerEnterSends"])
+        assertTrue(UiPreferences(prefs).composerEnterSends.value)
+        ui.setComposerEnterSends(false)
+        assertFalse(UiPreferences(prefs).composerEnterSends.value)
+    }
 }

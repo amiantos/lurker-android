@@ -144,6 +144,7 @@ internal fun SettingsDialog(
     LaunchedEffect(writer, inputs.settings) { writer.observe(inputs.settings) }
 
     val autocapitalizes by uiPreferences.composerAutocapitalizes.collectAsStateWithLifecycle()
+    val enterSends by uiPreferences.composerEnterSends.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val about = remember(context) { AboutLines(version = versionLine(context), server = serverLine(uiPreferences)) }
 
@@ -154,7 +155,7 @@ internal fun SettingsDialog(
             sections = SettingsModel.sections(inputs),
             settings = inputs.settings,
             edits = writer.edits,
-            autocapitalizes = autocapitalizes,
+            device = DeviceToggles(autocapitalizes = autocapitalizes, enterSends = enterSends),
             about = about,
             actions = SettingsActions(
                 onClose = onDismiss,
@@ -164,6 +165,7 @@ internal fun SettingsDialog(
                 // No write error to report and no echo to wait for: this lands in the preferences
                 // synchronously, so the switch is already telling the truth.
                 onAutocapitalize = uiPreferences::setComposerAutocapitalizes,
+                onEnterSends = uiPreferences::setComposerEnterSends,
                 onSignOut = { confirmingSignOut = true },
             ),
         )
@@ -221,26 +223,30 @@ internal class SettingsActions(
     /** A stepper tap, written once the run settles. */
     val onStep: (key: String, value: SettingValue) -> Unit,
     val onAutocapitalize: (Boolean) -> Unit,
+    val onEnterSends: (Boolean) -> Unit,
     val onSignOut: () -> Unit,
 ) {
     companion object {
-        val None = SettingsActions({}, {}, { _, _ -> }, { _, _ -> }, {}, {})
+        val None = SettingsActions({}, {}, { _, _ -> }, { _, _ -> }, {}, {}, {})
     }
 }
+
+/** The This Device section's switches, as they stand. */
+internal data class DeviceToggles(val autocapitalizes: Boolean, val enterSends: Boolean)
 
 @Composable
 private fun SettingsContent(
     sections: List<SettingsSection>,
     settings: Settings,
     edits: SettingsEdits,
-    autocapitalizes: Boolean,
+    device: DeviceToggles,
     about: AboutLines,
     actions: SettingsActions,
 ) {
     DialogPage(title = "Settings", exit = PageExit.Close, onExit = actions.onClose) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
             sections.forEachIndexed { index, section ->
-                section(index, section, settings, edits, autocapitalizes, about, actions)
+                section(index, section, settings, edits, device, about, actions)
             }
             item(key = "end") { Spacer(Modifier.height(24.dp)) }
         }
@@ -253,7 +259,7 @@ private fun LazyListScope.section(
     section: SettingsSection,
     settings: Settings,
     edits: SettingsEdits,
-    autocapitalizes: Boolean,
+    device: DeviceToggles,
     about: AboutLines,
     actions: SettingsActions,
 ) {
@@ -276,11 +282,18 @@ private fun LazyListScope.section(
         SettingsSection.Device -> item(key = id) {
             // U9: notification preferences, if the slice adds any, are device rows too — iOS has none
             // here yet (permission is asked for on its own, not toggled in Settings).
-            FormSwitchRow(
-                label = SettingsModel.AUTOCAPITALIZE_LABEL,
-                checked = autocapitalizes,
-                onCheckedChange = actions.onAutocapitalize,
-            )
+            Column {
+                FormSwitchRow(
+                    label = SettingsModel.AUTOCAPITALIZE_LABEL,
+                    checked = device.autocapitalizes,
+                    onCheckedChange = actions.onAutocapitalize,
+                )
+                FormSwitchRow(
+                    label = SettingsModel.ENTER_TO_SEND_LABEL,
+                    checked = device.enterSends,
+                    onCheckedChange = actions.onEnterSends,
+                )
+            }
         }
         SettingsSection.Account -> item(key = id) {
             FormActionRow(title = "Sign Out", onClick = actions.onSignOut, destructive = true)
@@ -551,7 +564,7 @@ private fun SettingsPreview(dark: Boolean, settings: Settings, edits: SettingsEd
             sections = SettingsModel.sections(SettingsInputs(settings, linkPreviews = false)),
             settings = settings,
             edits = edits,
-            autocapitalizes = true,
+            device = DeviceToggles(autocapitalizes = true, enterSends = false),
             about = AboutLines(version = "Version 1.0 (1)", server = "https://app.lurker.chat"),
             actions = SettingsActions.None,
         )

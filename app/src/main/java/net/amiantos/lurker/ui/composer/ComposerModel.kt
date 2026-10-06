@@ -276,13 +276,29 @@ internal object ComposerModel {
      */
     fun channelCandidates(buffers: Collection<Buffer>, networkId: Int?, query: String, limit: Int = CHANNEL_LIMIT): List<String> {
         val needle = ChannelName.fold(query)
-        return buffers.asSequence()
-            .filter { it.networkId == networkId && it.kind == BufferKind.Channel }
-            .map { it.target }
+        return networkChannels(buffers, networkId)
             .filter { ChannelName.fold(it).startsWith(needle) }
-            .sortedBy { it.lowercase() }
             .take(limit)
-            .toList()
+    }
+
+    /** [networkId]'s channels, case-insensitively sorted — the one list the pills and Tab both draw from. */
+    private fun networkChannels(buffers: Collection<Buffer>, networkId: Int?): List<String> =
+        buffers.filter { it.networkId == networkId && it.kind == BufferKind.Channel }
+            .map { it.target }
+            .sortedBy { it.lowercase() }
+
+    /**
+     * The channels Tab offers for a `#` word (`TabCompletion`, lurker-android#63), best first: the
+     * buffer you're in leads when it's a channel, then the rest of [networkId]'s channels sorted
+     * case-insensitively. The web ranks the rest by recency; the apps keep no recency list of
+     * channels, so they go alphabetically, as the pills do. Unfiltered — `TabCompletion` filters by
+     * what was typed.
+     */
+    fun tabChannels(buffers: Collection<Buffer>, networkId: Int?, current: BufferKey): List<String> {
+        val channels = networkChannels(buffers, networkId)
+        val here = buffers.firstOrNull { it.key.id == current.id && it.networkId == networkId && it.kind == BufferKind.Channel }
+            ?: return channels
+        return listOf(here.target) + channels.filter { it != here.target }
     }
 
     /**

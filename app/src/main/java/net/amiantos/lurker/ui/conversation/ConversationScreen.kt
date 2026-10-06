@@ -765,7 +765,7 @@ fun ConversationScreen(
         flash = flash,
         onJumpToUnread = { if (scroll.jumpToFirstUnread()) startJump() },
         onJumpToLatest = ::jumpToLatest,
-        bottomBar = { ComposerBar(composer, uiPreferences.composerAutocapitalizes, clockKey = day, attachments = attachments) },
+        bottomBar = { ComposerBar(composer, uiPreferences.composerAutocapitalizes, uiPreferences.composerEnterSends, clockKey = day, attachments = attachments) },
         // Inside the screen's link-opener provider, so Open Link uses the same `SafeUriHandler` as a tap.
         sheets = {
             MessageActionsHost(
