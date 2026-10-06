@@ -277,7 +277,7 @@ object MessageText {
         val indent = style.indentSp + style.typingGlyphWidthSp
         return buildAnnotatedString {
             appendInlineContent(TYPING_GLYPH, "Typing:")
-            append(names.toAnnotatedString(paragraph = null, linkStyles = null, onToggleSpoiler = null))
+            append(names.toAnnotatedString(paragraph = null, linkStyles = TextLinkStyles(), onToggleSpoiler = null))
             addStyle(ParagraphStyle(textIndent = TextIndent(firstLine = 0.sp, restLine = indent.sp)), 0, length)
         }
     }
