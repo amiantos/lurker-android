@@ -360,7 +360,7 @@ internal class LurkerClient(
      * `reportingUnauthorized` is true for the connect-time and reconnect reads, which are the
      * token checks — see `refreshNetworks` for why every other caller wants it off.
      */
-    private suspend fun fetchNetworks(reportingUnauthorized: Boolean = true): Boolean {
+    internal suspend fun fetchNetworks(reportingUnauthorized: Boolean = true): Boolean {
         val token = token ?: return true
         val url = (baseURL + "/api/networks").toHttpUrlOrNull() ?: return true
         rosterGeneration += 1
@@ -378,7 +378,7 @@ internal class LurkerClient(
             if (generation != rosterGeneration) return true
             val text = data.utf8OrNull()
             if (code in 200..<300 && text != null) {
-                onFrame(FrameParser.parseNetworks(text))
+                deliver(FrameParser.parseNetworks(text), sentWith = token)
             }
             return true
         } catch (_: IOException) {
@@ -394,8 +394,10 @@ internal class LurkerClient(
      * mean the token died in the intervening milliseconds, and treating it as an auth failure
      * would bounce the user to sign-in over a settings fetch. The socket upgrade is the next
      * thing to run and it will find out for itself.
+     *
+     * Internal for tests.
      */
-    private suspend fun fetchSettings() {
+    internal suspend fun fetchSettings() {
         val token = token ?: return
         val url = (baseURL + "/api/settings/bootstrap").toHttpUrlOrNull() ?: return
         val request = Request.Builder().url(url).header("Authorization", "Bearer $token").build()
@@ -403,7 +405,7 @@ internal class LurkerClient(
             val (code, data) = session.await(request)
             val text = data.utf8OrNull()
             if (code !in 200..<300 || text == null) return
-            onFrame(FrameParser.parseSettingsBootstrap(text))
+            deliver(FrameParser.parseSettingsBootstrap(text), sentWith = token)
         } catch (_: IOException) {
             // Registry defaults carry the app until the next launch.
         }
@@ -416,7 +418,9 @@ internal class LurkerClient(
      * changed" whether it came from this phone, the browser, or another device, and means a
      * rejected write simply never takes effect rather than needing a rollback.
      *
-     * Returns the server's error message on failure, null on success.
+     * Returns the server's error message on failure, null on success. Also null, with nothing
+     * applied, when the session that asked ended while the write was out: its screen is gone, and its
+     * reply must not reach the next session.
      *
      * Port note: encoding a `JsonObject` cannot fail, so LurkerKit's "Couldn't encode that
      * setting." has nothing to answer here.
@@ -433,6 +437,9 @@ internal class LurkerClient(
             .build()
         try {
             val (code, data) = session.await(request)
+            // A session that ended while this was out hears nothing of it — its screen is gone, and
+            // nothing of the departing account may land in the next one's store (see `deliver`).
+            if (this.token != token) return null
             if (code == 401) {
                 reportUnauthorized(sentWith = token)
                 return "Signed out."
@@ -448,14 +455,17 @@ internal class LurkerClient(
                 // replayed) the echo may not arrive at all, leaving a write that succeeded
                 // looking like one that failed.
                 //
-                // `values` is the full stored set, and the reducer patches rather than
-                // replaces, so applying it is idempotent with the echo that follows.
+                // `values` is the full stored set; only the keys this write sent are taken from it
+                // (`Settings.applyStored`), so it's idempotent with the echo that follows and can't
+                // undo another write that answered first.
                 val text = data.utf8OrNull()
                 if (text != null) {
-                    onFrame(
+                    deliver(
                         ServerFrame.SettingsValues(
                             FrameParser.parseSettingValues(FrameParser.jsonObject(text)?.get("values")),
+                            keys = changes.keys,
                         ),
+                        sentWith = token,
                     )
                 }
                 return null
@@ -464,6 +474,7 @@ internal class LurkerClient(
             val text = data.utf8OrNull() ?: ""
             return FrameParser.errorMessage(text) ?: "Couldn't save that setting."
         } catch (_: IOException) {
+            if (this.token != token) return null
             return "Couldn't reach the server."
         }
     }
@@ -2012,6 +2023,20 @@ internal class LurkerClient(
      */
     private fun resumeLater(continuation: CancellableContinuation<VerbReply>, reply: VerbReply) {
         scope.task { continuation.resume(reply) }
+    }
+
+    /**
+     * Hand a REST reply on as a frame, but only if it answers the token in use now. A read or a write
+     * still out when the session ended (a sign-out, a 401) can answer after the store and the
+     * settings cache were cleared, or after a new sign-in, and the departing account's roster,
+     * settings or values must not land in them. Every REST reply that becomes a frame comes through
+     * here — the settings bootstrap goes out at every start and reconnect, and the phone's time
+     * zone write at every bootstrap, so the window is an ordinary one. [reportUnauthorized] is the
+     * same rule for a 401.
+     */
+    private fun deliver(frame: ServerFrame, sentWith: String) {
+        if (sentWith != token) return
+        onFrame(frame)
     }
 
     /**

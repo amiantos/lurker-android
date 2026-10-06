@@ -249,7 +249,10 @@ class SettingsTests {
         assertEquals(false, state.settings.bool("chat.consolidate_joins", default = true))
         // The user switches it back on: `true` == the registry default, so the server deletes
         // the row and its reply omits the key entirely.
-        state = LurkerStore.reduce(state, ServerFrame.SettingsValues(mapOf("chat.consolidate_max_names" to SettingValue.Int(9))))
+        state = LurkerStore.reduce(
+            state,
+            ServerFrame.SettingsValues(mapOf("chat.consolidate_max_names" to SettingValue.Int(9)), keys = setOf("chat.consolidate_joins")),
+        )
         assertTrue(
             state.settings.bool("chat.consolidate_joins", default = true),
             "a key absent from the full stored set must revert to its default",
@@ -266,7 +269,10 @@ class SettingsTests {
     @Test
     fun testEchoAfterReplaceIsIdempotent() {
         var state = bootstrapped()
-        state = LurkerStore.reduce(state, ServerFrame.SettingsValues(mapOf("chat.consolidate_max_names" to SettingValue.Int(9))))
+        state = LurkerStore.reduce(
+            state,
+            ServerFrame.SettingsValues(mapOf("chat.consolidate_max_names" to SettingValue.Int(9)), keys = setOf("chat.consolidate_joins")),
+        )
         state = LurkerStore.reduce(
             state,
             ServerFrame.SettingsChanged(mapOf("chat.consolidate_joins" to SettingValue.Bool(true)), uploadLimits = UploadLimits.unstated),
@@ -277,10 +283,60 @@ class SettingsTests {
     @Test
     fun testReplaceLeavesTheRegistryAlone() {
         var state = bootstrapped()
-        state = LurkerStore.reduce(state, ServerFrame.SettingsValues(emptyMap()))
+        state = LurkerStore.reduce(state, ServerFrame.SettingsValues(emptyMap(), keys = setOf("chat.consolidate_max_names")))
         assertEquals(4, state.settings.registry.size)
-        // Everything falls back to its default, which is exactly "nothing overridden".
+        // The written key falls back to its default, which is exactly "nothing overridden".
         assertEquals(5, state.settings.int("chat.consolidate_max_names", default = 0))
+    }
+
+    /**
+     * Two writes out together answer in either order, and each reply is the whole stored set as
+     * of ITS write. The one that lands last must not put back what the other just changed.
+     */
+    @Test
+    fun testAReplyTakesOnlyTheKeysItsWriteSent() {
+        var state = bootstrapped()
+        // Another write (or another device, by echo) has just moved max_names to 12…
+        state = LurkerStore.reduce(
+            state,
+            ServerFrame.SettingsChanged(mapOf("chat.consolidate_max_names" to SettingValue.Int(12)), uploadLimits = UploadLimits.unstated),
+        )
+        // …and a write of consolidate_joins answers late, its set still holding the old 9.
+        state = LurkerStore.reduce(
+            state,
+            ServerFrame.SettingsValues(
+                mapOf("chat.consolidate_joins" to SettingValue.Bool(false), "chat.consolidate_max_names" to SettingValue.Int(9)),
+                keys = setOf("chat.consolidate_joins"),
+            ),
+        )
+        assertEquals(12, state.settings.int("chat.consolidate_max_names", default = 0))
+        assertEquals(false, state.settings.bool("chat.consolidate_joins", default = true))
+    }
+
+    /**
+     * A write of several keys: each takes its stored value, or no override when the reply omits
+     * it, and a key the write didn't send stays as held.
+     */
+    @Test
+    fun testAWriteOfSeveralKeysTakesEachAsStored() {
+        var state = bootstrapped()
+        state = LurkerStore.reduce(
+            state,
+            ServerFrame.SettingsChanged(mapOf("chat.smart_filter" to SettingValue.Bool(true)), uploadLimits = UploadLimits.unstated),
+        )
+        state = LurkerStore.reduce(
+            state,
+            ServerFrame.SettingsValues(
+                mapOf("chat.consolidate_max_names" to SettingValue.Int(3)),
+                keys = setOf("chat.consolidate_max_names", "chat.consolidate_joins"),
+            ),
+        )
+        // Present: it moves, 9 → 3.
+        assertEquals(SettingValue.Int(3), state.settings.values["chat.consolidate_max_names"])
+        // Absent: back to no override.
+        assertNull(state.settings.values["chat.consolidate_joins"])
+        // Not written, and absent from the reply: kept.
+        assertEquals(SettingValue.Bool(true), state.settings.values["chat.smart_filter"])
     }
 
     /**

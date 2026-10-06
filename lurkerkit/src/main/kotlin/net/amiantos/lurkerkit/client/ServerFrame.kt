@@ -567,12 +567,13 @@ internal sealed interface ServerFrame {
     data class SettingsChanged(val changes: Map<String, SettingValue>, val uploadLimits: UploadLimits) : ServerFrame
 
     /**
-     * The `{values}` a REST reply carries (`PATCH /api/settings`) — the user's complete
-     * stored set, which REPLACES what we hold rather than merging into it. See
-     * `Settings.replaceValues`: a key set back to its default is dropped server-side, so it
-     * comes back as an absence that a merge would never notice.
+     * The `{values}` a REST reply carries (`PATCH /api/settings`) — the user's complete stored
+     * set — and the [keys] that write sent. Only those keys are taken from it (see
+     * `Settings.applyStored`): a key set back to its default is dropped server-side and comes
+     * back as an absence that a merge would never notice, and the rest of the set is no newer
+     * than what we hold — a reply landing after another write would put its old value back.
      */
-    data class SettingsValues(val values: Map<String, SettingValue>) : ServerFrame
+    data class SettingsValues(val values: Map<String, SettingValue>, val keys: Set<String>) : ServerFrame
 
     /** WS `send-result`: ack for a send/action/notice, keyed by the client's clientId. */
     data class SendResult(val clientId: String?, val ok: Boolean, val error: String?) : ServerFrame

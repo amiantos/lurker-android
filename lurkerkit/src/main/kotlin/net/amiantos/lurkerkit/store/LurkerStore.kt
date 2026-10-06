@@ -1719,9 +1719,8 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                     )
                 }
                 is ServerFrame.SettingsValues -> {
-                    // Replace: this one IS the full stored set, and it can be smaller than what
-                    // we hold (see `Settings.replaceValues`).
-                    state.copy(settings = state.settings.replaceValues(frame.values))
+                    // The written keys only, each replaced — present or absent (see `Settings.applyStored`).
+                    state.copy(settings = state.settings.applyStored(frame.values, frame.keys))
                 }
                 is ServerFrame.ServerError -> state.copy(error = frame.text)
                 is ServerFrame.SendResult -> {

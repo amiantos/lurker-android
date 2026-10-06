@@ -26,10 +26,10 @@ import net.amiantos.lurkerkit.model.Settings
  * reason on refusal, and a write of several keys would pin that reason under no row in particular.
  *
  * ⚠⚠ **One write at a time, in the order the user made them.** A successful `updateSettings` applies
- * the reply's `values` to the store as the authoritative FULL set (`Settings.replaceValues`), so two
- * writes answered out of order would let the older reply put back the value the newer one replaced —
- * and an older refusal landing last would pin a reason under a control whose latest write succeeded.
- * Queued behind a fair [Mutex], taken in input order, every reply is the newest the server has sent.
+ * the reply's stored value for the key it wrote (`Settings.applyStored`), so two writes of the SAME
+ * key answered out of order would let the older reply put back the value the newer one set — and an
+ * older refusal landing last would pin a reason under a control whose latest write succeeded. Queued
+ * behind a fair [Mutex], taken in input order, every reply is the newest the server has sent.
  *
  * ⚠ Each write runs `NonCancellable`. Closing Settings straight after flipping a switch must not
  * abort the request half-way — a write torn down mid-flight is one the server may or may not have
