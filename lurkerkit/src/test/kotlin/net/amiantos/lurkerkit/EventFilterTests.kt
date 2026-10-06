@@ -35,7 +35,7 @@ class EventFilterTests {
 
     private fun settings(mode: String?): Settings {
         var s = Settings()
-        if (mode != null) s = s.replaceValues(mapOf(EventFilter.modeKey to SettingValue.String(mode)))
+        if (mode != null) s = s.apply(mapOf(EventFilter.modeKey to SettingValue.String(mode)))
         return s
     }
 

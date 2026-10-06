@@ -120,7 +120,39 @@ class SettingsWriteTests {
         }
     }
 
-    /** The control for the two above: the same reads, answered while the session lives, do land. */
+    /** Not just a sign-out: a sign-in to another account while the read was out, too. */
+    @Test
+    fun testARosterForAReplacedSessionIsDropped() = runBlocking {
+        val gate = CountDownLatch(1)
+        Harness(Answering(200, """{"networks":[]}""", gate), token = "departing").use { h ->
+            val read = h.inFlight { fetchNetworks() }
+            h.waitUntil { h.server.requests.size == 1 }
+            h.onMain {
+                h.client.logout()
+                h.client.restore(server = "https://lurker.test", token = "next")
+            }
+            gate.countDown()
+            read.await()
+            assertEquals(0, h.count { it is ServerFrame.Networks })
+        }
+    }
+
+    /**
+     * A write's reply is the whole stored set; the frame names the keys the write sent, so only
+     * those are taken from it (`Settings.applyStored`).
+     */
+    @Test
+    fun testAWriteReplyNamesTheKeysItSent() = runBlocking {
+        val body = """{"values":{"system.timezone":"Asia/Tokyo","chat.smart_filter":true}}"""
+        Harness(Answering(200, body), token = "live").use { h ->
+            h.onMain { h.client.updateSettings(mapOf("system.timezone" to SettingValue.String("Asia/Tokyo"))) }
+            val reply = synchronized(h.frames) { h.frames.filterIsInstance<ServerFrame.SettingsValues>().single() }
+            assertEquals(setOf("system.timezone"), reply.keys)
+            assertEquals(2, reply.values.size)
+        }
+    }
+
+    /** The control for the bootstrap and roster drops above: the same reads, answered while the session lives, do land. */
     @Test
     fun testReadsLandInTheSessionThatAsked() = runBlocking {
         Harness(Answering(200, """{"registry":[],"values":{},"networks":[]}"""), token = "live").use { h ->

@@ -1,5 +1,5 @@
 {
-  "pin": "db90a2f968bca068de9c4677fb917b84d5e814f0",
+  "pin": "5a75f27dd03eb56cb42ec3b0b31dbc7b14190d18",
   "tranches": [
     {
       "id": "T1",
@@ -154,8 +154,8 @@
     },
     {
       "id": "S2",
-      "title": "Sync to lurker-ios db90a2f",
-      "about": "Client sweep L08 L13 (lurker-ios#221): the phone writes its time zone on each settings bootstrap; ImageAnimation, the preview's which-pictures-play rule. And lurker-ios#222: every REST reply that becomes a frame checks its session (`LurkerClient.deliver`).",
+      "title": "Sync to lurker-ios 5a75f27",
+      "about": "Client sweep L08 L13 (lurker-ios#221): the phone writes its time zone on each settings bootstrap; ImageAnimation, the preview's which-pictures-play rule. And lurker-ios#222: every REST reply that becomes a frame checks its session (`LurkerClient.deliver`). And lurker-ios#223: a write's reply takes only the keys the write sent (`Settings.applyStored`).",
       "files": [
         "Client/ImageAnimation.swift"
       ]

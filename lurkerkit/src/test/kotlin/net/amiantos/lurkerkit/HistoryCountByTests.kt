@@ -22,7 +22,7 @@ class HistoryCountByTests {
     private fun settings(consolidate: Boolean?): Settings {
         val s = Settings()
         if (consolidate == null) return s
-        return s.replaceValues(mapOf("chat.consolidate_joins" to SettingValue.Bool(consolidate)))
+        return s.apply(mapOf("chat.consolidate_joins" to SettingValue.Bool(consolidate)))
     }
 
     @Test

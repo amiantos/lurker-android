@@ -455,13 +455,15 @@ internal class LurkerClient(
                 // replayed) the echo may not arrive at all, leaving a write that succeeded
                 // looking like one that failed.
                 //
-                // `values` is the full stored set, and the reducer patches rather than
-                // replaces, so applying it is idempotent with the echo that follows.
+                // `values` is the full stored set; only the keys this write sent are taken from it
+                // (`Settings.applyStored`), so it's idempotent with the echo that follows and can't
+                // undo another write that answered first.
                 val text = data.utf8OrNull()
                 if (text != null) {
                     deliver(
                         ServerFrame.SettingsValues(
                             FrameParser.parseSettingValues(FrameParser.jsonObject(text)?.get("values")),
+                            keys = changes.keys,
                         ),
                         sentWith = token,
                     )
