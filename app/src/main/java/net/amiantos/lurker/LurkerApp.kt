@@ -195,7 +195,10 @@ class LurkerApp : Application() {
      * killed the one that opened the page. The kit finishes from what it saved, or says why not.
      */
     private fun resumeSignIn(callback: String) {
-        scope.launch { model.resumeSignIn(callback) }
+        scope.launch {
+            // Remembered as `signIn` does, normalized since what was typed died with the process.
+            model.resumeSignIn(callback)?.let { server -> uiPreferences.lastServerURL = server }
+        }
     }
 
     /**

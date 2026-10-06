@@ -153,7 +153,7 @@ class SignInResumeTests {
         Process(oauth, storage).use { second ->
             second.launch()
             val signedIn = second.onMain { second.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=$state") }
-            assertTrue(signedIn)
+            assertEquals(server, signedIn)
             assertEquals(ChatViewModel.SessionState.LoggedIn, second.onMain { second.model.session })
             assertEquals(PersistedSession(server = server, token = "tok"), second.sessions.load())
             assertNull(storage.stored[SessionStore.pendingSignInAccount])
@@ -165,11 +165,24 @@ class SignInResumeTests {
     }
 
     @Test
+    fun testANewAttemptVoidsOneLeftInTheBrowser() = runBlocking {
+        val storage = InMemorySecureStorage()
+        Process(OAuthServer(), storage).use { p ->
+            p.sessions.savePendingSignIn(PendingSignIn(server = server, clientId = "cid", state = "s", verifier = "v"))
+            p.launch()
+            // A replacement that fails before it opens a page (here, the transport policy) still voids it.
+            assertFalse(p.onMain { p.model.signIn(server = "http://lurker.test", appName = "Lurker") { null } })
+            assertNotNull(p.status())
+            assertNull(storage.stored[SessionStore.pendingSignInAccount])
+        }
+    }
+
+    @Test
     fun testARedirectWithNothingSavedSaysSo() = runBlocking {
         val oauth = OAuthServer()
         Process(oauth, InMemorySecureStorage()).use { p ->
             p.launch()
-            assertFalse(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=s") })
+            assertNull(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=s") })
             assertEquals(ChatViewModel.SessionState.LoggedOut, p.onMain { p.model.session })
             assertEquals("That sign-in has already ended. Try again.", p.status())
             assertTrue(oauth.tokenRequests.isEmpty())
@@ -184,11 +197,11 @@ class SignInResumeTests {
             p.sessions.savePendingSignIn(PendingSignIn(server = server, clientId = "cid", state = "ours", verifier = "v"))
             p.launch()
             // Any app or page can open the scheme; a redirect that isn't this attempt's is refused…
-            assertFalse(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=theirs") })
+            assertNull(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=theirs") })
             assertEquals("Sign-in didn't finish. Try again.", p.status())
             assertTrue(oauth.tokenRequests.isEmpty())
             // …and leaves the attempt for the real one.
-            assertTrue(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c2&state=ours") })
+            assertEquals(server, p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c2&state=ours") })
             assertTrue(oauth.tokenRequests.single().contains("\"code\":\"c2\""))
             assertNull(storage.stored[SessionStore.pendingSignInAccount])
         }
@@ -200,10 +213,10 @@ class SignInResumeTests {
         Process(oauth, InMemorySecureStorage()).use { p ->
             p.sessions.savePendingSignIn(PendingSignIn(server = server, clientId = "cid", state = "s", verifier = "v"))
             p.launch()
-            assertFalse(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=s") })
+            assertNull(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=s") })
             assertEquals("Sign-in failed (HTTP 500).", p.status())
             // The browser dispatches it again: nothing is saved now, and the reason stands.
-            assertFalse(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=s") })
+            assertNull(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=s") })
             assertEquals("Sign-in failed (HTTP 500).", p.status())
             assertEquals(1, oauth.tokenRequests.size)
         }
@@ -228,7 +241,7 @@ class SignInResumeTests {
         Process(oauth, storage).use { p ->
             p.sessions.savePendingSignIn(PendingSignIn(server = server, clientId = "cid", state = "s", verifier = "v"))
             p.launch()
-            assertFalse(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=s") })
+            assertNull(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=s") })
             assertEquals(ChatViewModel.SessionState.LoggedOut, p.onMain { p.model.session })
             assertEquals(1, oauth.tokenRequests.size)
             assertNull(p.sessions.load())
@@ -243,7 +256,7 @@ class SignInResumeTests {
             p.sessions.save(PersistedSession(server = server, token = "live"))
             p.sessions.savePendingSignIn(PendingSignIn(server = server, clientId = "cid", state = "s", verifier = "v"))
             p.launch()
-            assertFalse(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=s") })
+            assertNull(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=s") })
             assertEquals(ChatViewModel.SessionState.LoggedIn, p.onMain { p.model.session })
             assertEquals("live", p.sessions.load()?.token)
             assertTrue(oauth.tokenRequests.isEmpty())

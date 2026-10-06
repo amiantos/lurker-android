@@ -335,6 +335,9 @@ class ChatViewModel(
     ): Boolean {
         sessionSubject.value = SessionState.LoggingIn
         statusSubject.value = null
+        // Port-only: a new attempt voids one a killed process left in the browser, even if this one
+        // fails before it saves its own.
+        sessions.clearPendingSignIn()
         // A restored session that never came to the foreground was signed out since; this one
         // connects itself, and a held start for the old one must not open a second socket.
         startDeferred = false
@@ -380,23 +383,28 @@ class ChatViewModel(
 
     /**
      * Finish a sign-in whose redirect arrived with nothing waiting for it: the process that opened
-     * the approval page was killed while it was up, and the redirect started this one. Returns
-     * whether it worked; on failure `statusPublisher` carries the reason.
+     * the approval page was killed while it was up, and the redirect started this one. Returns the
+     * server it signed in to, or null; on failure `statusPublisher` carries the reason. (The app
+     * remembers the server on success, and here it never saw what was typed.)
      *
      * Ignored while signed in or already signing in: nothing here may end a live session, and an
      * attempt in flight has its own redirect coming.
      *
      * Port-only: see `PendingSignIn`.
      */
-    suspend fun resumeSignIn(callback: String): Boolean {
-        if (session != SessionState.LoggedOut) return false
+    suspend fun resumeSignIn(callback: String): String? {
+        if (session != SessionState.LoggedOut) return null
         // A failure just shown (a duplicate redirect after a refused exchange) keeps its reason.
         val pending = sessions.pendingSignIn()
-            ?: return signInFailed(statusSubject.value ?: "That sign-in has already ended. Try again.")
+        if (pending == null) {
+            signInFailed(statusSubject.value ?: "That sign-in has already ended. Try again.")
+            return null
+        }
         // Kept for a redirect that isn't this attempt's (any app or page can open the scheme), so
         // the real one can still finish; spent once the redirect is its answer.
         if (OAuth.callback(callback, state = pending.state) == OAuth.Callback.Invalid) {
-            return signInFailed("Sign-in didn't finish. Try again.")
+            signInFailed("Sign-in didn't finish. Try again.")
+            return null
         }
         sessions.clearPendingSignIn()
         // `signIn`'s own setup, step for step: a change to one belongs in both.
@@ -404,13 +412,14 @@ class ChatViewModel(
         statusSubject.value = null
         startDeferred = false
         awaitMediaPurge()
-        return finishSignIn(
+        val signedIn = finishSignIn(
             server = pending.server,
             clientId = pending.clientId,
             state = pending.state,
             verifier = pending.verifier,
             callback = callback,
         )
+        return if (signedIn) pending.server else null
     }
 
     /** The approval page's answer, traded for a token and the session it opens. */
