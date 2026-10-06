@@ -3,19 +3,28 @@
 
 package net.amiantos.lurkerkit.client
 
+import java.io.File
+import java.io.IOException
+import java.net.UnknownServiceException
+import java.time.Duration
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.logging.Logger
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+import kotlin.time.toKotlinDuration
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -55,6 +64,7 @@ import net.amiantos.lurkerkit.model.TypingSignal
 import net.amiantos.lurkerkit.model.UploadsFilter
 import net.amiantos.lurkerkit.model.UploadsPage
 import net.amiantos.lurkerkit.model.UploadsRequest
+import net.amiantos.lurkerkit.session.PersistedSession
 import net.amiantos.lurkerkit.support.percentEncodedQuery
 import net.amiantos.lurkerkit.support.task
 import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
@@ -78,15 +88,6 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.buffer
 import okio.sink
-import java.io.File
-import java.io.IOException
-import java.net.UnknownServiceException
-import java.time.Duration
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.logging.Logger
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
-import kotlin.time.toKotlinDuration
 
 /**
  * The one client that owns Lurker's REST + WebSocket contract. Self-hosted and hosted
@@ -2066,15 +2067,25 @@ internal class LurkerClient(
      * `drafts` are saved first, over HTTP with the session being ended: a socket write queued
      * now would be cancelled by the `close()` below before it went out.
      *
+     * [onRevoked] hears whether the server has given its final answer (lurker-ios#218): the caller
+     * keeps the session owed a revoke until it has, and retries it with [revoke].
+     *
      * Port note: the background work runs in [scope], so it ends early if the scope is
      * cancelled first; a LurkerKit `Task` runs to completion.
      */
-    fun logout(deviceToken: String? = null, drafts: List<KeyedDraft> = emptyList()) {
+    fun logout(
+        deviceToken: String? = null,
+        drafts: List<KeyedDraft> = emptyList(),
+        onRevoked: ((RevokeOutcome) -> Unit)? = null,
+    ) {
         val revokeToken = token
         val base = baseURL
         close()
-        if (revokeToken == null) return
-        val url = (base + "/api/auth/logout").toHttpUrlOrNull() ?: return
+        if (revokeToken == null) {
+            // Nothing to revoke from here; the caller's owed entry, if any, is retried later.
+            onRevoked?.invoke(RevokeOutcome.Retry)
+            return
+        }
         val session = session
         scope.task {
             if (drafts.isNotEmpty()) {
@@ -2083,17 +2094,37 @@ internal class LurkerClient(
             if (deviceToken != null) {
                 deregisterDevice(session = session, baseURL = base, sessionToken = revokeToken, deviceToken = deviceToken)
             }
-            val request = Request.Builder()
-                .url(url)
-                .header("Authorization", "Bearer $revokeToken")
-                .post(ByteArray(0).toRequestBody())
-                .build()
-            try {
-                session.await(request)
-            } catch (_: IOException) {
-            }
+            val outcome = revoke(session = session, baseURL = base, token = revokeToken)
+            onRevoked?.invoke(outcome)
         }
     }
+
+    /** Whether a revoke needs asking again (lurker-ios#218). */
+    enum class RevokeOutcome {
+        /**
+         * Lurker answered — the token is gone, or was already — or the address isn't a URL at all, so
+         * there is nothing that could ever be asked. Not "the server confirmed": don't hang anything
+         * on it that needs that.
+         */
+        Done,
+
+        /** Nothing final yet — no answer, or one from something in front of the server. */
+        Retry,
+    }
+
+    /**
+     * The session this client holds, if any — what a sign-out owes a revoke for (lurker-ios#218).
+     * From the client rather than secure storage, whose writes are best-effort.
+     */
+    val currentSession: PersistedSession?
+        get() = token?.let { PersistedSession(server = baseURL, token = it) }
+
+    /**
+     * Revoke a session this device signed out of, through this client's HTTP session. Retried by the
+     * caller until it's [RevokeOutcome.Done] (lurker-ios#218).
+     */
+    suspend fun revoke(server: String, token: String): RevokeOutcome =
+        revoke(session = session, baseURL = ServerAddress.normalize(server), token = token)
 
     /**
      * A URL the media player can actually open for a preview's `src`.
@@ -2591,6 +2622,43 @@ internal class LurkerClient(
         }
 
         /**
+         * A revoke's verdict from the response, null status for none at all (offline, DNS, TLS).
+         *
+         * Only Lurker's own answer counts. `POST /api/auth/logout` takes any bearer and always says
+         * `{"ok":true}` — it has no auth check, so a token already gone gets the same answer — which
+         * makes every other response someone else's: a captive portal's 200, a WAF's 403, a
+         * maintenance 404, an auth gateway's 401 in front of a self-hosted server. None of them says
+         * anything about the token, so it's asked again (until `ChatViewModel.revokeRetryWindow`).
+         */
+        fun revokeOutcome(status: Int?, body: ByteString?): RevokeOutcome {
+            if (status == null || status !in 200..<300 || body == null) return RevokeOutcome.Retry
+            // `bool` never throws (an `ok` that's an object or an array is just not true) and reads as
+            // LurkerKit's `as? Bool` does: an unquoted true, or 1.
+            return if (FrameParser.jsonObject(body)?.bool("ok") == true) RevokeOutcome.Done else RevokeOutcome.Retry
+        }
+
+        /** The sign-out request, for both the revoke and the password-era session's end. */
+        fun logoutRequest(baseURL: String, token: String): Request? {
+            val url = (baseURL + "/api/auth/logout").toHttpUrlOrNull() ?: return null
+            return Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer $token")
+                .post(ByteArray(0).toRequestBody())
+                .build()
+        }
+
+        private suspend fun revoke(session: OkHttpClient, baseURL: String, token: String): RevokeOutcome {
+            // An address that isn't a URL can never be asked.
+            val request = logoutRequest(baseURL = baseURL, token = token) ?: return RevokeOutcome.Done
+            val (code, data) = try {
+                session.await(request)
+            } catch (_: IOException) {
+                return RevokeOutcome.Retry
+            }
+            return revokeOutcome(status = code, body = data)
+        }
+
+        /**
          * Ends a session from the password sign-in this app had before OAuth. Best effort; the
          * token is already off the device.
          *
@@ -2603,12 +2671,7 @@ internal class LurkerClient(
          * static function with no actor to inherit — has no counterpart, and nothing here blocks.
          */
         fun endPasswordSession(server: String, token: String, scope: CoroutineScope, session: OkHttpClient) {
-            val url = (ServerAddress.normalize(server) + "/api/auth/logout").toHttpUrlOrNull() ?: return
-            val request = Request.Builder()
-                .url(url)
-                .header("Authorization", "Bearer $token")
-                .post(ByteArray(0).toRequestBody())
-                .build()
+            val request = logoutRequest(baseURL = ServerAddress.normalize(server), token = token) ?: return
             scope.task {
                 try {
                     session.await(request)

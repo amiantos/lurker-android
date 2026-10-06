@@ -452,7 +452,17 @@ class ChatViewModel(
         draftFlushes.clear()
         val drafts = draftSync.takeAll().map { LurkerClient.KeyedDraft(key = it.key, draft = it.draft) }
         cancelReconnect()
-        client.logout(deviceToken = deviceToken, drafts = drafts)
+        // Owed a revoke until the server confirms it (lurker-ios#218), so a sign-out made offline still
+        // reaches the server later instead of leaving the token, and its pushes, live for good.
+        val now = Instant.now()
+        val ending = client.currentSession?.let { PendingRevoke(server = it.server, token = it.token, since = now.toEpochMilli()) }
+        if (ending != null) {
+            sessions.addPendingRevoke(PersistedSession(server = ending.server, token = ending.token), now)
+            revokingNow.add(ending.token)
+        }
+        client.logout(deviceToken = deviceToken, drafts = drafts) { outcome ->
+            if (ending != null) revokeFinished(ending, outcome)
+        }
         deviceToken = null
         // The next sign-in may be against a different server, whose answer differs.
         apnsSupported = null
@@ -2076,6 +2086,8 @@ class ChatViewModel(
      */
     fun enterForeground(): Boolean {
         isForeground = true
+        // A server that was down while the phone stayed online gets asked again here (lurker-ios#218).
+        retryPendingRevokes()
         if (session != SessionState.LoggedIn) return false
         // Tell the server we're looking, so it stops pushing (lurker#490). Sent before the
         // reconnect check below because the common case is a LIVE socket — we're back and
@@ -2187,11 +2199,78 @@ class ChatViewModel(
     fun setReachable(reachable: Boolean) {
         val was = store.state.reachable
         store.setReachable(reachable)
+        // Signed in or not: the case this is for is a sign-out made offline (lurker-ios#218).
+        if (reachable && !was) retryPendingRevokes()
         if (!(reachable && !was && session == SessionState.LoggedIn && isForeground)) return
         reconnectAttempt = 0
         reconnectTask?.cancel()
         reconnectTask = null
         doReconnect(force = false)
+    }
+
+    // MARK: - Revokes owed (lurker-ios#218)
+
+    /**
+     * Tokens with a revoke request out now, so a launch and a reachability change (or the sign-out's
+     * own attempt) don't send the same one twice.
+     */
+    private val revokingNow = mutableSetOf<String>()
+
+    /** See [revokingNow]; read by the tests. */
+    internal val revoking: Set<String> get() = revokingNow.toSet()
+
+    /**
+     * Tokens a retry trigger (a foreground, the network coming back) skipped because their request
+     * was already out. If that request then fails, the trigger is replayed at once — the moment it
+     * stood for (the network is back) has already happened, and nothing else may come along to ask.
+     */
+    private val retryWanted = mutableSetOf<String>()
+
+    /**
+     * Ask again for every revoke this device still owes: on launch, on every foreground, and whenever
+     * the network comes back. Never the live session's token — a pending entry can't name it, but
+     * revoking it would sign the user out from under themselves, so it's checked rather than assumed.
+     */
+    internal fun retryPendingRevokes(now: Instant = Instant.now()) {
+        // Almost always empty — checked before [sendRevoke]'s read of the live session (a decrypt).
+        for (pending in sessions.pendingRevokes()) {
+            if (pending.token in revokingNow) {
+                retryWanted.add(pending.token)
+                continue
+            }
+            sendRevoke(pending, now)
+        }
+    }
+
+    /**
+     * One owed revoke: dropped if it has outlived [revokeRetryWindow], otherwise sent. The one door
+     * every revoke request goes through, so the live-session check covers the first try and every
+     * replay alike.
+     */
+    private fun sendRevoke(pending: PendingRevoke, now: Instant = Instant.now()) {
+        if (pending.token == (client.currentSession?.token ?: sessions.load()?.token)) return
+        if (Duration.between(Instant.ofEpochMilli(pending.since), now) >= revokeRetryWindow) {
+            sessions.removePendingRevoke(pending.token)
+            return
+        }
+        revokingNow.add(pending.token)
+        scope.task { revokeFinished(pending, client.revoke(server = pending.server, token = pending.token)) }
+    }
+
+    /**
+     * ⚠⚠ A wanted replay sends THIS token again, never every owed one. Re-running
+     * [retryPendingRevokes] here would mark each other token still out as wanted — a trigger it
+     * never got — and two failing tokens would then re-mark each other forever: a request loop for
+     * as long as the app runs, tight when offline makes each fail at once.
+     */
+    private fun revokeFinished(pending: PendingRevoke, outcome: LurkerClient.RevokeOutcome) {
+        revokingNow.remove(pending.token)
+        val wanted = retryWanted.remove(pending.token)
+        if (outcome == LurkerClient.RevokeOutcome.Done) {
+            sessions.removePendingRevoke(pending.token)
+        } else if (wanted) {
+            sendRevoke(pending)
+        }
     }
 
     // MARK: - Session restore
@@ -2203,6 +2282,7 @@ class ChatViewModel(
      * arrives later.
      */
     private fun restoreSession() {
+        retryPendingRevokes()
         // A session from the password sign-in this app had before OAuth isn't restored:
         // everyone signs in again once, through the approval page.
         sessions.takeLegacySession()?.let { legacy ->
@@ -2790,6 +2870,12 @@ class ChatViewModel(
     }
 
     internal companion object {
+        /**
+         * How long an owed revoke is asked for (lurker-ios#218). A server unreachable for a month is
+         * taken to be gone; without a bound, every launch would ask every dead address forever.
+         */
+        val revokeRetryWindow: Duration = Duration.ofDays(30)
+
         private const val baseBackoff: Double = 1.0
         private const val maxBackoff: Double = 30.0
         private const val maxShift = 5 // 1s << 5 = 32s, clamped to 30s
