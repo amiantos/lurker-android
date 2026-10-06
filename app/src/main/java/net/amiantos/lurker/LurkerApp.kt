@@ -157,6 +157,8 @@ class LurkerApp : Application() {
         push = PushRegistrar(this, model, scope)
 
         wireCallbacks()
+        // Before any activity exists to deliver a redirect.
+        browserSignIn.onOrphanRedirect = ::resumeSignIn
         observeSession()
         observeLifecycle()
 
@@ -186,6 +188,14 @@ class LurkerApp : Application() {
             // the tap.) As typed, not normalised: the prefill should read as the user wrote it.
             if (signedIn) uiPreferences.lastServerURL = server
         }
+    }
+
+    /**
+     * A redirect that found no attempt waiting: this process was started by it, after the system
+     * killed the one that opened the page. The kit finishes from what it saved, or says why not.
+     */
+    private fun resumeSignIn(callback: String) {
+        scope.launch { model.resumeSignIn(callback) }
     }
 
     /**

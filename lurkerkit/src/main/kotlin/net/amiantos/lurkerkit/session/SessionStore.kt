@@ -33,6 +33,24 @@ data class PendingRevoke(
 )
 
 /**
+ * A sign-in out in the browser: what `ChatViewModel.resumeSignIn` needs to trade the approval page's
+ * code for a token when the process that started it is gone.
+ *
+ * Port-only: LurkerKit has no counterpart. iOS's browser sheet runs inside the app, so a process that
+ * dies takes the sheet with it and there is no redirect left to answer. Android's Custom Tab is
+ * another app's activity: the system can kill Lurker while it is up (a password manager or a passkey
+ * sheet is enough on a small phone), and the redirect then starts a fresh process that never saw the
+ * attempt.
+ */
+@Serializable
+data class PendingSignIn(
+    val server: String,
+    val clientId: String,
+    val state: String,
+    val verifier: String,
+)
+
+/**
  * Where `SessionStore` keeps its blobs: the three Keychain calls LurkerKit makes, and no more.
  * The kit holds the rules; `:app` implements this over the Android Keystore, and the tests over
  * a map.
@@ -142,6 +160,27 @@ class SessionStore(private val storage: SecureStorage) {
         storage.write(pendingRevokesAccount, SessionCodec.encodeList(pending))
     }
 
+    // MARK: - A sign-in out in the browser (port-only)
+
+    /**
+     * Kept while the approval page is up, beside the session it will become. Secure storage, not the
+     * plain preferences: with the code the redirect carries, the verifier is enough to mint a token.
+     */
+    internal fun savePendingSignIn(pending: PendingSignIn) {
+        storage.write(pendingSignInAccount, SessionCodec.encodePendingSignIn(pending))
+    }
+
+    /** The attempt out in the browser, deleted as it's read: a code is spent once. */
+    internal fun takePendingSignIn(): PendingSignIn? {
+        val data = storage.read(pendingSignInAccount) ?: return null
+        storage.delete(pendingSignInAccount)
+        return SessionCodec.decodePendingSignIn(data)
+    }
+
+    internal fun clearPendingSignIn() {
+        storage.delete(pendingSignInAccount)
+    }
+
     internal companion object {
         /**
          * A new name for the OAuth sign-in's session, so the password sign-in's is never restored.
@@ -154,6 +193,9 @@ class SessionStore(private val storage: SecureStorage) {
 
         /** Sessions signed out of whose server revoke hasn't been answered yet (lurker-ios#218). */
         const val pendingRevokesAccount = "pending-revokes"
+
+        /** The sign-in out in the browser, if any (port-only). */
+        const val pendingSignInAccount = "pending-sign-in"
     }
 }
 
@@ -200,5 +242,22 @@ internal object SessionCodec {
             return emptyList()
         }
         return pending.filter { it.server.isNotEmpty() && it.token.isNotEmpty() }
+    }
+
+    // Port-only, with `PendingSignIn`.
+
+    fun encodePendingSignIn(pending: PendingSignIn): ByteString =
+        json.encodeToString(PendingSignIn.serializer(), pending).encodeUtf8()
+
+    /** Null for an unreadable blob, or one missing a field the exchange needs. */
+    fun decodePendingSignIn(data: ByteString): PendingSignIn? {
+        val text = data.utf8OrNull() ?: return null
+        val pending = try {
+            json.decodeFromString(PendingSignIn.serializer(), text)
+        } catch (_: IllegalArgumentException) {
+            return null
+        }
+        if (listOf(pending.server, pending.clientId, pending.state, pending.verifier).any { it.isEmpty() }) return null
+        return pending
     }
 }

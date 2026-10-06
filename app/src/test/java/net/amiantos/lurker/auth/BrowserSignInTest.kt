@@ -66,36 +66,38 @@ class BrowserSignInTest {
     fun theRedirectAnswersTheAttempt() = runTest {
         val waiter = RedirectWaiter()
         val answer = async(start = CoroutineStart.UNDISPATCHED) { waiter.await { true } }
+        assertTrue(waiter.waiting.value)
         assertTrue(waiter.redirected("chat.lurker:/oauth?code=abc"))
-        // Android's order: onNewIntent, then onResume. The resume finds nothing waiting.
-        waiter.resumed()
         assertEquals("chat.lurker:/oauth?code=abc", answer.await())
+        assertFalse(waiter.waiting.value)
     }
 
     @Test
-    fun aResumeWithoutTheRedirectIsAClose() = runTest {
+    fun aCancelEndsTheAttempt() = runTest {
         val waiter = RedirectWaiter()
         val answer = async(start = CoroutineStart.UNDISPATCHED) { waiter.await { true } }
-        waiter.resumed()
+        waiter.cancel()
         assertNull(answer.await())
+        assertFalse(waiter.waiting.value)
         // And a late redirect finds nothing to answer.
         assertFalse(waiter.redirected("chat.lurker:/oauth?code=abc"))
+    }
+
+    @Test
+    fun aCancelBeforeAnyAttemptDoesNothing() = runTest {
+        val waiter = RedirectWaiter()
+        waiter.cancel()
+        val answer = async(start = CoroutineStart.UNDISPATCHED) { waiter.await { true } }
+        assertTrue(waiter.redirected("chat.lurker:/oauth?code=abc"))
+        assertEquals("chat.lurker:/oauth?code=abc", answer.await())
     }
 
     @Test
     fun aPageThatNeverWentUpEndsAtOnce() = runTest {
         val waiter = RedirectWaiter()
         assertNull(waiter.await { false })
+        assertFalse(waiter.waiting.value)
         assertFalse(waiter.redirected("chat.lurker:/oauth?code=abc"))
-    }
-
-    @Test
-    fun aResumeBeforeAnyAttemptDoesNothing() = runTest {
-        val waiter = RedirectWaiter()
-        waiter.resumed()
-        val answer = async(start = CoroutineStart.UNDISPATCHED) { waiter.await { true } }
-        assertTrue(waiter.redirected("chat.lurker:/oauth?code=abc"))
-        assertEquals("chat.lurker:/oauth?code=abc", answer.await())
     }
 
     @Test
@@ -104,6 +106,8 @@ class BrowserSignInTest {
         val first = async(start = CoroutineStart.UNDISPATCHED) { waiter.await { true } }
         val second = async(start = CoroutineStart.UNDISPATCHED) { waiter.await { true } }
         assertNull(first.await())
+        // The first one ending leaves the second's page up.
+        assertTrue(waiter.waiting.value)
         assertTrue(waiter.redirected("chat.lurker:/oauth?code=second"))
         assertEquals("chat.lurker:/oauth?code=second", second.await())
     }
@@ -113,6 +117,7 @@ class BrowserSignInTest {
         val waiter = RedirectWaiter()
         val answer = async(start = CoroutineStart.UNDISPATCHED) { waiter.await { true } }
         answer.cancelAndJoin()
+        assertFalse(waiter.waiting.value)
         assertFalse(waiter.redirected("chat.lurker:/oauth?code=abc"))
     }
 }

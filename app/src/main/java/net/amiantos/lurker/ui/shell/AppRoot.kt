@@ -42,8 +42,10 @@ fun AppRoot(
     dccOffers: DccOffers,
     uploads: UploadServices,
     signInNotice: StateFlow<String?>,
+    signInWaiting: StateFlow<Boolean>,
     lastServerURL: () -> String,
     onSignIn: (server: String) -> Unit,
+    onCancelSignIn: () -> Unit,
 ) {
     val session by model.sessionPublisher.collectAsStateWithLifecycle(initialValue = model.session)
     val signedIn = session == ChatViewModel.SessionState.LoggedIn
@@ -75,7 +77,14 @@ fun AppRoot(
                     sessionLive = signedIn && shown == current,
                 )
             } else {
-                SignInScreen(model = model, notice = signInNotice, initialServer = lastServerURL(), onSignIn = onSignIn)
+                SignInScreen(
+                    model = model,
+                    notice = signInNotice,
+                    waiting = signInWaiting,
+                    initialServer = lastServerURL(),
+                    onSignIn = onSignIn,
+                    onCancel = onCancelSignIn,
+                )
             }
         }
     }

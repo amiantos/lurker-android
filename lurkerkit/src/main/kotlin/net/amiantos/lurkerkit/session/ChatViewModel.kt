@@ -369,7 +369,44 @@ class ChatViewModel(
         val state = OAuth.randomString()
         val page = OAuth.authorizeURL(server = server, clientId = clientId, challenge = pkce.challenge, state = state)
             ?: return signInFailed("That server URL doesn't look right.")
-        val callback = authorize(page) ?: return signInFailed(null)
+        // Port-only: kept until the page answers, so a redirect that outlives this process can still
+        // finish (`resumeSignIn`).
+        sessions.savePendingSignIn(PendingSignIn(server = server, clientId = clientId, state = state, verifier = pkce.verifier))
+        val callback = authorize(page)
+        sessions.clearPendingSignIn()
+        if (callback == null) return signInFailed(null)
+        return finishSignIn(server = server, clientId = clientId, state = state, verifier = pkce.verifier, callback = callback)
+    }
+
+    /**
+     * Finish a sign-in whose redirect arrived with nothing waiting for it: the process that opened
+     * the approval page was killed while it was up, and the redirect started this one. Returns
+     * whether it worked; on failure `statusPublisher` carries the reason.
+     *
+     * Ignored while signed in or already signing in: nothing here may end a live session, and an
+     * attempt in flight has its own redirect coming.
+     *
+     * Port-only: see `PendingSignIn`.
+     */
+    suspend fun resumeSignIn(callback: String): Boolean {
+        if (session != SessionState.LoggedOut) return false
+        val pending = sessions.takePendingSignIn()
+            ?: return signInFailed("That sign-in has already ended. Try again.")
+        sessionSubject.value = SessionState.LoggingIn
+        statusSubject.value = null
+        startDeferred = false
+        awaitMediaPurge()
+        return finishSignIn(
+            server = pending.server,
+            clientId = pending.clientId,
+            state = pending.state,
+            verifier = pending.verifier,
+            callback = callback,
+        )
+    }
+
+    /** The approval page's answer, traded for a token and the session it opens. */
+    private suspend fun finishSignIn(server: String, clientId: String, state: String, verifier: String, callback: String): Boolean {
         val code: String
         when (val answer = OAuth.callback(callback, state = state)) {
             is OAuth.Callback.Code -> code = answer.code
@@ -378,7 +415,7 @@ class ChatViewModel(
         }
 
         when (
-            val grant = client.exchangeCode(server = server, clientId = clientId, code = code, verifier = pkce.verifier)
+            val grant = client.exchangeCode(server = server, clientId = clientId, code = code, verifier = verifier)
         ) {
             is OAuth.TokenGrant.Token -> {
                 sessions.save(PersistedSession(server = server, token = grant.token))

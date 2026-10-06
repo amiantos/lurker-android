@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,13 +52,17 @@ import net.amiantos.lurkerkit.session.ChatViewModel
  *
  * [initialServer] prefills the field (the last server used), so a returning user after sign-out
  * doesn't retype it. [onSignIn] starts the attempt; it outlives this screen (see `LurkerApp.signIn`).
+ * While the approval page is up ([waiting]) the screen says so and offers [onCancel]: nothing tells
+ * the app that the tab was closed.
  */
 @Composable
 fun SignInScreen(
     model: ChatViewModel,
     notice: StateFlow<String?>,
+    waiting: StateFlow<Boolean>,
     initialServer: String,
     onSignIn: (server: String) -> Unit,
+    onCancel: () -> Unit,
 ) {
     val session by model.sessionPublisher.collectAsStateWithLifecycle(initialValue = model.session)
     // The reason a sign-in failed, or why a prior session ended (a mid-session 401 bounces here
@@ -66,13 +71,16 @@ fun SignInScreen(
     // What the kit cannot know: the browser side's reason (`BrowserSignIn.notice`). The kit's
     // word wins when it has one; a new attempt clears both.
     val browserNotice by notice.collectAsStateWithLifecycle()
+    val inBrowser by waiting.collectAsStateWithLifecycle()
     var server by rememberSaveable { mutableStateOf(initialServer) }
     SignInContent(
         server = server,
         onServerChange = { server = it },
         busy = session == ChatViewModel.SessionState.LoggingIn,
+        inBrowser = inBrowser,
         status = status ?: browserNotice,
         onSignIn = { onSignIn(server) },
+        onCancel = onCancel,
     )
 }
 
@@ -81,8 +89,10 @@ private fun SignInContent(
     server: String,
     onServerChange: (String) -> Unit,
     busy: Boolean,
+    inBrowser: Boolean,
     status: String?,
     onSignIn: () -> Unit,
+    onCancel: () -> Unit,
 ) {
     val focus = LocalFocusManager.current
     val submit = {
@@ -135,6 +145,17 @@ private fun SignInContent(
                 if (busy) {
                     CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
                 }
+                if (inBrowser) {
+                    Text(
+                        "Finish signing in in your browser.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.align(Alignment.CenterHorizontally),
+                    )
+                    TextButton(onClick = onCancel, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+                        Text("Cancel")
+                    }
+                }
                 if (status != null) {
                     Text(
                         status,
@@ -153,7 +174,15 @@ private fun SignInContent(
 @Composable
 private fun SignInPreviewLight() {
     LurkerTheme(darkTheme = false) {
-        SignInContent("https://app.lurker.chat", {}, busy = false, status = "Enter a server URL.", onSignIn = {})
+        SignInContent(
+            "https://app.lurker.chat",
+            {},
+            busy = false,
+            inBrowser = false,
+            status = "Enter a server URL.",
+            onSignIn = {},
+            onCancel = {},
+        )
     }
 }
 
@@ -161,6 +190,6 @@ private fun SignInPreviewLight() {
 @Composable
 private fun SignInPreviewDark() {
     LurkerTheme(darkTheme = true) {
-        SignInContent("https://app.lurker.chat", {}, busy = true, status = null, onSignIn = {})
+        SignInContent("https://app.lurker.chat", {}, busy = true, inBrowser = true, status = null, onSignIn = {}, onCancel = {})
     }
 }
