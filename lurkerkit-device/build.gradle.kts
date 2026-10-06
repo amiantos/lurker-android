@@ -37,7 +37,11 @@ android {
             // The bundled network catalogue is a Java resource the kit reads from its classpath.
             resources.srcDir("../lurkerkit/src/main/resources")
         }
-        getByName("androidTest") { kotlin.srcDir("../lurkerkit/src/test/kotlin") }
+        getByName("androidTest") {
+            kotlin.srcDir("../lurkerkit/src/test/kotlin")
+            // The push relay's test vectors (relayVectors.json), read from the classpath.
+            resources.srcDir("../lurkerkit/src/test/resources")
+        }
     }
     // The kit's tests are written for a JVM; lint has nothing to say about running them.
     lint { checkReleaseBuilds = false }
