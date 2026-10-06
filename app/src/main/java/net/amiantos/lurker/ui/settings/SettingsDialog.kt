@@ -145,6 +145,7 @@ internal fun SettingsDialog(
 
     val autocapitalizes by uiPreferences.composerAutocapitalizes.collectAsStateWithLifecycle()
     val enterSends by uiPreferences.composerEnterSends.collectAsStateWithLifecycle()
+    val noAppPush by model.serverHasNoAppPush.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val about = remember(context) { AboutLines(version = versionLine(context), server = serverLine(uiPreferences)) }
 
@@ -155,7 +156,7 @@ internal fun SettingsDialog(
             sections = SettingsModel.sections(inputs),
             settings = inputs.settings,
             edits = writer.edits,
-            device = DeviceToggles(autocapitalizes = autocapitalizes, enterSends = enterSends),
+            device = DeviceToggles(autocapitalizes = autocapitalizes, enterSends = enterSends, noAppPush = noAppPush),
             about = about,
             actions = SettingsActions(
                 onClose = onDismiss,
@@ -232,7 +233,12 @@ internal class SettingsActions(
 }
 
 /** The This Device section's switches, as they stand. */
-internal data class DeviceToggles(val autocapitalizes: Boolean, val enterSends: Boolean)
+/**
+ * [noAppPush]: the server answered that it can't push to this app — no FCM key of its own, and its
+ * admin hasn't turned on push.lurker.chat (`ChatViewModel.serverHasNoAppPush`). Said here, under this
+ * device's rows, rather than only in Logcat.
+ */
+internal data class DeviceToggles(val autocapitalizes: Boolean, val enterSends: Boolean, val noAppPush: Boolean = false)
 
 @Composable
 private fun SettingsContent(
@@ -293,6 +299,7 @@ private fun LazyListScope.section(
                     checked = device.enterSends,
                     onCheckedChange = actions.onEnterSends,
                 )
+                if (device.noAppPush) FormSectionFooter(NO_APP_PUSH_NOTE)
             }
         }
         SettingsSection.Account -> item(key = id) {
@@ -602,3 +609,6 @@ private fun UnavailablePreviewLight() = SettingsPreview(dark = false, settings =
 @Preview(name = "Settings, not loaded — dark")
 @Composable
 private fun UnavailablePreviewDark() = SettingsPreview(dark = true, settings = Settings())
+
+/** Shown under the device rows when the server can't push to the app. */
+internal const val NO_APP_PUSH_NOTE = "Your server's admin hasn't turned on push for the apps."

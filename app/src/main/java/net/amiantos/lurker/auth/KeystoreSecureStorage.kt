@@ -37,9 +37,17 @@ import javax.crypto.spec.GCMParameterSpec
  * Best-effort throughout, as the contract requires: nothing here throws. The prototype's
  * password-era session lived under the same preferences file and key (`"session"`), which is
  * the kit's `legacyAccount`, so `takeLegacySession` can find and end it.
+ *
+ * [prefsName] and [keyAlias] default to the session's. The relayed-push keys (`RelayPushKeys`) get
+ * a file and Keystore key of their own, so neither secret's storage can disturb the other's — a
+ * dropped push key must never sign the user out.
  */
-class KeystoreSecureStorage(context: Context) : SecureStorage {
-    private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+class KeystoreSecureStorage(
+    context: Context,
+    prefsName: String = PREFS,
+    private val keyAlias: String = KEY_ALIAS,
+) : SecureStorage {
+    private val prefs = context.getSharedPreferences(prefsName, Context.MODE_PRIVATE)
 
     override fun read(account: String): ByteString? {
         val stored = prefs.getString(account, null) ?: return null
@@ -76,18 +84,18 @@ class KeystoreSecureStorage(context: Context) : SecureStorage {
     private fun secretKey(): SecretKey {
         key?.let { return it }
         val keystore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
-        val existing = runCatching { (keystore.getEntry(KEY_ALIAS, null) as? KeyStore.SecretKeyEntry)?.secretKey }
+        val existing = runCatching { (keystore.getEntry(keyAlias, null) as? KeyStore.SecretKeyEntry)?.secretKey }
             .getOrElse {
                 // An alias that exists but cannot be used (keystore reset or corruption): drop
                 // it, or every save would fail silently for the rest of the install.
-                runCatching { keystore.deleteEntry(KEY_ALIAS) }
+                runCatching { keystore.deleteEntry(keyAlias) }
                 null
             }
         existing?.let { key = it; return it }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
         generator.init(
             KeyGenParameterSpec.Builder(
-                KEY_ALIAS,
+                keyAlias,
                 KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
             )
                 .setBlockModes(KeyProperties.BLOCK_MODE_GCM)

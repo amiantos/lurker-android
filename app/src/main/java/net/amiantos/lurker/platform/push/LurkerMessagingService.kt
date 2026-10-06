@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.platform.push
 
+import android.util.Log
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.google.firebase.messaging.FirebaseMessagingService
@@ -11,7 +12,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import net.amiantos.lurker.LurkerApp
+import net.amiantos.lurkerkit.push.RelayPush
+import net.amiantos.lurkerkit.push.WebPushDecrypt
 import net.amiantos.lurkerkit.session.ChatViewModel
+import java.util.Base64
 
 /**
  * Where FCM delivers (lurker-android#16). The server sends data-only messages, so this runs for every
@@ -22,8 +26,9 @@ import net.amiantos.lurkerkit.session.ChatViewModel
 class LurkerMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
-        val push = PushMessage.parse(message.data) ?: return
         val app = application as LurkerApp
+        val data = message.data["p"]?.let { opened(app, it) ?: return } ?: message.data
+        val push = PushMessage.parse(data) ?: return
         // On the main thread, where sign-out clears notifications (`LurkerApp.observeSession`): checked
         // and posted there, a sign-out can't land between the check and the post and leave the
         // departing account's message on the lock screen. Blocking this worker briefly is fine; it's
@@ -44,11 +49,30 @@ class LurkerMessagingService : FirebaseMessagingService() {
     }
 
     /**
+     * A push relayed through push.lurker.chat (lurker-dev/RELAY_PLAN.md §6.2): the server's Web Push
+     * body, still encrypted for this install, in `p`. Opened with this install's keys and flattened
+     * to the map a direct push carries, so everything after reads both the same. Null — the push is
+     * dropped — when it can't be opened: no keys (they were lost; the next foreground files new
+     * ones), or a body that isn't ours.
+     */
+    private fun opened(app: LurkerApp, p: String): Map<String, String>? {
+        val keys = app.pushKeys.load() ?: return null.also { Log.w(TAG, "relayed push, but no keys to open it") }
+        val body = runCatching { Base64.getUrlDecoder().decode(p) }.getOrNull()
+        val plain = body?.let { WebPushDecrypt.decrypt(it, keys) }
+            ?: return null.also { Log.w(TAG, "couldn't open a relayed push") }
+        return RelayPush.flatten(plain.decodeToString())
+    }
+
+    /**
      * FCM rotated this install's token. Register the new one if we're signed in and allowed to post —
      * without prompting: no screen is up to ask on.
      */
     override fun onNewToken(token: String) {
         val app = application as LurkerApp
         app.scope.launch { app.push.enableIfSignedIn(mayPrompt = false) }
+    }
+
+    private companion object {
+        const val TAG = "Lurker.push"
     }
 }

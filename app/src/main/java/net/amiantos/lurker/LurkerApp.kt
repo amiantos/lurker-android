@@ -33,6 +33,7 @@ import net.amiantos.lurker.ui.uploads.ComposerInserts
 import net.amiantos.lurker.ui.uploads.ShareInbox
 import net.amiantos.lurker.ui.uploads.UploadRunner
 import net.amiantos.lurker.ui.uploads.UploadServices
+import net.amiantos.lurkerkit.push.RelayPushKeys
 import net.amiantos.lurkerkit.session.AppBadge
 import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.session.OAuthClients
@@ -91,6 +92,14 @@ class LurkerApp : Application() {
      * activity up. `MainActivity` lends it the permission prompt while started.
      */
     lateinit var push: PushRegistrar
+        private set
+
+    /**
+     * This install's Web Push keys, for pushes relayed through push.lurker.chat (lurker-dev/
+     * RELAY_PLAN.md §6.2): read by [push] to register, and by the messaging service to open each
+     * push. In secure storage of their own — see `KeystoreSecureStorage`.
+     */
+    lateinit var pushKeys: RelayPushKeys
         private set
 
     /**
@@ -154,7 +163,8 @@ class LurkerApp : Application() {
         )
 
         PushNotifier.createChannels(this)
-        push = PushRegistrar(this, model, scope)
+        pushKeys = RelayPushKeys(KeystoreSecureStorage(this, prefsName = PUSH_KEYS_FILE, keyAlias = PUSH_KEYS_ALIAS))
+        push = PushRegistrar(this, model, scope, pushKeys)
 
         wireCallbacks()
         // Before any activity exists to deliver a redirect.
@@ -348,6 +358,10 @@ class LurkerApp : Application() {
 
     companion object {
         private const val TAG = "Lurker"
+
+        /** The relayed-push keys' preferences file — excluded from backup in res/xml — and Keystore key. */
+        private const val PUSH_KEYS_FILE = "lurker_push_keys"
+        private const val PUSH_KEYS_ALIAS = "lurker_push_keys_key"
 
         /**
          * How this install names itself on the server's list of authorized apps. iOS says
