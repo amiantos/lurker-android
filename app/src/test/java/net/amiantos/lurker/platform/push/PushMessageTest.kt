@@ -4,6 +4,7 @@
 package net.amiantos.lurker.platform.push
 
 import net.amiantos.lurkerkit.client.NotificationTap
+import net.amiantos.lurkerkit.push.RelayPush
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -84,5 +85,26 @@ class PushMessageTest {
     @Test
     fun anUnreadableTimeIsLeftOut() {
         assertNull(PushMessage.parse(dm + ("time" to "yesterday"))!!.sentAt)
+    }
+
+    /**
+     * A relayed push (lurker-dev/RELAY_PLAN.md §6.2) arrives as the server's Web Push body, which the
+     * messaging service decrypts and flattens. This is the `dm` vector's plaintext from lurker's
+     * relayVectors.json: once flattened it must read exactly as a direct FCM push does.
+     */
+    private val relayedDm =
+        """{"kind":"dm","networkId":3,"networkName":"Libera","target":"bob","bufferId":42,"nick":"bob",""" +
+            """"time":"2026-10-06T18:30:00.000Z","messageId":9001,"displayName":"Bob Example","badge":3,""" +
+            """"title":"bob (Libera)","body":"hey, are you around? café ☕ 🎉","tag":"3::bob"}"""
+
+    @Test
+    fun aRelayedPushReadsLikeADirectOne() {
+        val message = PushMessage.parse(RelayPush.flatten(relayedDm)!!)!!
+        assertEquals(PushMessage.Kind.DM, message.kind)
+        assertEquals("bob (Libera)", message.title)
+        assertEquals("hey, are you around? café ☕ 🎉", message.body)
+        assertEquals("3::bob", message.tag)
+        assertEquals(42, message.bufferId)
+        assertEquals(NotificationTap(networkId = 3, target = "bob", messageId = 9001), NotificationTap.parse(message.tap))
     }
 }

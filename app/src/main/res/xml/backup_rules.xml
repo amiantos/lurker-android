@@ -9,9 +9,12 @@
    so whoever signs in there next would inherit the settings; they stay here too.
    push holds whether this install has asked for notification permission (PushRegistrar). The
    grant itself doesn't travel, so a restored "asked" would never ask again on the new device.
+   lurker_push_keys holds this install's Web Push keys for relayed push (RelayPushKeys). Its Keystore
+   key doesn't travel, and the server's registration names this phone's FCM token, not the next one's.
 -->
 <full-backup-content>
     <exclude domain="sharedpref" path="lurker_session.xml" />
     <exclude domain="sharedpref" path="lurker_defaults.xml" />
     <exclude domain="sharedpref" path="push.xml" />
+    <exclude domain="sharedpref" path="lurker_push_keys.xml" />
 </full-backup-content>

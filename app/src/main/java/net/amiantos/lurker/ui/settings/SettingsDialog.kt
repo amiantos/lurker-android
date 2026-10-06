@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.settings
 
+import net.amiantos.lurkerkit.push.AppPushUnavailable
 import net.amiantos.lurker.ui.networks.FormErrorRow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
@@ -145,6 +146,7 @@ internal fun SettingsDialog(
 
     val autocapitalizes by uiPreferences.composerAutocapitalizes.collectAsStateWithLifecycle()
     val enterSends by uiPreferences.composerEnterSends.collectAsStateWithLifecycle()
+    val noAppPush by model.appPushUnavailable.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val about = remember(context) { AboutLines(version = versionLine(context), server = serverLine(uiPreferences)) }
 
@@ -155,7 +157,7 @@ internal fun SettingsDialog(
             sections = SettingsModel.sections(inputs),
             settings = inputs.settings,
             edits = writer.edits,
-            device = DeviceToggles(autocapitalizes = autocapitalizes, enterSends = enterSends),
+            device = DeviceToggles(autocapitalizes = autocapitalizes, enterSends = enterSends, noAppPush = noAppPush),
             about = about,
             actions = SettingsActions(
                 onClose = onDismiss,
@@ -232,7 +234,16 @@ internal class SettingsActions(
 }
 
 /** The This Device section's switches, as they stand. */
-internal data class DeviceToggles(val autocapitalizes: Boolean, val enterSends: Boolean)
+/**
+ * [noAppPush]: why the server can't push to this app, once it has answered so
+ * (`ChatViewModel.appPushUnavailable`). Said here, under this device's rows, rather than only in
+ * Logcat.
+ */
+internal data class DeviceToggles(
+    val autocapitalizes: Boolean,
+    val enterSends: Boolean,
+    val noAppPush: AppPushUnavailable? = null,
+)
 
 @Composable
 private fun SettingsContent(
@@ -293,6 +304,7 @@ private fun LazyListScope.section(
                     checked = device.enterSends,
                     onCheckedChange = actions.onEnterSends,
                 )
+                device.noAppPush?.let { FormSectionFooter(noAppPushNote(it)) }
             }
         }
         SettingsSection.Account -> item(key = id) {
@@ -602,3 +614,9 @@ private fun UnavailablePreviewLight() = SettingsPreview(dark = false, settings =
 @Preview(name = "Settings, not loaded — dark")
 @Composable
 private fun UnavailablePreviewDark() = SettingsPreview(dark = true, settings = Settings())
+
+/** Shown under the device rows when the server can't push to the app, by reason. */
+internal fun noAppPushNote(reason: AppPushUnavailable): String = when (reason) {
+    AppPushUnavailable.NotTurnedOn -> "Your server's admin hasn't turned on push for the apps."
+    AppPushUnavailable.RelayUnsupported -> "This server's push relay isn't supported by this app."
+}

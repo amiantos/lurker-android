@@ -5,6 +5,7 @@ package net.amiantos.lurker.platform.push
 
 import android.Manifest
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
@@ -20,6 +21,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import net.amiantos.lurkerkit.push.PushRoute
+import net.amiantos.lurkerkit.push.RelayPushKeys
 import net.amiantos.lurkerkit.session.ChatViewModel
 
 /**
@@ -34,6 +37,12 @@ import net.amiantos.lurkerkit.session.ChatViewModel
  * Backwards, and a self-hoster's user gets a permission prompt for notifications their server can
  * never send — a grant spent on nothing.
  *
+ * Two ways to hand the token over (lurker-dev/RELAY_PLAN.md §6.2): directly, to a server that holds
+ * our FCM key (the hosted service); or, on a self-hosted server whose admin has turned on
+ * push.lurker.chat, inside a relay endpoint filed as a Web Push subscription with this install's
+ * keys ([pushKeys]). The relay forwards each push still encrypted; the messaging service opens it.
+ * The app never contacts the relay itself.
+ *
  * App-scoped (built by `LurkerApp`) because a token rotation arrives in the messaging service with no
  * activity up. The permission prompt is the one step that needs an activity, so `MainActivity` lends
  * one ([permissionPrompt]) while it's started, and hands the answer back ([onPermissionResult]) —
@@ -43,6 +52,7 @@ class PushRegistrar(
     private val context: Context,
     private val model: ChatViewModel,
     private val scope: CoroutineScope,
+    private val pushKeys: RelayPushKeys,
 ) {
     sealed interface Outcome {
         /** The server has this install's token. */
@@ -51,7 +61,11 @@ class PushRegistrar(
         /** The server answered, and won't take the token. */
         data object Rejected : Outcome
 
-        /** The server answered, and can't deliver FCM (self-hosted, or older than lurker#490). */
+        /**
+         * The server answered, and can't push to the app: it holds no FCM key (self-hosted, or older
+         * than lurker#490) and its admin hasn't turned on push.lurker.chat — or it names a relay this
+         * app can't use. Settings says which.
+         */
         data object UnsupportedByServer : Outcome
 
         /** We couldn't ask the server. Transient, and says nothing about its configuration. */
@@ -117,6 +131,19 @@ class PushRegistrar(
     private var registeredToken: String? = null
 
     /**
+     * The relay registration the server has from this session — the endpoint and the p256dh it was
+     * filed with — likewise. The key is part of it: keys lost and replaced mid-process have to be
+     * filed again, or every push to this phone arrives encrypted for keys it no longer has.
+     */
+    private var registeredRelay: Pair<String, String>? = null
+
+    /**
+     * A debug build accepts any https relay, for developing the relay against a local server
+     * (`LURKER_PUSH_RELAY_URL`); a release build only push.lurker.chat — see `RelayPush.route`.
+     */
+    private val debuggable = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
+    /**
      * Run the sequence, once signed in and never before: a prompt on the sign-in screen asks the user
      * to authorize notifications for an account they haven't named yet. Safe to call on every
      * foreground — FCM re-issues the same token, the server upserts, and a granted permission doesn't
@@ -151,6 +178,7 @@ class PushRegistrar(
      */
     fun signedOut() {
         registeredToken = null
+        registeredRelay = null
         rerunOwed = false
         rerunMayPrompt = false
         inFlight?.cancel()
@@ -169,8 +197,13 @@ class PushRegistrar(
         if (FirebaseApp.getApps(context).isEmpty()) return Outcome.NoFirebase
         val playServices = GoogleApiAvailabilityLight.getInstance().isGooglePlayServicesAvailable(context)
         if (playServices != ConnectionResult.SUCCESS) return Outcome.NoPlayServices(playServices)
-        val supported = model.serverSupportsAPNs() ?: return Outcome.ServerUnreachable
-        if (!supported) return Outcome.UnsupportedByServer
+        val route = model.pushRoute(allowAnyHttpsRelay = debuggable) ?: return Outcome.ServerUnreachable
+        if (route == PushRoute.None || route == PushRoute.Unsupported) {
+            // Turning the relay off deletes our registration on the server; if it comes back on,
+            // the endpoint has to be filed again, not taken as already there.
+            registeredRelay = null
+            return Outcome.UnsupportedByServer
+        }
         permission(mayPrompt)?.let { return it }
         deletion?.join()
         val token = try {
@@ -178,10 +211,38 @@ class PushRegistrar(
         } catch (e: Exception) {
             return Outcome.Failed(e.message ?: e.javaClass.simpleName)
         }
+        return if (route is PushRoute.Relay) registerRelay(route.endpoint(token)) else registerDirect(token)
+    }
+
+    private suspend fun registerDirect(token: String): Outcome {
         if (token == registeredToken) return Outcome.Registered
         if (!model.registerPushDevice(token)) return Outcome.Rejected
         registeredToken = token
+        // The view model took any relay endpoint off as it filed this; so the cache forgets it.
+        registeredRelay = null
         return Outcome.Registered
+    }
+
+    private suspend fun registerRelay(endpoint: String): Outcome {
+        val keys = pushKeys.loadOrCreate() ?: return Outcome.Failed("couldn't store this device's push keys")
+        val filing = endpoint to keys.p256dh
+        // Filed already — but the server deletes relay subscriptions when its admin turns the relay
+        // off, and off-then-on while we were away looks unchanged from here. So ask; an unanswered
+        // ask keeps what we have (re-filing wouldn't get through either).
+        if (filing == registeredRelay && model.relaySubscriptionPresent(endpoint) != false) return Outcome.Registered
+        return when (model.registerRelaySubscription(endpoint, keys)) {
+            ChatViewModel.RelayRegistration.Registered -> {
+                registeredRelay = filing
+                // The view model took any direct token off as it filed this.
+                registeredToken = null
+                Outcome.Registered
+            }
+            ChatViewModel.RelayRegistration.RelayOff -> {
+                registeredRelay = null
+                Outcome.UnsupportedByServer
+            }
+            ChatViewModel.RelayRegistration.Failed -> Outcome.Rejected
+        }
     }
 
     /** Null when notifications may be posted; otherwise why not. */
@@ -208,9 +269,9 @@ class PushRegistrar(
     private fun log(outcome: Outcome) {
         when (outcome) {
             Outcome.Registered, Outcome.Deferred -> Unit
-            Outcome.Rejected -> Log.w(TAG, "the server rejected this device token")
-            // Expected on a self-hosted server: only the app's publisher can push to it.
-            Outcome.UnsupportedByServer -> Log.i(TAG, "this server delivers Web Push only, not FCM; not registering")
+            Outcome.Rejected -> Log.w(TAG, "the server rejected this device's push registration")
+            // Expected on a self-hosted server until its admin turns on push.lurker.chat.
+            Outcome.UnsupportedByServer -> Log.i(TAG, "this server can't push to the app (no FCM, no relay); not registering")
             // Worded so nobody reads it and goes auditing LURKER_FCM_* on a healthy server.
             Outcome.ServerUnreachable -> Log.i(TAG, "couldn't reach the server to ask about push; retrying later")
             Outcome.Denied -> Log.i(TAG, "notifications are off for this app")
