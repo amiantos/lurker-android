@@ -48,6 +48,19 @@ class RelayPushKeys(private val storage: SecureStorage) {
      */
     fun loadOrCreate(): DeviceKeys? = synchronized(lock) { create() }
 
+    /**
+     * Drop the keys, stored and cached, so the next registration makes and files new ones. Called
+     * when a session ends (`ChatViewModel.onPushStateReset`): a push for the last account still
+     * queued at FCM — or still filed after a sign-out that never reached the server — is encrypted
+     * for these keys, and must not open and show once someone else has signed in.
+     */
+    fun forget() {
+        synchronized(lock) {
+            cached = null
+            storage.delete(ACCOUNT)
+        }
+    }
+
     private fun create(): DeviceKeys? {
         cached?.let { return it }
         readStored()?.let { cached = it; return it }

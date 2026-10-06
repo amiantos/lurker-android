@@ -110,8 +110,10 @@ object WebPushDecrypt {
         if (body.size < start + TAG_BYTES + 1) return null
         val senderPoint = body.copyOfRange(HEADER_FIXED, start)
         val ciphertext = body.copyOfRange(start, body.size)
-        // One record: a push is a single record no bigger than the record size it declares.
-        if (recordSize < TAG_BYTES + 1 || ciphertext.size > recordSize) return null
+        // RFC 8188 §2.1: the record size must exceed the 17 bytes of tag and delimiter. A push is one
+        // record, so the whole ciphertext (tag included) must fit the size it declares: bigger, and
+        // the server's http_ece would read it as several records and fail the first.
+        if (recordSize <= TAG_BYTES + 1 || ciphertext.size > recordSize) return null
 
         val shared = ecdh(keys.privateKey, senderPoint) ?: return null
         // RFC 8291 §3.4: the auth secret salts the shared secret, bound to both public keys.

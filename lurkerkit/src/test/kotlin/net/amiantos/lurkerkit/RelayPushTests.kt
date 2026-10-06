@@ -259,54 +259,10 @@ class RelayPushTests {
 
     // MARK: - Hostile bodies, properly encrypted
 
-    /**
-     * RFC 8291 encryption for the tests that need a body the decryptor will authenticate: a hostile
-     * plaintext the server never sends but a compromised one could. [recordSize] is the header's;
-     * a body bigger than the 4 KB a push can be still declares a record that fits it.
-     */
-    private fun encrypt(plaintext: ByteArray, to: DeviceKeys, recordSize: Int = 4096): ByteArray {
-        fun hmac(key: ByteArray, data: ByteArray): ByteArray =
-            javax.crypto.Mac.getInstance("HmacSHA256").run {
-                init(javax.crypto.spec.SecretKeySpec(key, "HmacSHA256"))
-                doFinal(data)
-            }
-        val generator = java.security.KeyPairGenerator.getInstance("EC")
-        generator.initialize(java.security.spec.ECGenParameterSpec("secp256r1"))
-        val sender = generator.generateKeyPair()
-        val w = (sender.public as java.security.interfaces.ECPublicKey).w
-        fun fixed(n: java.math.BigInteger) = n.toByteArray().let { if (it.size > 32) it.copyOfRange(it.size - 32, it.size) else ByteArray(32 - it.size) + it }
-        val senderPoint = byteArrayOf(0x04) + fixed(w.affineX) + fixed(w.affineY)
-        val receiver = java.security.KeyFactory.getInstance("EC").generatePublic(
-            java.security.spec.ECPublicKeySpec(
-                java.security.spec.ECPoint(
-                    java.math.BigInteger(1, to.publicKey.copyOfRange(1, 33)),
-                    java.math.BigInteger(1, to.publicKey.copyOfRange(33, 65)),
-                ),
-                (sender.public as java.security.interfaces.ECPublicKey).params,
-            ),
-        )
-        val shared = javax.crypto.KeyAgreement.getInstance("ECDH").run {
-            init(sender.private)
-            doPhase(receiver, true)
-            generateSecret()
-        }
-        val salt = ByteArray(16).also(java.security.SecureRandom()::nextBytes)
-        val ikm = hmac(hmac(to.authSecret, shared), "WebPush: info".toByteArray() + byteArrayOf(0) + to.publicKey + senderPoint + byteArrayOf(1)).copyOf(32)
-        val prk = hmac(salt, ikm)
-        val cek = hmac(prk, "Content-Encoding: aes128gcm".toByteArray() + byteArrayOf(0, 1)).copyOf(16)
-        val nonce = hmac(prk, "Content-Encoding: nonce".toByteArray() + byteArrayOf(0, 1)).copyOf(12)
-        val ciphertext = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding").run {
-            init(javax.crypto.Cipher.ENCRYPT_MODE, javax.crypto.spec.SecretKeySpec(cek, "AES"), javax.crypto.spec.GCMParameterSpec(128, nonce))
-            doFinal(plaintext + byteArrayOf(0x02))
-        }
-        val rs = java.nio.ByteBuffer.allocate(4).putInt(recordSize).array()
-        return salt + rs + byteArrayOf(65) + senderPoint + ciphertext
-    }
-
     @Test
     fun testTheTestEncryptorRoundTrips() {
         val keys = DeviceKeys.generate()
-        val body = encrypt("""{"title":"t","tag":"x"}""".toByteArray(), keys)
+        val body = encryptForTest("""{"title":"t","tag":"x"}""".toByteArray(), keys)
         assertEquals("""{"title":"t","tag":"x"}""", WebPushDecrypt.decrypt(body, keys)?.decodeToString())
     }
 
@@ -315,7 +271,7 @@ class RelayPushTests {
         val keys = DeviceKeys.generate()
         val depth = 200_000
         val hostile = """{"title":"t","tag":"x","n":""" + "[".repeat(depth) + "]".repeat(depth) + "}"
-        val body = encrypt(hostile.toByteArray(), keys, recordSize = hostile.length + 1024)
+        val body = encryptForTest(hostile.toByteArray(), keys, recordSize = hostile.length + 1024)
         val plain = assertNotNull(WebPushDecrypt.decrypt(body, keys)).decodeToString()
         // Parsing that may exhaust the stack; either way it's an answer, not a thrown error.
         val flat = RelayPush.flatten(plain)
@@ -380,5 +336,45 @@ class RelayPushTests {
         registrar.join(5_000)
         val stored = assertNotNull(RelayPushKeys(storage).load(), "the replacement keys survived")
         assertEquals(assertNotNull(made).p256dh, stored.p256dh)
+    }
+
+    // MARK: - Record size (RFC 8188 §2.1)
+
+    private fun withRecordSize(body: ByteArray, rs: Int): ByteArray =
+        body.copyOf().also { java.nio.ByteBuffer.wrap(it, 16, 4).putInt(rs) }
+
+    @Test
+    fun testARecordSizeTheServerWouldRefuseIsRefused() {
+        val v = vectors.first { it.name == "dm" }
+        val record = v.body.size - 86 // ciphertext and tag, after the 86-byte header
+        // Smaller than the record: http_ece would split it into records and fail the first.
+        assertNull(WebPushDecrypt.decrypt(withRecordSize(v.body, record - 1), v.keys))
+        assertNull(WebPushDecrypt.decrypt(withRecordSize(v.body, 0), v.keys))
+        // Exactly the record still opens; any bigger record size is fine too.
+        assertNotNull(WebPushDecrypt.decrypt(withRecordSize(v.body, record), v.keys))
+        assertNotNull(WebPushDecrypt.decrypt(withRecordSize(v.body, Int.MAX_VALUE), v.keys))
+    }
+
+    @Test
+    fun testARecordSizeOf17IsRefusedEvenWhenTheRecordFits() {
+        // An empty message is exactly 17 bytes (delimiter and tag), so only the floor catches this.
+        val keys = DeviceKeys.generate()
+        val body = encryptForTest(ByteArray(0), keys, recordSize = 17)
+        assertNull(WebPushDecrypt.decrypt(body, keys))
+        assertNotNull(WebPushDecrypt.decrypt(withRecordSize(body, 18), keys))
+    }
+
+    // MARK: - Rotating keys
+
+    @Test
+    fun testForgottenKeysCantOpenWhatWasSentToThem() {
+        val keys = RelayPushKeys(InMemorySecureStorage())
+        val old = assertNotNull(keys.loadOrCreate())
+        val body = encryptForTest("""{"title":"t","tag":"x"}""".toByteArray(), old)
+        keys.forget()
+        assertNull(keys.load())
+        val next = assertNotNull(keys.loadOrCreate())
+        assertTrue(next.p256dh != old.p256dh)
+        assertNull(WebPushDecrypt.decrypt(body, next))
     }
 }

@@ -607,7 +607,10 @@ class ChatViewModel(
      */
     suspend fun pushRoute(allowAnyHttpsRelay: Boolean): PushRoute? {
         if (apnsSupported == true) return PushRoute.Native
+        val generation = pushGeneration
         val config = client.pushConfig() ?: return null
+        // An answer about a session that has ended since: not this one's to act on.
+        if (generation != pushGeneration) return null
         val route = RelayPush.route(config, allowAnyHttpsRelay)
         if (route == PushRoute.Native) apnsSupported = true
         _appPushUnavailable.value = when (route) {
@@ -662,7 +665,10 @@ class ChatViewModel(
         // A different endpoint filed earlier (a rotated FCM token, a changed server key) goes too.
         relayEndpoint?.takeIf { it != endpoint }?.let { client.dropRelaySubscription(it) }
         relayEndpoint = endpoint
+        val generation = pushGeneration
         val code = client.registerRelaySubscription(endpoint, keys.p256dh, keys.auth) ?: return RelayRegistration.Failed
+        // The session ended while this was out: its answer mustn't set the next one's state.
+        if (generation != pushGeneration) return RelayRegistration.Failed
         return when {
             code in 200..<300 -> {
                 _appPushUnavailable.value = null
@@ -693,11 +699,26 @@ class ChatViewModel(
      * no answer about a server the next sign-in may not be on.
      */
     private fun resetPush() {
+        pushGeneration++
         deviceToken = null
         relayEndpoint = null
         apnsSupported = null
         _appPushUnavailable.value = null
+        onPushStateReset?.invoke()
     }
+
+    /**
+     * Which session push requests belong to: bumped at each teardown, so a reply to a request the
+     * last session sent — a 403, a config — is dropped instead of setting the next session's state.
+     */
+    private var pushGeneration = 0
+
+    /**
+     * Called when a session ends, by either teardown, so the app can rotate this install's relay
+     * push keys (`RelayPushKeys.forget`): a push for the last account still in flight must not open
+     * once another has signed in. A closure because the keys' storage is the platform's.
+     */
+    var onPushStateReset: (() -> Unit)? = null
 
     /**
      * Hand the OS-issued device token to the server. Idempotent — the OS re-issues the same

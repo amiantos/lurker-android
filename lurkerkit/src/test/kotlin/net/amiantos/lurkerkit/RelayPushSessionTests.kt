@@ -4,6 +4,7 @@
 package net.amiantos.lurkerkit
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
@@ -30,6 +31,7 @@ import java.util.concurrent.Executors
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 /**
@@ -38,14 +40,21 @@ import kotlin.test.assertTrue
  */
 class RelayPushSessionTests {
 
-    /** Answers by path; records method, path and body. */
-    private class Server(val answers: Map<String, Pair<Int, String>>) {
-        val requests: MutableList<String> = Collections.synchronizedList(mutableListOf())
+    /** Answers by path; records method, path and body. A path with a [gates] latch waits on it. */
+    private class Server(
+        val answers: Map<String, Pair<Int, String>>,
+        val gates: Map<String, java.util.concurrent.CountDownLatch> = emptyMap(),
+    ) {
+        private val log: MutableList<String> = Collections.synchronizedList(mutableListOf())
+
+        /** A snapshot: sign-out keeps adding on OkHttp's threads while a test reads. */
+        val requests: List<String> get() = synchronized(log) { log.toList() }
         val http: OkHttpClient = OkHttpClient.Builder()
             .addInterceptor { chain ->
                 val request = chain.request()
                 val body = request.body?.let { Buffer().also(it::writeTo).readUtf8() } ?: ""
-                requests.add("${request.method} ${request.url.encodedPath} $body".trimEnd())
+                log.add("${request.method} ${request.url.encodedPath} $body".trimEnd())
+                gates[request.url.encodedPath]?.await(5, java.util.concurrent.TimeUnit.SECONDS)
                 val (status, text) = answers[request.url.encodedPath] ?: (200 to """{"ok":true}""")
                 Response.Builder()
                     .request(request)
@@ -278,6 +287,60 @@ class RelayPushSessionTests {
             h.onMain { h.model.logout() }
             withTimeout(5_000) { while (h.server.requests.none { it.startsWith("POST /api/auth/logout") }) delay(20) }
             assertEquals(1, h.server.requests.count { it.startsWith("DELETE /api/push/subscriptions") })
+        }
+    }
+
+    // MARK: - Account isolation
+
+    @Test
+    fun testEitherTeardownRotatesTheRelayKeys() = runBlocking {
+        for (teardown in listOf("logout", "401")) {
+            Harness(Server(emptyMap())).use { h ->
+                h.signedIn()
+                val keys = net.amiantos.lurkerkit.push.RelayPushKeys(InMemorySecureStorage())
+                h.model.onPushStateReset = keys::forget
+                val old = assertNotNull(keys.loadOrCreate())
+                // The last account's push, still queued at FCM when the next one signs in.
+                val queued = encryptForTest("""{"title":"t","tag":"x"}""".toByteArray(), old)
+                h.onMain { if (teardown == "logout") h.model.logout() else h.model.handle(ServerFrame.Unauthorized) }
+                val next = assertNotNull(keys.loadOrCreate())
+                assertEquals(null, net.amiantos.lurkerkit.push.WebPushDecrypt.decrypt(queued, next), teardown)
+            }
+        }
+    }
+
+    @Test
+    fun testAReplyFromAnEndedSessionSetsNothing() = runBlocking {
+        val endpoint = "https://push.lurker.chat/relay-to/fcm/tok123/$key"
+        val gate = java.util.concurrent.CountDownLatch(1)
+        Harness(Server(mapOf("/api/push/subscriptions" to (403 to "{}")), gates = mapOf("/api/push/subscriptions" to gate))).use { h ->
+            h.signedIn()
+            val pending = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).async {
+                h.onMain { h.model.registerRelaySubscription(endpoint, DeviceKeys.generate()) }
+            }
+            withTimeout(5_000) { while (h.server.requests.none { it.startsWith("POST /api/push/subscriptions") }) delay(20) }
+            // The account ends while the 403 is on its way.
+            h.onMain { h.model.handle(ServerFrame.Unauthorized) }
+            gate.countDown()
+            assertEquals(ChatViewModel.RelayRegistration.Failed, pending.await())
+            // "Relay off" was about the last session's server: nothing for Settings to say now.
+            assertEquals(null, h.model.appPushUnavailable.value)
+        }
+    }
+
+    @Test
+    fun testAConfigFromAnEndedSessionSetsNothing() = runBlocking {
+        val gate = java.util.concurrent.CountDownLatch(1)
+        Harness(Server(mapOf(config("""["webpush"]""", null)), gates = mapOf("/api/push/config" to gate))).use { h ->
+            h.signedIn()
+            val pending = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Default).async {
+                h.onMain { h.model.pushRoute(false) }
+            }
+            withTimeout(5_000) { while (h.server.requests.none { it.startsWith("GET /api/push/config") }) delay(20) }
+            h.onMain { h.model.handle(ServerFrame.Unauthorized) }
+            gate.countDown()
+            assertEquals(null, pending.await())
+            assertEquals(null, h.model.appPushUnavailable.value)
         }
     }
 }

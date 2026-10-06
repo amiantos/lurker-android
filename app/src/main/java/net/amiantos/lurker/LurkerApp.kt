@@ -164,6 +164,8 @@ class LurkerApp : Application() {
 
         PushNotifier.createChannels(this)
         pushKeys = RelayPushKeys(KeystoreSecureStorage(this, prefsName = PUSH_KEYS_FILE, keyAlias = PUSH_KEYS_ALIAS))
+        // New keys for each session: the last account's pushes, still in flight, then can't open.
+        model.onPushStateReset = pushKeys::forget
         push = PushRegistrar(this, model, scope, pushKeys)
 
         wireCallbacks()
