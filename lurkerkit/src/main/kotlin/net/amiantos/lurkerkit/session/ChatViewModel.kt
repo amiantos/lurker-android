@@ -33,6 +33,7 @@ import net.amiantos.lurkerkit.client.UploadServerProgress
 import net.amiantos.lurkerkit.client.Uploads
 import net.amiantos.lurkerkit.client.VerbReply
 import net.amiantos.lurkerkit.commands.CommandEffect
+import net.amiantos.lurkerkit.push.AppPushUnavailable
 import net.amiantos.lurkerkit.push.DeviceKeys
 import net.amiantos.lurkerkit.push.PushRoute
 import net.amiantos.lurkerkit.push.RelayPush
@@ -525,11 +526,7 @@ class ChatViewModel(
         client.logout(deviceToken = deviceToken, relayEndpoint = relayEndpoint, drafts = drafts) { outcome ->
             if (ending != null) revokeFinished(ending, outcome)
         }
-        deviceToken = null
-        relayEndpoint = null
-        // The next sign-in may be against a different server, whose answer differs.
-        apnsSupported = null
-        _serverHasNoAppPush.value = false
+        resetPush()
         sessions.clear()
         // Port-only: an attempt a killed process left out in the browser goes too, so a late
         // redirect from its tab can't sign this phone back in after a deliberate sign-out.
@@ -585,45 +582,27 @@ class ChatViewModel(
     private var deviceToken: String? = null
 
     /**
-     * Cached answer to "does this server speak our push transport". Fixed for a given server,
-     * and the question is asked on every activation — without this that's an HTTP round trip
-     * every time the user opens the app, to re-learn something that cannot have changed.
-     * Only a real answer is cached: a failed ask stays unknown and is retried.
+     * Whether this server has answered that it delivers FCM itself (the hosted service). Only that
+     * answer is cached: it's fixed for a server, and [pushRoute] is asked on every activation. A
+     * server without FCM is asked again each time — see [pushRoute]. The name is LurkerKit's, kept
+     * so it greps across both.
      */
     private var apnsSupported: Boolean? = null
 
     /**
-     * Does this server speak our push transport at all? A self-hosted server holds no push key
-     * and says so via `/api/push/config`, in which case asking the user for notification
-     * permission would be a lie — we'd get the grant and never deliver anything.
-     *
-     * `null` means we couldn't ask. Deliberately NOT folded into `false`: the two are one
-     * wifi blip apart and would read identically at the call site, so collapsing them
-     * makes a transient failure report a permanent fact about the server's configuration
-     * — and sends whoever reads that line off auditing env vars on a box that was fine.
-     * Only a real answer is cached, so an unreachable server is asked again next time.
-     *
-     * Port note: asks for `fcm`, where LurkerKit asks for `apns` — the transport this platform
-     * registers under (`LurkerClient.registerDevice`), and the server's word for whether it
-     * holds the key to deliver it (lurker's `routes/push.ts`). The name is LurkerKit's, kept so
-     * it greps across both.
-     */
-    suspend fun serverSupportsAPNs(): Boolean? {
-        apnsSupported?.let { return it }
-        val transports = client.pushTransports() ?: return null
-        val supported = transports.contains("fcm")
-        apnsSupported = supported
-        return supported
-    }
-
-    /**
      * How this install gets push from this server (lurker-dev/RELAY_PLAN.md §6.2): directly, through
-     * push.lurker.chat, or not at all. `null` means we couldn't ask, as for [serverSupportsAPNs].
+     * push.lurker.chat, or not at all. A server that can't push to the app says so before anyone is
+     * asked for notification permission — a grant we'd never deliver anything under.
      *
-     * Only a direct answer is cached. The relay is a switch the server's admin can flip while the app
-     * runs, so a server without FCM is asked again on each activation — one small GET, on self-hosted
-     * servers only, so turning the relay on reaches phones without a restart.
+     * `null` means we couldn't ask. Deliberately not folded into "no push": the two are one wifi
+     * blip apart, and collapsing them would report a transient failure as a fact about the server's
+     * configuration.
      *
+     * Only a direct answer is cached ([apnsSupported]). The relay is a switch the server's admin can
+     * flip while the app runs, so a server without FCM is asked again on each activation — one small
+     * GET, on self-hosted servers only, so turning the relay on reaches phones without a restart.
+     *
+     * Port note: direct means `fcm` here, where LurkerKit looks for `apns`.
      * [allowAnyHttpsRelay] is for debug builds only: see [RelayPush.route].
      */
     suspend fun pushRoute(allowAnyHttpsRelay: Boolean): PushRoute? {
@@ -631,20 +610,28 @@ class ChatViewModel(
         val config = client.pushConfig() ?: return null
         val route = RelayPush.route(config, allowAnyHttpsRelay)
         if (route == PushRoute.Native) apnsSupported = true
-        _serverHasNoAppPush.value = route == PushRoute.None
+        _appPushUnavailable.value = when (route) {
+            PushRoute.None -> AppPushUnavailable.NotTurnedOn
+            PushRoute.Unsupported -> AppPushUnavailable.RelayUnsupported
+            else -> null
+        }
         return route
     }
 
     /**
-     * True once this server has answered that it can't push to the app — no FCM key of its own, and
-     * its admin hasn't turned on push.lurker.chat — so Settings can say so rather than leave a user
-     * wondering why notifications never come. Reset at sign-out.
+     * Why this server can't push to the app, once it has answered so — the admin hasn't turned on
+     * push.lurker.chat, or the server names a relay this app can't use — so Settings can say which
+     * rather than leave a user wondering why notifications never come. Null otherwise, and after
+     * either teardown ([resetPush]).
      */
-    val serverHasNoAppPush: StateFlow<Boolean> get() = _serverHasNoAppPush.asStateFlow()
-    private val _serverHasNoAppPush = MutableStateFlow(false)
+    val appPushUnavailable: StateFlow<AppPushUnavailable?> get() = _appPushUnavailable.asStateFlow()
+    private val _appPushUnavailable = MutableStateFlow<AppPushUnavailable?>(null)
 
-    /** The push.lurker.chat endpoint this session filed, so sign-out can take it back off. */
+    /** The push.lurker.chat endpoint this session filed (or tried to), so sign-out can take it off. */
     private var relayEndpoint: String? = null
+
+    /** [relayEndpoint], for the teardown tests: nothing outside can see it once the session is gone. */
+    internal val filedRelayEndpoint: String? get() = relayEndpoint
 
     /** How filing a relay endpoint went. */
     enum class RelayRegistration {
@@ -661,22 +648,37 @@ class ChatViewModel(
      * File [endpoint] — built by [PushRoute.Relay.endpoint] from this install's FCM token — as a Web
      * Push subscription with this install's [keys]. Idempotent: the server upserts, and moves the
      * endpoint to this account if another one on this phone held it.
+     *
+     * Recorded BEFORE the request, as [registerPushDevice] records its token: a registration whose
+     * answer was lost may still have landed, and sign-out must take it off either way.
      */
     suspend fun registerRelaySubscription(endpoint: String, keys: DeviceKeys): RelayRegistration {
         if (session != SessionState.LoggedIn) return RelayRegistration.Failed
+        relayEndpoint = endpoint
         val code = client.registerRelaySubscription(endpoint, keys.p256dh, keys.auth) ?: return RelayRegistration.Failed
         return when {
             code in 200..<300 -> {
-                relayEndpoint = endpoint
-                _serverHasNoAppPush.value = false
+                _appPushUnavailable.value = null
                 RelayRegistration.Registered
             }
             code == 403 -> {
-                _serverHasNoAppPush.value = true
+                _appPushUnavailable.value = AppPushUnavailable.NotTurnedOn
                 RelayRegistration.RelayOff
             }
             else -> RelayRegistration.Failed
         }
+    }
+
+    /**
+     * Forget this account's push state. Both teardowns call it — the deliberate sign-out and the 401
+     * bounce — so they leave the same state behind: no token or endpoint of the last session's, and
+     * no answer about a server the next sign-in may not be on.
+     */
+    private fun resetPush() {
+        deviceToken = null
+        relayEndpoint = null
+        apnsSupported = null
+        _appPushUnavailable.value = null
     }
 
     /**
@@ -3044,6 +3046,8 @@ class ChatViewModel(
         loadingOlder.clear()
         loadingNewer.clear()
         lastMarked.clear()
+        // As `logout()` does: the next sign-in may be another account, or another server.
+        resetPush()
         statusSubject.value = "Your session ended — please sign in again."
         sessionSubject.value = SessionState.LoggedOut
     }

@@ -29,8 +29,23 @@ sealed interface PushRoute {
         fun endpoint(fcmToken: String): String = "$origin/relay-to/fcm/$fcmToken/$publicKey"
     }
 
-    /** Neither: the server's admin hasn't turned on push for the apps. */
+    /** Neither: the server's admin hasn't turned on push for the apps (no `relay`). */
     data object None : PushRoute
+
+    /**
+     * The server names a relay this app won't use: not push.lurker.chat (in a release build), or
+     * without the key the endpoint needs. No push either, but not for the reason [None] gives.
+     */
+    data object Unsupported : PushRoute
+}
+
+/** Why this server can't push to the app, for Settings to say. */
+enum class AppPushUnavailable {
+    /** No FCM key, and the admin hasn't turned on push.lurker.chat. */
+    NotTurnedOn,
+
+    /** The server advertises a relay this app can't use (see [PushRoute.Unsupported]). */
+    RelayUnsupported,
 }
 
 object RelayPush {
@@ -45,8 +60,9 @@ object RelayPush {
      */
     fun route(config: PushConfig, allowAnyHttpsRelay: Boolean): PushRoute {
         if ("fcm" in config.transports) return PushRoute.Native
-        val origin = config.relay?.let { allowedOrigin(it, allowAnyHttpsRelay) } ?: return PushRoute.None
-        val key = config.publicKey?.takeIf { it.isNotBlank() } ?: return PushRoute.None
+        val relay = config.relay ?: return PushRoute.None
+        val origin = allowedOrigin(relay, allowAnyHttpsRelay) ?: return PushRoute.Unsupported
+        val key = config.publicKey?.takeIf { it.isNotBlank() } ?: return PushRoute.Unsupported
         return PushRoute.Relay(origin, key)
     }
 
@@ -55,6 +71,8 @@ object RelayPush {
         if (!url.isHttps) return null
         // An origin, nothing more: a path, query or credentials means it isn't the relay's origin.
         if (url.encodedPath != "/" || url.query != null || url.username.isNotEmpty()) return null
+        // Normalized: host case-folded by HttpUrl, the default port dropped, so
+        // `https://PUSH.lurker.chat:443/` is push.lurker.chat.
         val origin = if (url.port == 443) "https://${url.host}" else "https://${url.host}:${url.port}"
         return if (allowAnyHttps || origin == OFFICIAL_RELAY) origin else null
     }

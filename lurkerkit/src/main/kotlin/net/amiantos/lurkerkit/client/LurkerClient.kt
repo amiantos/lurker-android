@@ -1706,27 +1706,14 @@ internal class LurkerClient(
     // MARK: - Push
 
     /**
-     * Which push transports this server can actually deliver on (lurker#490). A self-hosted
-     * server holds no push key of its own and answers `["webpush"]` — knowing that BEFORE asking
-     * for notification permission is the difference between "this server doesn't support push"
-     * and a permission prompt followed by silence forever.
+     * `/api/push/config` (lurker#490, lurker-dev/RELAY_PLAN.md §5a): the transports this server can
+     * actually deliver on, its VAPID public key, and — only while its admin has opted in —
+     * push.lurker.chat's origin as `relay`. A self-hosted server holds no push key of its own and
+     * answers `["webpush"]`; knowing that BEFORE asking for notification permission is the
+     * difference between "this server doesn't support push" and a prompt followed by silence.
      *
-     * `null` means we couldn't ask (offline, 401, unparseable); `[]` means the server
-     * answered and named nothing. Deliberately distinct: collapsing both into `[]` makes a
-     * wifi blip during launch indistinguishable from a permanent fact about the server's
-     * configuration, and the log line that follows sends you auditing env vars on a box
-     * that was fine.
-     *
-     * An older server (pre-lurker#490) has no `transports` key and correctly reads as `[]` —
-     * it answered, and it has no native push.
-     */
-    suspend fun pushTransports(): List<String>? = pushConfig()?.transports
-
-    /**
-     * The whole of `/api/push/config`: the transports (see [pushTransports]), the server's VAPID
-     * public key, and — only while its admin has opted in — push.lurker.chat's origin as `relay`
-     * (lurker-dev/RELAY_PLAN.md §5a). A server older than 2.4.0 has no `relay`, which reads as off.
-     * `null` means we couldn't ask, as for [pushTransports].
+     * `null` means we couldn't ask (offline, 401, unparseable). An older server has no `transports`
+     * (reads as `[]`: it answered, and has no native push) and no `relay` (reads as off).
      */
     suspend fun pushConfig(): PushConfig? {
         val token = token ?: return null

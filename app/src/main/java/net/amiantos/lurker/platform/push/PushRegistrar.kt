@@ -63,7 +63,8 @@ class PushRegistrar(
 
         /**
          * The server answered, and can't push to the app: it holds no FCM key (self-hosted, or older
-         * than lurker#490) and its admin hasn't turned on push.lurker.chat. Settings says so.
+         * than lurker#490) and its admin hasn't turned on push.lurker.chat — or it names a relay this
+         * app can't use. Settings says which.
          */
         data object UnsupportedByServer : Outcome
 
@@ -129,8 +130,12 @@ class PushRegistrar(
      */
     private var registeredToken: String? = null
 
-    /** The relay endpoint the server has from this session, likewise. */
-    private var registeredEndpoint: String? = null
+    /**
+     * The relay registration the server has from this session — the endpoint and the p256dh it was
+     * filed with — likewise. The key is part of it: keys lost and replaced mid-process have to be
+     * filed again, or every push to this phone arrives encrypted for keys it no longer has.
+     */
+    private var registeredRelay: Pair<String, String>? = null
 
     /**
      * A debug build accepts any https relay, for developing the relay against a local server
@@ -173,7 +178,7 @@ class PushRegistrar(
      */
     fun signedOut() {
         registeredToken = null
-        registeredEndpoint = null
+        registeredRelay = null
         rerunOwed = false
         rerunMayPrompt = false
         inFlight?.cancel()
@@ -193,10 +198,10 @@ class PushRegistrar(
         val playServices = GoogleApiAvailabilityLight.getInstance().isGooglePlayServicesAvailable(context)
         if (playServices != ConnectionResult.SUCCESS) return Outcome.NoPlayServices(playServices)
         val route = model.pushRoute(allowAnyHttpsRelay = debuggable) ?: return Outcome.ServerUnreachable
-        if (route == PushRoute.None) {
+        if (route == PushRoute.None || route == PushRoute.Unsupported) {
             // Turning the relay off deletes our registration on the server; if it comes back on,
             // the endpoint has to be filed again, not taken as already there.
-            registeredEndpoint = null
+            registeredRelay = null
             return Outcome.UnsupportedByServer
         }
         permission(mayPrompt)?.let { return it }
@@ -206,11 +211,7 @@ class PushRegistrar(
         } catch (e: Exception) {
             return Outcome.Failed(e.message ?: e.javaClass.simpleName)
         }
-        return when (route) {
-            PushRoute.Native -> registerDirect(token)
-            is PushRoute.Relay -> registerRelay(route.endpoint(token))
-            PushRoute.None -> Outcome.UnsupportedByServer
-        }
+        return if (route is PushRoute.Relay) registerRelay(route.endpoint(token)) else registerDirect(token)
     }
 
     private suspend fun registerDirect(token: String): Outcome {
@@ -221,15 +222,16 @@ class PushRegistrar(
     }
 
     private suspend fun registerRelay(endpoint: String): Outcome {
-        if (endpoint == registeredEndpoint) return Outcome.Registered
-        val keys = pushKeys.loadOrCreate()
+        val keys = pushKeys.loadOrCreate() ?: return Outcome.Failed("couldn't store this device's push keys")
+        val filing = endpoint to keys.p256dh
+        if (filing == registeredRelay) return Outcome.Registered
         return when (model.registerRelaySubscription(endpoint, keys)) {
             ChatViewModel.RelayRegistration.Registered -> {
-                registeredEndpoint = endpoint
+                registeredRelay = filing
                 Outcome.Registered
             }
             ChatViewModel.RelayRegistration.RelayOff -> {
-                registeredEndpoint = null
+                registeredRelay = null
                 Outcome.UnsupportedByServer
             }
             ChatViewModel.RelayRegistration.Failed -> Outcome.Rejected

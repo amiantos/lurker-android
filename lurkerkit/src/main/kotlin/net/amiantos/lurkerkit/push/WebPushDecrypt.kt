@@ -4,6 +4,7 @@
 package net.amiantos.lurkerkit.push
 
 import java.math.BigInteger
+import java.security.AlgorithmParameters
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.PrivateKey
@@ -75,11 +76,15 @@ class DeviceKeys(
 }
 
 object WebPushDecrypt {
-    /** P-256's parameters, taken from a generated key: the one spelling every provider accepts. */
+    /**
+     * P-256's parameters, by name — no throwaway key generated on the cold-start push path.
+     * `AlgorithmParameters("EC")` is on Android from API 26.
+     */
     internal val p256: ECParameterSpec by lazy {
-        val generator = KeyPairGenerator.getInstance("EC")
-        generator.initialize(ECGenParameterSpec("secp256r1"))
-        (generator.generateKeyPair().public as ECPublicKey).params
+        AlgorithmParameters.getInstance("EC").run {
+            init(ECGenParameterSpec("secp256r1"))
+            getParameterSpec(ECParameterSpec::class.java)
+        }
     }
 
     private const val HEADER_FIXED = 16 + 4 + 1 // salt, record size, key id length

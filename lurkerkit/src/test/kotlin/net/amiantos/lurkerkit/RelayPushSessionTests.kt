@@ -11,6 +11,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.push.AppPushUnavailable
 import net.amiantos.lurkerkit.push.DeviceKeys
 import net.amiantos.lurkerkit.push.PushRoute
 import net.amiantos.lurkerkit.session.ChatViewModel
@@ -93,19 +95,25 @@ class RelayPushSessionTests {
         Harness(Server(mapOf(config("""["webpush"]""", "https://push.lurker.chat")))).use { h ->
             h.signedIn()
             assertEquals(PushRoute.Relay("https://push.lurker.chat", key), h.onMain { h.model.pushRoute(false) })
-            assertFalse(h.model.serverHasNoAppPush.value)
+            assertEquals(null, h.model.appPushUnavailable.value)
         }
         Harness(Server(mapOf(config("""["webpush"]""", null)))).use { h ->
             h.signedIn()
             assertEquals(PushRoute.None, h.onMain { h.model.pushRoute(false) })
             // Settings says so.
-            assertTrue(h.model.serverHasNoAppPush.value)
+            assertEquals(AppPushUnavailable.NotTurnedOn, h.model.appPushUnavailable.value)
+        }
+        // A relay this app won't use is its own reason, with its own words in Settings.
+        Harness(Server(mapOf(config("""["webpush"]""", "https://relay.elsewhere.example")))).use { h ->
+            h.signedIn()
+            assertEquals(PushRoute.Unsupported, h.onMain { h.model.pushRoute(false) })
+            assertEquals(AppPushUnavailable.RelayUnsupported, h.model.appPushUnavailable.value)
         }
         Harness(Server(mapOf("/api/push/config" to (503 to "")))).use { h ->
             h.signedIn()
             // Couldn't ask: unknown, not "no push".
             assertEquals(null, h.onMain { h.model.pushRoute(false) })
-            assertFalse(h.model.serverHasNoAppPush.value)
+            assertEquals(null, h.model.appPushUnavailable.value)
         }
     }
 
@@ -141,7 +149,7 @@ class RelayPushSessionTests {
             h.signedIn()
             // The admin turned the relay off since the config was read: no push, not a failure.
             assertEquals(ChatViewModel.RelayRegistration.RelayOff, h.onMain { h.model.registerRelaySubscription(endpoint, keys) })
-            assertTrue(h.model.serverHasNoAppPush.value)
+            assertEquals(AppPushUnavailable.NotTurnedOn, h.model.appPushUnavailable.value)
         }
         Harness(Server(mapOf("/api/push/subscriptions" to (500 to "{}")))).use { h ->
             h.signedIn()
@@ -162,7 +170,7 @@ class RelayPushSessionTests {
             val revoke = paths.indexOf("POST /api/auth/logout")
             assertTrue(delete in 0 until revoke, paths.toString())
             assertTrue(h.server.requests[delete].contains("\"endpoint\":\"$endpoint\""))
-            assertFalse(h.model.serverHasNoAppPush.value)
+            assertEquals(null, h.model.appPushUnavailable.value)
         }
     }
 
@@ -173,6 +181,44 @@ class RelayPushSessionTests {
             h.onMain { h.model.logout() }
             withTimeout(5_000) { while (h.server.requests.none { it.startsWith("POST /api/auth/logout") }) delay(20) }
             assertTrue(h.server.requests.none { it.startsWith("DELETE /api/push/subscriptions") })
+        }
+    }
+
+    @Test
+    fun testARegistrationWhoseAnswerWasLostIsStillTakenOffAtSignOut() = runBlocking {
+        val endpoint = "https://push.lurker.chat/relay-to/fcm/tok123/$key"
+        // No answer: the request may have landed all the same.
+        Harness(Server(mapOf("/api/push/subscriptions" to (502 to "")))).use { h ->
+            h.signedIn()
+            assertEquals(ChatViewModel.RelayRegistration.Failed, h.onMain { h.model.registerRelaySubscription(endpoint, DeviceKeys.generate()) })
+            h.onMain { h.model.logout() }
+            withTimeout(5_000) { while (h.server.requests.none { it.startsWith("POST /api/auth/logout") }) delay(20) }
+            assertTrue(h.server.requests.any { it.startsWith("DELETE /api/push/subscriptions") && it.contains(endpoint) })
+        }
+    }
+
+    @Test
+    fun testA401LeavesThePushStateASignOutWould() = runBlocking {
+        val endpoint = "https://push.lurker.chat/relay-to/fcm/tok123/$key"
+        Harness(Server(mapOf(config("""["webpush"]""", null), "/api/push/subscriptions" to (201 to "{}")))).use { h ->
+            h.signedIn()
+            h.onMain { h.model.pushRoute(false) }
+            h.onMain { h.model.registerRelaySubscription(endpoint, DeviceKeys.generate()) }
+            h.onMain { h.model.pushRoute(false) }
+            assertEquals(endpoint, h.onMain { h.model.filedRelayEndpoint })
+            assertEquals(AppPushUnavailable.NotTurnedOn, h.model.appPushUnavailable.value)
+            h.onMain { h.model.handle(ServerFrame.Unauthorized) }
+            assertEquals(ChatViewModel.SessionState.LoggedOut, h.model.session)
+            assertEquals(null, h.onMain { h.model.filedRelayEndpoint })
+            assertEquals(null, h.model.appPushUnavailable.value)
+        }
+        // And the cached direct answer goes too: the next sign-in may be on another server.
+        Harness(Server(mapOf(config("""["webpush","fcm"]""", null)))).use { h ->
+            h.signedIn()
+            assertEquals(PushRoute.Native, h.onMain { h.model.pushRoute(false) })
+            h.onMain { h.model.handle(ServerFrame.Unauthorized) }
+            // Signed out, there's no one to ask; what there mustn't be is the old server's "direct".
+            assertEquals(null, h.onMain { h.model.pushRoute(false) })
         }
     }
 }

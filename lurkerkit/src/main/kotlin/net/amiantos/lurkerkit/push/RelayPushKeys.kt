@@ -19,11 +19,42 @@ import okio.ByteString.Companion.encodeUtf8
  * In [storage] — secure storage of its own on Android (a Keystore key that isn't the session's),
  * which is excluded from backup: keys restored onto new hardware would sit beside a registration
  * that names the old phone's token.
+ *
+ * Loaded keys are cached: a push wakes the process cold, and the Keystore unwrap plus key parsing
+ * would otherwise run for every one. One instance is shared by the registrar and the messaging
+ * service, so the cache is theirs alike; a write replaces it.
  */
 class RelayPushKeys(private val storage: SecureStorage) {
 
+    @Volatile private var cached: DeviceKeys? = null
+
     /** The stored keys, or null when there are none yet (or they can't be read). */
-    fun load(): DeviceKeys? {
+    fun load(): DeviceKeys? = cached ?: readStored()?.also { cached = it }
+
+    /**
+     * The stored keys, making and storing them first if there are none. Null when fresh keys can't
+     * be stored — read back and checked, since keys filed with a server but missing from storage
+     * would make every push to this phone unreadable. Unreadable stored keys are replaced; the
+     * caller compares the p256dh it last filed and files these.
+     */
+    fun loadOrCreate(): DeviceKeys? {
+        load()?.let { return it }
+        val keys = DeviceKeys.generate()
+        val form = keys.persisted()
+        val json = buildJsonObject {
+            put("privateKey", form.privateKey)
+            put("publicKey", form.publicKey)
+            put("authSecret", form.authSecret)
+        }
+        cached = null
+        storage.write(ACCOUNT, json.toString().encodeUtf8())
+        val back = readStored() ?: return null
+        if (back.p256dh != keys.p256dh || back.auth != keys.auth) return null
+        cached = back
+        return back
+    }
+
+    private fun readStored(): DeviceKeys? {
         val blob = storage.read(ACCOUNT) ?: return null
         val obj = runCatching { Json.parseToJsonElement(blob.utf8()) as? JsonObject }.getOrNull() ?: return null
         val form = runCatching {
@@ -34,24 +65,6 @@ class RelayPushKeys(private val storage: SecureStorage) {
             )
         }.getOrNull() ?: return null
         return DeviceKeys.fromPersisted(form)
-    }
-
-    /**
-     * The stored keys, making and storing them first if there are none. Unreadable keys are
-     * replaced: a registration filed with the old ones gets re-filed with these on the next
-     * enable, and a push encrypted for the old ones in the meantime is dropped.
-     */
-    fun loadOrCreate(): DeviceKeys {
-        load()?.let { return it }
-        val keys = DeviceKeys.generate()
-        val form = keys.persisted()
-        val json = buildJsonObject {
-            put("privateKey", form.privateKey)
-            put("publicKey", form.publicKey)
-            put("authSecret", form.authSecret)
-        }
-        storage.write(ACCOUNT, json.toString().encodeUtf8())
-        return keys
     }
 
     private companion object {

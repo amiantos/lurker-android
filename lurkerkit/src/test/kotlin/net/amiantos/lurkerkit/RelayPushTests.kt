@@ -111,13 +111,40 @@ class RelayPushTests {
     @Test
     fun testKeysAreMadeOnceAndKept() {
         val storage = InMemorySecureStorage()
-        val first = RelayPushKeys(storage).loadOrCreate()
-        val again = RelayPushKeys(storage).loadOrCreate()
+        val first = assertNotNull(RelayPushKeys(storage).loadOrCreate())
+        val again = assertNotNull(RelayPushKeys(storage).loadOrCreate())
         assertEquals(first.p256dh, again.p256dh)
         assertEquals(first.auth, again.auth)
         // Unreadable keys are replaced, not a crash.
         storage.stored.keys.toList().forEach { storage.write(it, okio.ByteString.EMPTY) }
         assertNotNull(RelayPushKeys(storage).loadOrCreate())
+    }
+
+    @Test
+    fun testKeysThatDontStoreAreNeverHandedOut() {
+        // A Keystore that won't take the write: filing keys the messaging service can't load would
+        // make every push to this phone unreadable.
+        val refusing = object : net.amiantos.lurkerkit.session.SecureStorage {
+            override fun read(account: String): okio.ByteString? = null
+            override fun write(account: String, data: okio.ByteString) {}
+            override fun delete(account: String) {}
+        }
+        assertNull(RelayPushKeys(refusing).loadOrCreate())
+    }
+
+    @Test
+    fun testLoadedKeysAreCachedAndAWriteReplacesThem() {
+        val storage = InMemorySecureStorage()
+        val keys = RelayPushKeys(storage)
+        val made = assertNotNull(keys.loadOrCreate())
+        // Gone from storage (a Keystore reset), still the same in this process: what was filed stays
+        // openable until the next launch re-files.
+        storage.stored.clear()
+        assertEquals(made.p256dh, keys.load()?.p256dh)
+        // A fresh instance reads storage, finds nothing, and makes new keys — a different p256dh,
+        // which is what tells the registrar to file again.
+        val fresh = assertNotNull(RelayPushKeys(storage).loadOrCreate())
+        assertTrue(fresh.p256dh != made.p256dh)
     }
 
     // MARK: - The decrypted body as FCM's string map
@@ -191,7 +218,7 @@ class RelayPushTests {
             "https://user@push.lurker.chat",
             "not a url",
         )) {
-            assertEquals(PushRoute.None, RelayPush.route(PushConfig(key, listOf("webpush"), relay), false), relay)
+            assertEquals(PushRoute.Unsupported, RelayPush.route(PushConfig(key, listOf("webpush"), relay), false), relay)
         }
         // Spelling differences that are still exactly the official origin.
         for (relay in listOf("https://PUSH.lurker.chat", "https://push.lurker.chat/", "https://push.lurker.chat:443")) {
@@ -208,15 +235,16 @@ class RelayPushTests {
         val local = RelayPush.route(PushConfig(key, listOf("webpush"), "https://relay.local:8030"), allowAnyHttpsRelay = true)
         assertEquals(PushRoute.Relay("https://relay.local:8030", key), local)
         assertEquals(
-            PushRoute.None,
+            PushRoute.Unsupported,
             RelayPush.route(PushConfig(key, listOf("webpush"), "http://relay.local:8030"), allowAnyHttpsRelay = true),
         )
     }
 
     @Test
     fun testNoKeyNoRelay() {
+        // A relay advertised without the key the endpoint needs is a relay this app can't use.
         for (publicKey in listOf(null, "", "  ")) {
-            assertEquals(PushRoute.None, RelayPush.route(PushConfig(publicKey, listOf("webpush"), "https://push.lurker.chat"), false))
+            assertEquals(PushRoute.Unsupported, RelayPush.route(PushConfig(publicKey, listOf("webpush"), "https://push.lurker.chat"), false))
         }
     }
 
