@@ -390,8 +390,16 @@ class ChatViewModel(
      */
     suspend fun resumeSignIn(callback: String): Boolean {
         if (session != SessionState.LoggedOut) return false
-        val pending = sessions.takePendingSignIn()
-            ?: return signInFailed("That sign-in has already ended. Try again.")
+        // A failure just shown (a duplicate redirect after a refused exchange) keeps its reason.
+        val pending = sessions.pendingSignIn()
+            ?: return signInFailed(statusSubject.value ?: "That sign-in has already ended. Try again.")
+        // Kept for a redirect that isn't this attempt's (any app or page can open the scheme), so
+        // the real one can still finish; spent once the redirect is its answer.
+        if (OAuth.callback(callback, state = pending.state) == OAuth.Callback.Invalid) {
+            return signInFailed("Sign-in didn't finish. Try again.")
+        }
+        sessions.clearPendingSignIn()
+        // `signIn`'s own setup, step for step: a change to one belongs in both.
         sessionSubject.value = SessionState.LoggingIn
         statusSubject.value = null
         startDeferred = false
@@ -504,6 +512,9 @@ class ChatViewModel(
         // The next sign-in may be against a different server, whose answer differs.
         apnsSupported = null
         sessions.clear()
+        // Port-only: an attempt a killed process left out in the browser goes too, so a late
+        // redirect from its tab can't sign this phone back in after a deliberate sign-out.
+        sessions.clearPendingSignIn()
         // The next account's preferences are not this one's — and a privacy switch in
         // particular must not carry across users. Both this and the deliberate sign-out clear
         // it, because either can be followed by someone else signing in on this phone.

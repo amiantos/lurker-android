@@ -170,10 +170,9 @@ class SessionStore(private val storage: SecureStorage) {
         storage.write(pendingSignInAccount, SessionCodec.encodePendingSignIn(pending))
     }
 
-    /** The attempt out in the browser, deleted as it's read: a code is spent once. */
-    internal fun takePendingSignIn(): PendingSignIn? {
+    /** The attempt out in the browser, if any. */
+    internal fun pendingSignIn(): PendingSignIn? {
         val data = storage.read(pendingSignInAccount) ?: return null
-        storage.delete(pendingSignInAccount)
         return SessionCodec.decodePendingSignIn(data)
     }
 

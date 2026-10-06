@@ -183,10 +183,40 @@ class SignInResumeTests {
         Process(oauth, storage).use { p ->
             p.sessions.savePendingSignIn(PendingSignIn(server = server, clientId = "cid", state = "ours", verifier = "v"))
             p.launch()
+            // Any app or page can open the scheme; a redirect that isn't this attempt's is refused…
             assertFalse(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=theirs") })
             assertEquals("Sign-in didn't finish. Try again.", p.status())
             assertTrue(oauth.tokenRequests.isEmpty())
-            // Read once: a second redirect for it finds nothing.
+            // …and leaves the attempt for the real one.
+            assertTrue(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c2&state=ours") })
+            assertTrue(oauth.tokenRequests.single().contains("\"code\":\"c2\""))
+            assertNull(storage.stored[SessionStore.pendingSignInAccount])
+        }
+    }
+
+    @Test
+    fun testADuplicateRedirectKeepsTheRealReason() = runBlocking {
+        val oauth = OAuthServer(tokenStatus = 500)
+        Process(oauth, InMemorySecureStorage()).use { p ->
+            p.sessions.savePendingSignIn(PendingSignIn(server = server, clientId = "cid", state = "s", verifier = "v"))
+            p.launch()
+            assertFalse(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=s") })
+            assertEquals("Sign-in failed (HTTP 500).", p.status())
+            // The browser dispatches it again: nothing is saved now, and the reason stands.
+            assertFalse(p.onMain { p.model.resumeSignIn("chat.lurker:/oauth?code=c1&state=s") })
+            assertEquals("Sign-in failed (HTTP 500).", p.status())
+            assertEquals(1, oauth.tokenRequests.size)
+        }
+    }
+
+    @Test
+    fun testSignOutForgetsAnAttemptLeftInTheBrowser() = runBlocking {
+        val storage = InMemorySecureStorage()
+        Process(OAuthServer(), storage).use { p ->
+            p.sessions.save(PersistedSession(server = server, token = "live"))
+            p.sessions.savePendingSignIn(PendingSignIn(server = server, clientId = "cid", state = "s", verifier = "v"))
+            p.launch()
+            p.onMain { p.model.logout() }
             assertNull(storage.stored[SessionStore.pendingSignInAccount])
         }
     }
