@@ -539,6 +539,19 @@ internal class ComposerState(
         apply(edit)
     }
 
+    /**
+     * Shift+Enter from a keyboard: a newline over the selection, as typing one would. The composer's,
+     * because Compose's field doesn't map a shifted Enter (see `ComposerKeys`).
+     */
+    fun insertNewline() {
+        val selection = field.selection
+        field.edit {
+            replace(selection.min, selection.max, "\n")
+            this.selection = TextRange(selection.min + 1)
+        }
+        fieldChanged(snapshot())
+    }
+
     // MARK: - Tab completion (lurker-android#63)
 
     /** The completion Tab last applied — what another Tab cycles, while the field still shows it. */

@@ -135,6 +135,7 @@ internal fun ComposerBar(
         focusRequester = state.focusRequester,
         onSend = state::send,
         onTab = state::tabComplete,
+        onNewline = state::insertNewline,
         onCancelReply = state::cancelReply,
         onBack = state::back,
         onFocusChange = { focused ->
@@ -162,6 +163,8 @@ internal fun ComposerBarContent(
     onSend: () -> Unit,
     /** Tab from a hardware keyboard: complete in place, backward with Shift. */
     onTab: (backward: Boolean) -> Unit,
+    /** Shift+Enter: a newline at the caret (`ComposerKeys` says why the field can't). */
+    onNewline: () -> Unit,
     onCancelReply: () -> Unit,
     onBack: () -> Unit,
     /** The field gained (true) or lost (false) focus — only on a change, never for the initial state. */
@@ -201,7 +204,7 @@ internal fun ComposerBarContent(
             leading?.invoke(collapsed)
             Field(
                 field, placeholder, capitalizes, enterSends, collapsed, focusRequester, onFocusChange,
-                remember(onSend, onTab, onCancelReply) { FieldKeys(onSend, onTab, onCancelReply) },
+                remember(onSend, onTab, onNewline, onCancelReply) { FieldKeys(onSend, onTab, onNewline, onCancelReply) },
                 isComposing, strip is Strip.Reply, fieldModifier,
             )
             // Derived, so the bar recomposes when the answer flips rather than on every keystroke.
@@ -226,7 +229,12 @@ private val FIELD_INSET_VERTICAL = 10.dp
 private val FIELD_INSET_HORIZONTAL = 14.dp
 
 /** What the field's keys do — see `ComposerKeys`. */
-private class FieldKeys(val onSend: () -> Unit, val onTab: (backward: Boolean) -> Unit, val onCancelReply: () -> Unit)
+private class FieldKeys(
+    val onSend: () -> Unit,
+    val onTab: (backward: Boolean) -> Unit,
+    val onNewline: () -> Unit,
+    val onCancelReply: () -> Unit,
+)
 
 @Composable
 private fun androidx.compose.foundation.layout.RowScope.Field(
@@ -290,6 +298,7 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
                     ComposerKeys.Action.Send -> actions.onSend()
                     ComposerKeys.Action.Complete -> actions.onTab(false)
                     ComposerKeys.Action.CompleteBackward -> actions.onTab(true)
+                    ComposerKeys.Action.Newline -> actions.onNewline()
                     ComposerKeys.Action.CancelReply -> actions.onCancelReply()
                     ComposerKeys.Action.Swallow -> Unit
                 }
@@ -517,6 +526,7 @@ private fun ComposerPreview(
                 focusRequester = remember { FocusRequester() },
                 onSend = {},
                 onTab = {},
+                onNewline = {},
                 onCancelReply = {},
                 onBack = {},
                 onFocusChange = {},

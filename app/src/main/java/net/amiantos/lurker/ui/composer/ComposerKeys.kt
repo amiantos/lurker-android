@@ -9,8 +9,12 @@ package net.amiantos.lurker.ui.composer
  * [onKey], and does what it says.
  *
  *  - **Enter** (or the numpad's) sends from a hardware keyboard, whatever the "Enter to send"
- *    setting says and whatever other modifier is held, as on the web. **Shift+Enter** is left to
- *    the field, which inserts a newline.
+ *    setting says and whatever other modifier is held, as on the web. Held down, it sends once: a
+ *    repeat would send whatever came back into the field after it (a refused line, restored).
+ *  - **Shift+Enter** inserts a newline, by the composer's own hand. ⚠ Not left to the field: Compose's
+ *    key mapping has no command for a SHIFTED Enter (`commonKeyMapping` maps `Key.Enter` to `NEW_LINE`
+ *    only unmodified) and its typed-character path drops the control character, so passed on it
+ *    would type nothing — and with plain Enter sending, a hardware keyboard would have no newline.
  *  - An Enter that comes as a key event from the ON-SCREEN keyboard (some send a real
  *    `KEYCODE_ENTER` rather than text or an editor action) follows the setting: it sends when
  *    "Enter to send" is on and is left to the field — a newline — when it's off.
@@ -48,6 +52,9 @@ internal class ComposerKeys {
         /** `TabCompletion`, backward. */
         CompleteBackward,
 
+        /** Insert a newline at the caret (Shift+Enter). */
+        Newline,
+
         CancelReply,
 
         /** The release of a key whose press was ours. */
@@ -78,6 +85,8 @@ internal class ComposerKeys {
 
     fun onKey(event: Event): Action {
         if (!event.down) return if (taken.remove(event.key)) Action.Swallow else Action.Pass
+        // A held Enter repeats its KeyDown; it already acted on the first. Tab's repeats still cycle.
+        if (event.key == Key.Enter && event.key in taken) return Action.Swallow
         val action = decide(event)
         if (action != Action.Pass) taken.add(event.key)
         return action
@@ -91,7 +100,7 @@ internal class ComposerKeys {
         }
         return when (event.key) {
             Key.Enter -> when {
-                event.shift -> Action.Pass
+                event.shift -> Action.Newline
                 event.hardware || event.enterSends -> Action.Send
                 else -> Action.Pass
             }

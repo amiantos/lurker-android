@@ -24,13 +24,27 @@ class ComposerKeysTest {
         assertEquals(Action.Send, ComposerKeys().onKey(Event(Key.Enter, down = true, enterSends = true)))
     }
 
+    /** Compose's field types nothing for a shifted Enter, so the composer inserts the newline itself. */
     @Test
-    fun `shift Enter is left to the field, which makes the newline`() {
-        assertEquals(Action.Pass to Action.Pass, press(ComposerKeys(), Event(Key.Enter, down = true, shift = true)))
+    fun `shift Enter is a newline, from either keyboard`() {
+        assertEquals(Action.Newline to Action.Swallow, press(ComposerKeys(), Event(Key.Enter, down = true, shift = true)))
         assertEquals(
-            Action.Pass to Action.Pass,
+            Action.Newline to Action.Swallow,
             press(ComposerKeys(), Event(Key.Enter, down = true, shift = true, hardware = false, enterSends = true)),
         )
+    }
+
+    /** A held Enter repeats its press; a second send would send whatever the field held next. */
+    @Test
+    fun `a held Enter sends once`() {
+        val keys = ComposerKeys()
+        assertEquals(Action.Send, keys.onKey(Event(Key.Enter, down = true)))
+        assertEquals(Action.Swallow, keys.onKey(Event(Key.Enter, down = true)))
+        assertEquals(Action.Swallow, keys.onKey(Event(Key.Enter, down = false)))
+        // Released, the next press sends again; and a held Tab keeps cycling.
+        assertEquals(Action.Send, keys.onKey(Event(Key.Enter, down = true)))
+        assertEquals(Action.Complete, keys.onKey(Event(Key.Tab, down = true)))
+        assertEquals(Action.Complete, keys.onKey(Event(Key.Tab, down = true)))
     }
 
     @Test
@@ -97,7 +111,7 @@ class ComposerKeysTest {
     fun `a hardware key acts over a composing region`() {
         assertEquals(Action.Send, ComposerKeys().onKey(Event(Key.Enter, down = true, composing = true)))
         assertEquals(Action.Complete, ComposerKeys().onKey(Event(Key.Tab, down = true, composing = true)))
-        assertEquals(Action.Pass, ComposerKeys().onKey(Event(Key.Enter, down = true, shift = true, composing = true)))
+        assertEquals(Action.Newline, ComposerKeys().onKey(Event(Key.Enter, down = true, shift = true, composing = true)))
     }
 
     @Test
