@@ -364,6 +364,19 @@ class MessageTextTest {
 
     private fun activity(message: Message) = MessageText.renderCompactBody(message, style).text
 
+    // Sweep L06: a reason is formatted like any message — colour digits never leak, links open.
+    @Test
+    fun `a quit reason's colours are colours and its link opens`() {
+        val line = MessageText.renderCompactBody(
+            message("\u000304Leaving\u0003 https://x.example", type = EventType.Quit), style,
+        )
+        assertEquals("alice quit (Leaving https://x.example)", line.text)
+        assertEquals(colors.mirc[4], line.styleAt(line.indexOf("Leaving")).color)
+        assertEquals(listOf("https://x.example" to "https://x.example"), line.urls())
+        // The rest of the reason is in the narration's grey, as the topic's text is.
+        assertEquals(colors.fgMuted, line.styleAt(line.indexOf(" https")).color)
+    }
+
     @Test
     fun `activity lines narrate, starting flush`() {
         assertEquals("alice joined", activity(message(null, type = EventType.Join)))

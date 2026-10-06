@@ -584,10 +584,17 @@ object MessageText {
         line.append(nickName(nick), SpanStyle(color = nickColor(nick, isSelf, style)))
     }
 
-    /** A part/quit reason in parentheses, or nothing when there isn't one. */
-    private fun appendReason(line: StyledBody, text: String?, style: MessageTextStyle) {
+    /**
+     * A part, quit or kick reason in parentheses, or nothing when there isn't one. Through [body], as a
+     * topic is (sweep L06): a reason carries mIRC colours and links like any message, and as plain text
+     * its colour digits leaked ("(04Leaving") and its URLs couldn't be tapped.
+     */
+    private fun appendReason(line: StyledBody, message: Message, style: MessageTextStyle) {
+        val text = message.text
         if (text == null || text.trimmingWhitespacesAndNewlines().isEmpty()) return
-        line.append(" ($text)", muted(style))
+        line.append(" (", muted(style))
+        line.append(body(message, style, fallback = style.colors.fgMuted))
+        line.append(")", muted(style))
     }
 
     /**
@@ -654,12 +661,12 @@ object MessageText {
             EventType.Part -> {
                 actor()
                 line.append("$host left", muted)
-                appendReason(line, message.text, style)
+                appendReason(line, message, style)
             }
             EventType.Quit -> {
                 actor()
                 line.append("$host quit", muted)
-                appendReason(line, message.text, style)
+                appendReason(line, message, style)
             }
             EventType.Nick -> {
                 actor()
@@ -671,7 +678,7 @@ object MessageText {
                 nickToken(line, message.kicked, style)
                 line.append(" was kicked by ", muted)
                 actor()
-                appendReason(line, message.text, style)
+                appendReason(line, message, style)
             }
             EventType.Mode -> {
                 actor()
