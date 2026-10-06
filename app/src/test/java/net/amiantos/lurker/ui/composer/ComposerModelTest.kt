@@ -23,6 +23,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
+import net.amiantos.lurkerkit.model.PrefixMode
 
 /** The composer's decisions — lurker-ios's `ComposerBar` and the composer half of `ChatViewController`. */
 class ComposerModelTest {
@@ -255,10 +256,12 @@ class ComposerModelTest {
     fun `the chrome reads only your own modes, and its inputs compare the nicklist by identity`() {
         val members = listOf(Member(nick = "Amiantos", modes = listOf("o")), Member(nick = "bob"))
         val away = AwayState(active = true, since = Instant.EPOCH)
-        val inputs = ComposerChrome.Inputs(nick = "amiantos", members = members, dccSession = null, away = away)
+        val inputs = ComposerChrome.Inputs(nick = "amiantos", members = members, prefix = null, dccSession = null, away = away)
         assertEquals(listOf("o"), ComposerChrome.of(inputs).ownModes)
-        assertTrue(ComposerChrome.Inputs.same(inputs, ComposerChrome.Inputs("amiantos", members, null, away)))
-        assertFalse(ComposerChrome.Inputs.same(inputs, ComposerChrome.Inputs("amiantos", members.toList(), null, away)))
+        assertTrue(ComposerChrome.Inputs.same(inputs, ComposerChrome.Inputs("amiantos", members, null, null, away)))
+        assertFalse(ComposerChrome.Inputs.same(inputs, ComposerChrome.Inputs("amiantos", members.toList(), null, null, away)))
+        // The network's PREFIX says what our modes look like, and can land after the nicklist (lurker-ios#191).
+        assertFalse(ComposerChrome.Inputs.same(inputs, ComposerChrome.Inputs("amiantos", members, listOf(PrefixMode("o", "!")), null, away)))
     }
 
     @Test
@@ -279,9 +282,11 @@ class ComposerModelTest {
     // MARK: - Send
 
     @Test
-    fun `only something other than whitespace sends, trimmed`() {
+    fun `only something other than whitespace sends, trailing whitespace trimmed`() {
         assertNull(ComposerModel.sendable(" \n\t"))
-        assertEquals("hi", ComposerModel.sendable("  hi\n"))
+        // Leading whitespace stays: it decides whether a line is a command (lurker-ios#210).
+        assertEquals("  hi", ComposerModel.sendable("  hi\n"))
+        assertEquals(" /whois bob", ComposerModel.sendable(" /whois bob"))
         assertTrue(ComposerModel.isBlank("\u00A0\n"))
     }
 

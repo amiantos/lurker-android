@@ -7,6 +7,7 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
 import net.amiantos.lurkerkit.model.StatusLight
 import net.amiantos.lurkerkit.rendering.IRCPalette
+import net.amiantos.lurkerkit.model.MemberPrefix
 
 /**
  * Lurker's own colours: the two built-in themes as the web client ships them — **Monokai Plus**
@@ -153,17 +154,17 @@ class LurkerColors private constructor(
     val memberVoice: Color = pick(dark = "#b3db82", light = "#269d69")
 
     /**
-     * The colour for a `MemberPrefix.of` glyph, or null for a member holding no mode — the caller
-     * leaves those in the ordinary text colour rather than inventing a sixth rank.
+     * The colour for a glyph's tier (`MemberPrefix.mark`). By tier, not by the glyph character: a
+     * network can give op another symbol, and it's still op (lurker-ios#191). A member holding no mode
+     * has no mark, and the caller leaves them in the ordinary text colour.
      */
-    fun memberPrefix(glyph: String): Color? =
-        when (glyph) {
-            "~" -> memberOwner
-            "&" -> memberAdmin
-            "@" -> memberOp
-            "%" -> memberHalfop
-            "+" -> memberVoice
-            else -> null
+    fun memberPrefix(tier: MemberPrefix.Tier): Color =
+        when (tier) {
+            MemberPrefix.Tier.Owner -> memberOwner
+            MemberPrefix.Tier.Admin -> memberAdmin
+            MemberPrefix.Tier.Op -> memberOp
+            MemberPrefix.Tier.Halfop -> memberHalfop
+            MemberPrefix.Tier.Voice -> memberVoice
         }
 
     // MARK: - Derived

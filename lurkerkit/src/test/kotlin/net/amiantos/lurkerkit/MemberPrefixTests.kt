@@ -10,6 +10,7 @@ import net.amiantos.lurkerkit.model.MemberPrefix
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import net.amiantos.lurkerkit.model.PrefixMode
 
 /**
  * Ported alongside `MemberPrefix` itself, from the web client's `memberPrefix.ts`, so the
@@ -24,11 +25,11 @@ class MemberPrefixTests {
 
     @Test
     fun testEachModeMapsToItsConventionalGlyph() {
-        assertEquals("~", MemberPrefix.of(listOf("q")))
-        assertEquals("&", MemberPrefix.of(listOf("a")))
-        assertEquals("@", MemberPrefix.of(listOf("o")))
-        assertEquals("%", MemberPrefix.of(listOf("h")))
-        assertEquals("+", MemberPrefix.of(listOf("v")))
+        assertEquals("~", MemberPrefix.of(listOf("q"), prefix = null))
+        assertEquals("&", MemberPrefix.of(listOf("a"), prefix = null))
+        assertEquals("@", MemberPrefix.of(listOf("o"), prefix = null))
+        assertEquals("%", MemberPrefix.of(listOf("h"), prefix = null))
+        assertEquals("+", MemberPrefix.of(listOf("v"), prefix = null))
     }
 
     // MARK: - Your own glyph, for the composer's prompt (lurker-ios#135)
@@ -57,21 +58,21 @@ class MemberPrefixTests {
 
     @Test
     fun testNoModesMeansNoGlyph() {
-        assertEquals("", MemberPrefix.of(emptyList()))
+        assertEquals("", MemberPrefix.of(emptyList(), prefix = null))
     }
 
     @Test
     fun testAnUnknownModeIsNotAGlyph() {
         // Channel modes that aren't prefix modes must not leak into the nick column.
-        assertEquals("", MemberPrefix.of(listOf("z")))
+        assertEquals("", MemberPrefix.of(listOf("z"), prefix = null))
     }
 
     @Test
     fun testTheHighestHeldModeWins() {
         // A member holding several shows one glyph, the top one — not a pile.
-        assertEquals("@", MemberPrefix.of(listOf("v", "o")))
-        assertEquals("~", MemberPrefix.of(listOf("v", "o", "q")))
-        assertEquals("%", MemberPrefix.of(listOf("h", "v")))
+        assertEquals("@", MemberPrefix.of(listOf("v", "o"), prefix = null))
+        assertEquals("~", MemberPrefix.of(listOf("v", "o", "q"), prefix = null))
+        assertEquals("%", MemberPrefix.of(listOf("h", "v"), prefix = null))
     }
 
     // MARK: - Sorting
@@ -84,14 +85,15 @@ class MemberPrefixTests {
                 member("adam"),
                 member("mallory", listOf("o")),
                 member("bob", listOf("q")),
-            )
+            ),
+            prefix = null,
         )
         assertEquals(listOf("bob", "mallory", "zoe", "adam"), sorted.map { it.nick })
     }
 
     @Test
     fun testEqualRankSortsByNick() {
-        val sorted = MemberPrefix.sorted(listOf(member("carol", listOf("o")), member("alice", listOf("o"))))
+        val sorted = MemberPrefix.sorted(listOf(member("carol", listOf("o")), member("alice", listOf("o"))), prefix = null)
         assertEquals(listOf("alice", "carol"), sorted.map { it.nick })
     }
 
@@ -99,20 +101,63 @@ class MemberPrefixTests {
     fun testNickSortIgnoresCase() {
         // A raw `<` would put every capitalized nick above every lowercase one, which reads
         // as two alphabets stacked rather than one list.
-        val sorted = MemberPrefix.sorted(listOf(member("bob"), member("Alice"), member("carol")))
+        val sorted = MemberPrefix.sorted(listOf(member("bob"), member("Alice"), member("carol")), prefix = null)
         assertEquals(listOf("Alice", "bob", "carol"), sorted.map { it.nick })
     }
 
     @Test
     fun testAwayMembersHoldTheirPlace() {
         // You look for a nick where you last saw it; away is a dimming, not a re-sort.
-        val sorted = MemberPrefix.sorted(listOf(member("bob"), member("alice", away = true)))
+        val sorted = MemberPrefix.sorted(listOf(member("bob"), member("alice", away = true)), prefix = null)
         assertEquals(listOf("alice", "bob"), sorted.map { it.nick })
     }
 
     @Test
     fun testUnprivilegedMembersSortLast() {
-        assertEquals(0, MemberPrefix.order(listOf("q")))
-        assertTrue(MemberPrefix.order(emptyList()) > MemberPrefix.order(listOf("v")))
+        assertEquals(0, MemberPrefix.order(listOf("q"), prefix = null))
+        assertTrue(MemberPrefix.order(emptyList(), prefix = null) > MemberPrefix.order(listOf("v"), prefix = null))
+    }
+
+    // MARK: - The network's own PREFIX (lurker-ios#191)
+
+    @Test
+    fun testTheGlyphIsTheNetworksSymbolForTheTopLetterHeld() {
+        // A network whose op is `!` and whose halfop doesn't exist.
+        val prefix = listOf(PrefixMode(mode = "o", symbol = "!"), PrefixMode(mode = "v", symbol = "+"))
+        assertEquals("!", MemberPrefix.of(listOf("o", "v"), prefix = prefix))
+        assertEquals("", MemberPrefix.of(listOf("h"), prefix = prefix), "a letter the network doesn't have")
+        assertEquals("", MemberPrefix.of(listOf("v"), prefix = emptyList()), "a network with no prefix modes at all")
+    }
+
+    @Test
+    fun testTheOrderFollowsTheNetworksRanks() {
+        // Voice above op, on a network that says so: the sort follows it.
+        val prefix = listOf(PrefixMode(mode = "v", symbol = "+"), PrefixMode(mode = "o", symbol = "@"))
+        val members = listOf(Member(nick = "op", modes = listOf("o")), Member(nick = "voice", modes = listOf("v")), Member(nick = "none", modes = emptyList()))
+        assertEquals(listOf("voice", "op", "none"), MemberPrefix.sorted(members, prefix = prefix).map { it.nick })
+        assertEquals(2, MemberPrefix.order(emptyList(), prefix = prefix), "no prefix mode sorts after every rank")
+    }
+
+    /**
+     * Coloured by the letter's role, not by symbol and not by position: on Libera's `(ov)@+` op is
+     * the top rank and must not take the owner colour; another symbol for op is still op; an
+     * unknown letter takes the nearest known letter above it, or owner.
+     */
+    @Test
+    fun testTheTierIsTheLettersRole() {
+        val libera = listOf(PrefixMode(mode = "o", symbol = "@"), PrefixMode(mode = "v", symbol = "+"))
+        assertEquals(MemberPrefix.Mark(glyph = "@", tier = MemberPrefix.Tier.Op), MemberPrefix.mark(listOf("o"), prefix = libera))
+        assertEquals(MemberPrefix.Tier.Op, MemberPrefix.mark(listOf("o"), prefix = listOf(PrefixMode(mode = "o", symbol = "!")))?.tier)
+        val wide = listOf(PrefixMode(mode = "Y", symbol = "!")) + MemberPrefix.conventional
+        assertEquals(MemberPrefix.Mark(glyph = "!", tier = MemberPrefix.Tier.Owner), MemberPrefix.mark(listOf("Y"), prefix = wide))
+        val between = listOf(PrefixMode(mode = "o", symbol = "@"), PrefixMode(mode = "X", symbol = "*"), PrefixMode(mode = "v", symbol = "+"))
+        assertEquals(MemberPrefix.Tier.Op, MemberPrefix.mark(listOf("X"), prefix = between)?.tier, "the nearest known letter above")
+        assertNull(MemberPrefix.mark(emptyList(), prefix = libera))
+    }
+
+    @Test
+    fun testBeforeISUPPORTTheConventionalTableStands() {
+        assertEquals(MemberPrefix.Mark(glyph = "%", tier = MemberPrefix.Tier.Halfop), MemberPrefix.mark(listOf("h"), prefix = null))
+        assertEquals(MemberPrefix.Mark(glyph = "~", tier = MemberPrefix.Tier.Owner), MemberPrefix.mark(listOf("q", "v"), prefix = null))
     }
 }

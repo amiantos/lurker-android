@@ -64,13 +64,13 @@ class ComposerTypingTest {
     }
 
     @Test
-    fun `a command after leading whitespace is still a command — it runs as one`() {
-        assertEquals(false, typing.draftChanged(" /whois bob", t0))
-        assertEquals(false, typing.draftChanged("\n/join #lurker", t0.plusSeconds(1)))
-        assertTrue(sent.isEmpty())
-        // Indented prose is still prose.
-        assertEquals(true, typing.draftChanged("  hello", t0.plusSeconds(2)))
+    fun `a slash line after leading whitespace is a message — it sends as one`() {
+        // lurker-ios#210: ` /whois bob` goes to the channel as text, as on the web, irssi and gamja,
+        // so it claims typing like any other line.
+        assertEquals(true, typing.draftChanged(" /whois bob", t0))
         assertEquals(listOf(TypingSignal.Active), sent)
+        // A command opening the line still claims nothing — it ends the claim.
+        assertEquals(false, typing.draftChanged("/whois bob", t0.plusSeconds(1)))
     }
 
     @Test

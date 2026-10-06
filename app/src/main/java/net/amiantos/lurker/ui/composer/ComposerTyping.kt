@@ -23,9 +23,9 @@ import java.time.Instant
  * `active` when a non-command draft first appears and at most every 3s while it keeps changing;
  * `paused` once after 3s with no change; `done` when the draft empties or becomes a `/command`, on
  * send, and on leaving the buffer — never for a buffer you merely passed through. Whether the draft
- * is a command is `OutgoingTyping`'s call, made on the trimmed text the send button sends
- * (lurker-ios#202): " /whois bob" runs as a command and says nothing, "//shrug" goes to the channel
- * and is announced.
+ * is a command is `OutgoingTyping`'s call, made on the draft's first character, as the send decides
+ * it (lurker-ios#210): " /whois bob" goes to the channel as text and is announced, "/whois bob"
+ * runs as a command and says nothing, "//shrug" goes to the channel and is announced.
  */
 internal class ComposerTyping(private val emit: (TypingSignal) -> Unit) {
     private val outgoing = OutgoingTyping()

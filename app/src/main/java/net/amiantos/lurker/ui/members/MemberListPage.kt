@@ -55,6 +55,7 @@ import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.session.ChatViewModel
+import net.amiantos.lurkerkit.model.MemberPrefix
 
 /**
  * The member list's page state: the filter, which outlives a page pushed over it (a profile) — iOS's
@@ -107,7 +108,7 @@ internal fun MemberListPage(
             .conflate()
             .map { MemberListInputs.of(it, key) }
             .filter { inputs -> state.built?.let { MemberListInputs.same(it.inputs, inputs) } != true }
-            .map { inputs -> BuiltMembers(inputs, MemberListModel.rows(inputs.visible)).also { state.built = it }.rows }
+            .map { inputs -> BuiltMembers(inputs, MemberListModel.rows(inputs.visible, inputs.prefix)).also { state.built = it }.rows }
             .flowOn(Dispatchers.Default)
             .conflate()
     }
@@ -227,7 +228,7 @@ private fun MemberListRow(
     val colors = LurkerTheme.colors
     var menu by remember { mutableStateOf<String?>(null) }
     val base = if (row.away) colors.fgFaint else MaterialTheme.colorScheme.onSurface
-    val rank = if (row.away) null else colors.memberPrefix(row.prefix)
+    val rank = if (row.away) null else row.tier?.let(colors::memberPrefix)
     val text = buildAnnotatedString {
         if (row.prefix.isNotEmpty()) {
             withStyle(SpanStyle(color = rank ?: base, fontWeight = if (rank != null) FontWeight.Bold else null)) { append(row.prefix) }
@@ -274,12 +275,12 @@ private fun MemberListRow(
 // MARK: - Previews
 
 private val previewRows = listOf(
-    MemberRow("ChanServ", "@", away = false),
-    MemberRow("alice", "@", away = false),
-    MemberRow("bob", "%", away = true),
-    MemberRow("carol", "+", away = false),
-    MemberRow("dave", "", away = false),
-    MemberRow("erin", "", away = true),
+    MemberRow("ChanServ", MemberPrefix.Mark("@", MemberPrefix.Tier.Op), away = false),
+    MemberRow("alice", MemberPrefix.Mark("@", MemberPrefix.Tier.Op), away = false),
+    MemberRow("bob", MemberPrefix.Mark("%", MemberPrefix.Tier.Halfop), away = true),
+    MemberRow("carol", MemberPrefix.Mark("+", MemberPrefix.Tier.Voice), away = false),
+    MemberRow("dave", null, away = false),
+    MemberRow("erin", null, away = true),
 )
 
 @Composable

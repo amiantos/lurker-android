@@ -10,6 +10,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import net.amiantos.lurkerkit.model.MemberPrefix
 
 class LurkerColorsTest {
 
@@ -105,13 +106,12 @@ class LurkerColorsTest {
         assertEquals(colors.good, colors.color(StatusLight.Good))
         assertEquals(colors.warn, colors.color(StatusLight.Warn))
         assertEquals(colors.bad, colors.color(StatusLight.Bad))
-        assertEquals(colors.memberOwner, colors.memberPrefix("~"))
-        assertEquals(colors.memberAdmin, colors.memberPrefix("&"))
-        assertEquals(colors.memberOp, colors.memberPrefix("@"))
-        assertEquals(colors.memberHalfop, colors.memberPrefix("%"))
-        assertEquals(colors.memberVoice, colors.memberPrefix("+"))
-        assertNull(colors.memberPrefix(""))
-        assertNull(colors.memberPrefix("!"))
+        // By tier, not glyph (lurker-ios#191).
+        assertEquals(colors.memberOwner, colors.memberPrefix(MemberPrefix.Tier.Owner))
+        assertEquals(colors.memberAdmin, colors.memberPrefix(MemberPrefix.Tier.Admin))
+        assertEquals(colors.memberOp, colors.memberPrefix(MemberPrefix.Tier.Op))
+        assertEquals(colors.memberHalfop, colors.memberPrefix(MemberPrefix.Tier.Halfop))
+        assertEquals(colors.memberVoice, colors.memberPrefix(MemberPrefix.Tier.Voice))
     }
 
     // MARK: - The Material scheme

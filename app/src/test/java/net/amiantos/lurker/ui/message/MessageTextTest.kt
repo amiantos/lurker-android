@@ -39,6 +39,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
 import java.util.Locale
+import net.amiantos.lurkerkit.model.MemberPrefix
 
 /**
  * `MessageText`, the port of lurker-ios's `MessageRenderer` compact functions. Most of these pin a
@@ -362,7 +363,7 @@ class MessageTextTest {
     @Test
     fun `a mode glyph prefixes a nick and wears its rank's colour`() {
         assertEquals("@alice", MessageText.caption(message("hi"), null, modePrefix = "@"))
-        val name = MessageText.headerName(CompactHeader("@alice", Color.Red, time = null, modePrefix = "@"), style)
+        val name = MessageText.headerName(CompactHeader("@alice", Color.Red, time = null, modeMark = MemberPrefix.Mark("@", MemberPrefix.Tier.Op)), style)
         assertEquals("@alice", name.text)
         assertEquals(colors.memberOp, name.styleAt(0).color)
         assertEquals(FontWeight.Bold, name.styleAt(0).fontWeight)

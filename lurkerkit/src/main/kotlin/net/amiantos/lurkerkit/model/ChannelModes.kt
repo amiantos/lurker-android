@@ -51,7 +51,7 @@ object ChannelRank {
      * The conventional ladder, used only to pick a stand-in when a gate names a letter the
      * network doesn't have.
      */
-    private val conventional = listOf("q", "a", "o", "h", "v")
+    private val conventional: List<String> = MemberPrefix.conventional.map { it.mode }
 
     /**
      * Where a member's highest mode sits in PREFIX order: 0 for the top rank, null when they

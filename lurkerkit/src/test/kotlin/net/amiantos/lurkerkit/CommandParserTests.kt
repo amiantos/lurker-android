@@ -18,6 +18,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import kotlin.test.assertNull
 
 /**
  * Locks the slash-command parser to the web client's `handleCommand` dispatcher: the same
@@ -78,6 +79,29 @@ class CommandParserTests {
     @Test
     fun testPlainTextIsAMessage() {
         assertEquals(ParsedInput.Message("hello there"), parse("hello there"))
+    }
+
+    /**
+     * lurker-ios#210: a leading space is how you say "/whatever" to a channel without the `//`
+     * escape — the web, irssi and gamja decide on the untrimmed line's first character.
+     */
+    @Test
+    fun testALeadingSpaceMakesASlashLineAMessage() {
+        assertEquals(ParsedInput.Message(" /whois bob"), parse(" /whois bob"))
+        assertEquals(ParsedInput.Message("\t/join #x"), parse("\t/join #x"))
+    }
+
+    /**
+     * What a composer sends: nothing for a blank draft, and trailing whitespace dropped — never
+     * leading, which decides whether the line is a command (lurker-ios#210).
+     */
+    @Test
+    fun testSendableKeepsLeadingWhitespaceAndDropsTrailing() {
+        assertNull(CommandParser.sendable(""))
+        assertNull(CommandParser.sendable("  \n\t "))
+        assertEquals(" /whois bob", CommandParser.sendable(" /whois bob \n"))
+        assertEquals("/join #x", CommandParser.sendable("/join #x  "))
+        assertEquals("line one\n  line two", CommandParser.sendable("line one\n  line two\n"))
     }
 
     @Test
