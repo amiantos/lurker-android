@@ -11,6 +11,7 @@ import net.amiantos.lurkerkit.model.MemberPrefix
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
+import net.amiantos.lurkerkit.model.PrefixMode
 
 /**
  * Exactly the part of `ChatState` the member list draws from — lurker-ios's `removeDuplicates` on
@@ -30,6 +31,8 @@ class MemberListInputs private constructor(
     val members: List<Member>?,
     val ignores: IgnoreSet,
     val ownNick: String?,
+    /** The network's PREFIX — its symbols and ranks (lurker-ios#191); null before ISUPPORT. */
+    val prefix: List<PrefixMode>?,
     private val key: BufferKey,
 ) {
     /** The members a reader sees: the kit's `visibleMembers`, over exactly what was compared. */
@@ -48,11 +51,13 @@ class MemberListInputs private constructor(
                 members = state.members[key.id],
                 ignores = state.ignores,
                 ownNick = key.networkId?.let { state.networks[it]?.nick },
+                prefix = key.networkId?.let { state.networks[it]?.modeSpec?.prefix },
                 key = key,
             )
 
         fun same(old: MemberListInputs, new: MemberListInputs): Boolean =
-            old.members === new.members && old.ignores === new.ignores && old.ownNick == new.ownNick
+            old.members === new.members && old.ignores === new.ignores && old.ownNick == new.ownNick &&
+                old.prefix == new.prefix
     }
 }
 
@@ -61,6 +66,8 @@ data class MemberRow(
     val nick: String,
     /** `MemberPrefix.of` — "" for a member holding no mode. */
     val prefix: String,
+    /** The glyph's colour tier, by its mode letter's role (lurker-ios#191); null with no glyph. */
+    val tier: MemberPrefix.Tier? = null,
     val away: Boolean,
 ) {
     /** The list's key: a nick appears once per channel, and folding keeps a case-flip from re-keying it. */
@@ -90,9 +97,12 @@ object MemberListModel {
      * is dropped here, before anything draws. The first is the one the store has held longest, and so
      * the one carrying the modes and away state the server last sent for it.
      */
-    fun rows(visible: List<Member>): List<MemberRow> =
-        MemberPrefix.sorted(visible.distinctBy { it.nick.lowercase() })
-            .map { MemberRow(nick = it.nick, prefix = MemberPrefix.of(it.modes), away = it.away) }
+    fun rows(visible: List<Member>, prefix: List<PrefixMode>?): List<MemberRow> =
+        MemberPrefix.sorted(visible.distinctBy { it.nick.lowercase() }, prefix)
+            .map { member ->
+                val mark = MemberPrefix.mark(member.modes, prefix)
+                MemberRow(nick = member.nick, prefix = mark?.glyph.orEmpty(), tier = mark?.tier, away = member.away)
+            }
 
     fun title(count: Int): String = if (count == 0) "Members" else "Members ($count)"
 
@@ -145,13 +155,14 @@ object MemberListModel {
      * pronouncing `@` and `%` is noise, so this says what they mean.
      */
     fun accessibilityLabel(row: MemberRow): String {
-        val rank = when (row.prefix) {
-            "~" -> "owner"
-            "&" -> "admin"
-            "@" -> "operator"
-            "%" -> "half-operator"
-            "+" -> "voiced"
-            else -> null
+        // By tier, not by glyph: a network's own symbol for op is still an operator (lurker-ios#191).
+        val rank = when (row.tier) {
+            MemberPrefix.Tier.Owner -> "owner"
+            MemberPrefix.Tier.Admin -> "admin"
+            MemberPrefix.Tier.Op -> "operator"
+            MemberPrefix.Tier.Halfop -> "half-operator"
+            MemberPrefix.Tier.Voice -> "voiced"
+            null -> null
         }
         return buildString {
             append(row.nick)

@@ -255,10 +255,10 @@ class ComposerModelTest {
     fun `the chrome reads only your own modes, and its inputs compare the nicklist by identity`() {
         val members = listOf(Member(nick = "Amiantos", modes = listOf("o")), Member(nick = "bob"))
         val away = AwayState(active = true, since = Instant.EPOCH)
-        val inputs = ComposerChrome.Inputs(nick = "amiantos", members = members, dccSession = null, away = away)
+        val inputs = ComposerChrome.Inputs(nick = "amiantos", members = members, prefix = null, dccSession = null, away = away)
         assertEquals(listOf("o"), ComposerChrome.of(inputs).ownModes)
-        assertTrue(ComposerChrome.Inputs.same(inputs, ComposerChrome.Inputs("amiantos", members, null, away)))
-        assertFalse(ComposerChrome.Inputs.same(inputs, ComposerChrome.Inputs("amiantos", members.toList(), null, away)))
+        assertTrue(ComposerChrome.Inputs.same(inputs, ComposerChrome.Inputs("amiantos", members, null, null, away)))
+        assertFalse(ComposerChrome.Inputs.same(inputs, ComposerChrome.Inputs("amiantos", members.toList(), null, null, away)))
     }
 
     @Test

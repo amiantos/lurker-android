@@ -21,6 +21,7 @@ import org.junit.Test
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
+import net.amiantos.lurkerkit.model.MemberPrefix
 
 /**
  * `MessageListLayout` — the decisions lurker-ios's `MessageListRenderer` makes per row: who heads a
@@ -49,10 +50,10 @@ class MessageListLayoutTest {
         MessageRows.build(messages.toList(), dividerAfterId = null, hasMoreOlder = true, zone = ZoneOffset.UTC)
             .filter { it !is MessageRow.DateDivider }
 
-    private fun context(rows: List<MessageRow>, modePrefixes: Map<String, String> = emptyMap()) =
+    private fun context(rows: List<MessageRow>, modePrefixes: Map<String, MemberPrefix.Mark> = emptyMap()) =
         MessageListContext.over(rows, style = style, modePrefixes = modePrefixes, zone = ZoneOffset.UTC, today = LocalDate.of(2026, 7, 25))
 
-    private fun plans(rows: List<MessageRow>, modePrefixes: Map<String, String> = emptyMap()): List<RowPlan> {
+    private fun plans(rows: List<MessageRow>, modePrefixes: Map<String, MemberPrefix.Mark> = emptyMap()): List<RowPlan> {
         val context = context(rows, modePrefixes)
         return rows.mapIndexed { index, row -> MessageListLayout.plan(row, index, context) }
     }
@@ -106,7 +107,7 @@ class MessageListLayoutTest {
 
     @Test
     fun `a mode glyph heads a member's line, never a relayed one`() {
-        val prefixes = mapOf("alice" to "@")
+        val prefixes = mapOf("alice" to MemberPrefix.Mark("@", MemberPrefix.Tier.Op))
         val plain = plans(rows(line("alice", 0)), prefixes)[0].header()!!
         assertEquals("@alice", plain.nick)
         assertEquals("@", plain.modePrefix)
@@ -114,6 +115,18 @@ class MessageListLayoutTest {
         assertEquals("alice", relayed.nick)
         assertEquals("", relayed.modePrefix)
         assertEquals("github", relayed.relaySource)
+    }
+
+    /**
+     * A notice's caption takes no glyph, and its `-alice-` must not wear one either — with a network
+     * whose op symbol is `-` it "starts with" it (lurker-ios#191's Codex finding).
+     */
+    @Test
+    fun `a notice never wears a rank mark, whatever the network's symbols`() {
+        val prefixes = mapOf("alice" to MemberPrefix.Mark("-", MemberPrefix.Tier.Op))
+        val notice = plans(rows(line("alice", 0, type = EventType.Notice)), prefixes)[0].header()!!
+        assertEquals("-alice-", notice.nick)
+        assertNull(notice.modeMark)
     }
 
     @Test

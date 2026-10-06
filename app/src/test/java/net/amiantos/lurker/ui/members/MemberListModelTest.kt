@@ -14,6 +14,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import net.amiantos.lurkerkit.model.MemberPrefix
+import net.amiantos.lurkerkit.model.PrefixMode
 
 /** The member list's rules — lurker-ios's `MemberListViewController`. */
 class MemberListModelTest {
@@ -37,32 +39,44 @@ class MemberListModelTest {
                 Member("carol", modes = listOf("q")),
                 Member("Amy"),
             ),
+            prefix = null,
         )
         assertEquals(listOf("carol", "alice", "Bob", "Amy", "zed"), rows.map { it.nick })
         // The highest mode held wins the glyph.
         assertEquals(listOf("~", "@", "+", "", ""), rows.map { it.prefix })
     }
 
+    /** The network's own PREFIX decides the glyph, the order and the tier (lurker-ios#191). */
+    @Test
+    fun rowsFollowTheNetworksPrefix() {
+        val prefix = listOf(PrefixMode("v", "+"), PrefixMode("o", "!"))
+        val rows = MemberListModel.rows(listOf(Member("op", modes = listOf("o")), Member("voice", modes = listOf("v"))), prefix)
+        assertEquals(listOf("voice", "op"), rows.map { it.nick })
+        assertEquals(listOf("+", "!"), rows.map { it.prefix })
+        assertEquals(listOf(MemberPrefix.Tier.Voice, MemberPrefix.Tier.Op), rows.map { it.tier })
+        assertEquals("op, operator", MemberListModel.accessibilityLabel(rows[1]))
+    }
+
     @Test
     fun twoEntriesForOneNickBecomeOneRowTheFirstWinning() {
         // The store's nick-change fold can leave two entries that fold to one nick; the list keys by the
         // folded nick, and two equal keys crash it.
-        val rows = MemberListModel.rows(listOf(Member("Bob", modes = listOf("o")), Member("alice"), Member("bob", away = true)))
+        val rows = MemberListModel.rows(listOf(Member("Bob", modes = listOf("o")), Member("alice"), Member("bob", away = true)), prefix = null)
         assertEquals(listOf("Bob", "alice"), rows.map { it.nick })
-        assertEquals(MemberRow("Bob", "@", away = false), rows.first())
+        assertEquals(MemberRow("Bob", "@", tier = MemberPrefix.Tier.Op, away = false), rows.first())
         assertEquals(rows.size, rows.map { it.id }.toSet().size)
     }
 
     @Test
     fun awayIsCarriedNotSortedToTheBottom() {
-        val rows = MemberListModel.rows(listOf(Member("bob", away = true), Member("alice")))
+        val rows = MemberListModel.rows(listOf(Member("bob", away = true), Member("alice")), prefix = null)
         assertEquals(listOf("alice", "bob"), rows.map { it.nick })
         assertTrue(rows[1].away)
     }
 
     @Test
     fun theFilterMatchesTheNickNotTheGlyphFoldingCaseAndTrimming() {
-        val rows = MemberListModel.rows(listOf(Member("Alice", modes = listOf("o")), Member("malice"), Member("bob")))
+        val rows = MemberListModel.rows(listOf(Member("Alice", modes = listOf("o")), Member("malice"), Member("bob")), prefix = null)
         assertEquals(listOf("Alice", "malice"), MemberListModel.filter(rows, "  ALI ").map { it.nick })
         // `@` is a fact about the row, not part of the name.
         assertTrue(MemberListModel.filter(rows, "@").isEmpty())
@@ -96,12 +110,12 @@ class MemberListModelTest {
 
     @Test
     fun talkBackHearsTheRankInWordsAndAway() {
-        assertEquals("alice, operator", MemberListModel.accessibilityLabel(MemberRow("alice", "@", away = false)))
-        assertEquals("bob, half-operator, away", MemberListModel.accessibilityLabel(MemberRow("bob", "%", away = true)))
+        assertEquals("alice, operator", MemberListModel.accessibilityLabel(MemberRow("alice", "@", tier = MemberPrefix.Tier.Op, away = false)))
+        assertEquals("bob, half-operator, away", MemberListModel.accessibilityLabel(MemberRow("bob", "%", tier = MemberPrefix.Tier.Halfop, away = true)))
         assertEquals("carol", MemberListModel.accessibilityLabel(MemberRow("carol", "", away = false)))
-        assertEquals("dan, owner", MemberListModel.accessibilityLabel(MemberRow("dan", "~", away = false)))
-        assertEquals("erin, admin", MemberListModel.accessibilityLabel(MemberRow("erin", "&", away = false)))
-        assertEquals("fay, voiced", MemberListModel.accessibilityLabel(MemberRow("fay", "+", away = false)))
+        assertEquals("dan, owner", MemberListModel.accessibilityLabel(MemberRow("dan", "~", tier = MemberPrefix.Tier.Owner, away = false)))
+        assertEquals("erin, admin", MemberListModel.accessibilityLabel(MemberRow("erin", "&", tier = MemberPrefix.Tier.Admin, away = false)))
+        assertEquals("fay, voiced", MemberListModel.accessibilityLabel(MemberRow("fay", "+", tier = MemberPrefix.Tier.Voice, away = false)))
     }
 
     @Test

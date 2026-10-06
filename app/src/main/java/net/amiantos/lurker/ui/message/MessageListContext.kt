@@ -22,6 +22,7 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.util.Locale
+import net.amiantos.lurkerkit.model.MemberPrefix
 
 /**
  * Everything a row needs that comes from the screen rather than from the row itself. lurker-ios's
@@ -43,7 +44,7 @@ class MessageListContext(
     /** Colours known nicks mentioned in message bodies. */
     val highlighter: NickHighlighter,
     /** Lowercased nick → channel-mode glyph, for the author header. */
-    val modePrefixes: Map<String, String>,
+    val modePrefixes: Map<String, MemberPrefix.Mark>,
     val settings: Settings,
     /** Whether the row at an index is status narration, so a run of it can be spaced as one block. */
     val isStatusRow: (Int) -> Boolean,
@@ -100,7 +101,7 @@ class MessageListContext(
             style: MessageTextStyle,
             networkName: (Message) -> String? = { null },
             highlighter: NickHighlighter = NickHighlighter(emptyList()),
-            modePrefixes: Map<String, String> = emptyMap(),
+            modePrefixes: Map<String, MemberPrefix.Mark> = emptyMap(),
             settings: Settings = Settings(),
             revealedSpoilers: (Message) -> Set<Int> = { emptySet() },
             onToggleSpoiler: (Message, Int) -> Unit = { _, _ -> },
@@ -162,17 +163,21 @@ data class CompactHeader(
     /** Null unless the minute changed — the whole point of the format. */
     val time: String?,
     /**
-     * The speaker's channel-mode glyph, when [nick] opens with one. Carried separately from the name
-     * it's already part of, because it doesn't wear the name's colour (see `MessageText.headerName`).
-     * Empty for every header that isn't a channel member's.
+     * The speaker's channel-mode glyph and its colour tier, when [nick] opens with the glyph. Carried
+     * separately from the name it's already part of, because it doesn't wear the name's colour (see
+     * `MessageText.headerName`), and as one value so the glyph and its colour can't disagree. Null for
+     * every header that isn't a channel member's.
      */
-    val modePrefix: String = "",
+    val modeMark: MemberPrefix.Mark? = null,
     /**
      * Where a re-attributed relay line was bridged from (#277) — "Discord", "github". It rides the
      * header because it qualifies the *name*, and so is drawn once per author block.
      */
     val relaySource: String? = null,
 ) {
+    /** The glyph alone, "" when there's no mark. */
+    val modePrefix: String get() = modeMark?.glyph ?: ""
+
     /**
      * The name as TalkBack hears it. Relay provenance needs a connective it doesn't need in print,
      * where colour separates the two words: read out bare, "alice github" is two names.
@@ -311,11 +316,8 @@ object MessageListLayout {
         // No rank glyph on a re-attributed relay line (#277): the name belongs to someone speaking
         // through a bridge, so a hit in the nicklist would be a coincidence of spelling. The bot's
         // own rank isn't shown either: it isn't the one talking.
-        val prefix = if (message.relayBot == null) {
-            message.nick?.let { context.modePrefixes[it.lowercase()] } ?: ""
-        } else {
-            ""
-        }
+        val mark = if (message.relayBot == null) message.nick?.let { context.modePrefixes[it.lowercase()] } else null
+        val prefix = mark?.glyph ?: ""
         // Null means there's nothing to call this line: server text whose network hasn't resolved
         // yet, most often. An empty header is a blank line with a stray timestamp beside it.
         val networkName = context.networkName(message)
@@ -324,8 +326,11 @@ object MessageListLayout {
             nick = name,
             color = MessageText.captionColor(message, networkName, context.style),
             time = if (minuteChanged) message.date?.let { MessageText.compactHeaderTime(it, context.zone) } else null,
-            // Only when `caption` actually used it: it prefixes a nick and nothing else.
-            modePrefix = if (name.startsWith(prefix)) prefix else "",
+            // Only when `caption` actually used it: it prefixes a nick and nothing else. ⚠ Asked by
+            // building the caption without it, never by `name.startsWith(prefix)`: a network's own
+            // symbol can be any character (lurker-ios#191), and with PREFIX `(ov)-+` a notice's
+            // `-alice-` "starts with" an op's `-`, which then wore the op colour.
+            modeMark = if (prefix.isNotEmpty() && name != MessageText.caption(message, networkName, modePrefix = "")) mark else null,
             // Nil for everything but a re-attributed relay line, and nil for a bare `<nick> message`
             // relay too, whose envelope names no source — the web's call as well.
             relaySource = message.relaySource,

@@ -37,7 +37,7 @@ Files with no dependency on any other LurkerKit type.
 | `Model/ServerAddress.swift` | 78 | ported | Parses by hand to match `URLComponents`, then also requires that OkHttp can load the address — stricter than iOS at a few edges, pinned by a port-only test. |
 | `Model/Settings.swift` | 243 | ported | `SettingValue.Int` is 32-bit; a wire number past that is skipped rather than wrapped. |
 | `Model/Speakers.swift` | 122 | ported | Entries keep each nick as last spelled, for nick completion (`recent`, newest first, case-folded tiebreak). |
-| `Model/Typing.swift` | 174 | ported | `OutgoingTyping` is a mutable class (PORTING.md, structs that mutate, case 3). Composing is judged on the trimmed draft and a `//`-escaped line counts as a message (lurker-ios#202). |
+| `Model/Typing.swift` | 174 | ported, **drifted** | `OutgoingTyping` is a mutable class (PORTING.md, structs that mutate, case 3). Composing is judged on the trimmed draft and a `//`-escaped line counts as a message (lurker-ios#202). |
 | `Model/UploadContentTypes.swift` | 36 | ported | `[UTType]` → MIME patterns. Adds `application/json`, which `text/*` cannot reach and `.text` does by conformance. |
 | `Model/UploadKind.swift` | 58 | ported |  |
 | `Rendering/IRCFormatting.swift` | 269 | ported | `rawIndex` is tested from `RelayEnvelopeTests` (T3); checked against the Swift meanwhile. |
@@ -54,14 +54,14 @@ Buffers, messages, networks and what hangs directly off them.
 |---|---:|---|---|
 | `Model/Buffer.swift` | 309 | ported | `BufferKey.id` folds with `lowercase()`, which applies final sigma where Swift does not. |
 | `Model/BufferOrder.swift` | 152 | ported | `localizedCaseInsensitiveCompare` → `java.text.Collator`. The host JDK orders punctuation differently from ICU; verify on a device. |
-| `Model/ChannelModes.swift` | 621 | ported | Complete with T5: `channelAccess` is an extension on `ChatState`. `topicSetterLine` takes the date formatter from the app. `ChannelRefusals` and `ChannelModeDrafts` compare all their state, not just what is on screen. |
+| `Model/ChannelModes.swift` | 621 | ported, **drifted** | Complete with T5: `channelAccess` is an extension on `ChatState`. `topicSetterLine` takes the date formatter from the app. `ChannelRefusals` and `ChannelModeDrafts` compare all their state, not just what is on screen. |
 | `Model/DccChat.swift` | 74 | ported |  |
 | `Model/Favorite.swift` | 25 | ported |  |
 | `Model/FeedPaging.swift` | 276 | ported | A mutable class (case 3), one owner (the app's `FeedPager`); `items` is replaced, never edited in place, so a snapshot holding an earlier list stays valid. `Fetch`/`Landing` constructors internal. Differentially checked against the Swift over 24,400 random ops: identical. `remove` pages only inside `prefetchWindow` and spends no hop (moved into LurkerKit from the app's old `FeedPager`); the app still keeps a removed row out of a reload already in flight, which LurkerKit lacks. |
 | `Model/Highlight.swift` | 97 | ported |  |
 | `Model/HighlightGrouping.swift` | 86 | ported | "The day before" is ported from ICU's wall-time rule, not `minusDays`; Yesterday is a same-calendar-day check (lurker-ios#200), matched against the Swift for every day 2000–2030 in all 443 zones. Depends on time-zone data; verify on a device. |
 | `Model/LinkPreview.swift` | 229 | ported | `isViewable` parses with `HttpUrl`, which can read a different host than Foundation when a backslash sits in the authority: the player must be handed `HttpUrl.toString()`, never the raw string (T6). Numeric fields decode slightly more strictly than `JSONDecoder`. |
-| `Model/MemberPrefix.swift` | 88 | ported |  |
+| `Model/MemberPrefix.swift` | 88 | ported, **drifted** |  |
 | `Model/Message.swift` | 413 | ported |  |
 | `Model/MessageActions.swift` | 349 | ported | `MessageAction.symbol` keeps the SF Symbol names; the app maps them to its own icons. |
 | `Model/MessageGrouping.swift` | 78 | ported |  |
@@ -90,8 +90,8 @@ The pure logic layered on the entities: what is hidden, what a slash command mea
 | Swift file | Lines | Status | Notes |
 |---|---:|---|---|
 | `Commands/Command.swift` | 513 | ported | `CommandEffect` is a sealed interface of 23 cases in Swift order. |
-| `Commands/CommandCompletion.swift` | 118 | ported |  |
-| `Commands/CommandParser.swift` | 925 | ported | `parse` takes the app's date formatter, for the `/ignore` listing. Lines are cut by UTF-16 unit; differs from Swift only where a combining mark follows a slash, a space or a sigil. `argLine` and `body()` trim newlines too (lurker-ios#197). `awayFlag` (lurker#994): a space wearing a combining mark leaves the mark behind here, where Swift drops it with the separator — Port note + port-only test. |
+| `Commands/CommandCompletion.swift` | 118 | ported, **drifted** |  |
+| `Commands/CommandParser.swift` | 925 | ported, **drifted** | `parse` takes the app's date formatter, for the `/ignore` listing. Lines are cut by UTF-16 unit; differs from Swift only where a combining mark follows a slash, a space or a sigil. `argLine` and `body()` trim newlines too (lurker-ios#197). `awayFlag` (lurker#994): a space wearing a combining mark leaves the mark behind here, where Swift drops it with the separator — Port note + port-only test. |
 | `Commands/IgnoreArgs.swift` | 356 | ported | `parse` returns `support.Result`. The pattern length limit counts UTF-16 units, the server's own rule, as LurkerKit now does too (lurker-ios#198). |
 | `Model/AwayStrip.swift` | 60 | ported | Chooses how much of the date to show (`Since`, carrying the ICU skeleton); the app formats it. "This year" is the ISO year, where LurkerKit asks the user's calendar. |
 | `Model/Consolidation.swift` | 423 | ported | Returns structure, not sentences: the wording is the app's renderer's. |
@@ -102,7 +102,7 @@ The pure logic layered on the entities: what is hidden, what a slash command mea
 | `Model/IgnoreRule.swift` | 245 | ported | `summary` takes the expiry formatter from the app; the private `ExpiryText` is not ported. |
 | `Model/IgnoreSet.swift` | 295 | ported | Value equality over the rules, where LurkerKit's class has identity. |
 | `Model/MessageRows.swift` | 426 | ported | `AwayDivider`'s reason is `awayMessage`. Day boundaries depend on time-zone data; verify on a device. |
-| `Model/NickCompletion.swift` | 394 | ported | `spokenPunctuation` and `isMarkScalar` read the JDK's Unicode tables; verify on a device. |
+| `Model/NickCompletion.swift` | 394 | ported, **drifted** | `spokenPunctuation` and `isMarkScalar` read the JDK's Unicode tables; verify on a device. |
 | `Model/PreviewHiding.swift` | 67 | ported |  |
 | `Model/PreviewSelection.swift` | 160 | ported | `looksLikeMedia` reads the path by hand to Foundation's rules rather than through `HttpUrl`; pinned by a port-only test. |
 | `Model/PreviewText.swift` | 275 | ported | `stripHiddenUrls` takes an `AttributedBody` interface for `:app` to implement, where LurkerKit takes an `NSMutableAttributedString`. |

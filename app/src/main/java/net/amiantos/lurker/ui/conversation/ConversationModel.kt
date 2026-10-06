@@ -31,6 +31,7 @@ import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
 import java.time.Instant
 import java.time.ZoneId
+import net.amiantos.lurkerkit.model.PrefixMode
 
 /**
  * Exactly the part of `ChatState` the conversation's rows draw from — lurker-ios's
@@ -79,7 +80,7 @@ internal class ConversationInputs(
     /** Not compared — [reactionsRevision] stands for it. */
     val reactions: Map<Long, List<MessageReaction>>,
     val canReact: Boolean,
-    val modePrefixes: Map<String, String>,
+    val modePrefixes: Map<String, MemberPrefix.Mark>,
     /** Who the in-body nick colouring looks for — see `ConversationModel.highlighterNicks`. */
     val highlighterNicks: List<String>,
 ) {
@@ -124,18 +125,24 @@ internal class ConversationProjector(private val key: BufferKey, private val kin
     private var lastMembers: List<Member>? = null
     private var lastOwnNick: String? = null
     private var lastShowsPrefix: Boolean? = null
-    private var modePrefixes: Map<String, String> = emptyMap()
+    private var lastPrefix: List<PrefixMode>? = null
+    private var modePrefixes: Map<String, MemberPrefix.Mark> = emptyMap()
     private var highlighterNicks: List<String> = emptyList()
 
     fun project(state: ChatState, now: Instant = Instant.now()): ConversationInputs {
         val members = state.members[key.id]
         val ownNick = key.networkId?.let { state.networks[it]?.nick }
         val showsPrefix = state.settings.bool("look.nick.show_mode_prefix", default = false)
-        if (lastShowsPrefix == null || members !== lastMembers || ownNick != lastOwnNick || showsPrefix != lastShowsPrefix) {
+        // The network's PREFIX (lurker-ios#191) — its ISUPPORT can land after the nicklist.
+        val prefix = key.networkId?.let { state.networks[it]?.modeSpec?.prefix }
+        if (lastShowsPrefix == null || members !== lastMembers || ownNick != lastOwnNick || showsPrefix != lastShowsPrefix ||
+            prefix != lastPrefix
+        ) {
             lastMembers = members
             lastOwnNick = ownNick
             lastShowsPrefix = showsPrefix
-            modePrefixes = ConversationModel.modePrefixes(kind, members.orEmpty(), showsPrefix)
+            lastPrefix = prefix
+            modePrefixes = ConversationModel.modePrefixes(kind, members.orEmpty(), showsPrefix, prefix)
             highlighterNicks = ConversationModel.highlighterNicks(kind, key, members.orEmpty(), ownNick)
         }
         return ConversationInputs(
@@ -344,12 +351,16 @@ internal object ConversationModel {
      * unless `look.nick.show_mode_prefix` is on, and only for channels. Members only, deliberately:
      * backlog from someone who has since left gets no glyph rather than a guessed one, as on the web.
      */
-    fun modePrefixes(kind: BufferKind, members: List<Member>, showsPrefix: Boolean): Map<String, String> {
+    fun modePrefixes(
+        kind: BufferKind,
+        members: List<Member>,
+        showsPrefix: Boolean,
+        prefix: List<PrefixMode>?,
+    ): Map<String, MemberPrefix.Mark> {
         if (kind != BufferKind.Channel || !showsPrefix) return emptyMap()
-        val prefixes = HashMap<String, String>()
+        val prefixes = HashMap<String, MemberPrefix.Mark>()
         for (member in members) {
-            val glyph = MemberPrefix.of(member.modes)
-            if (glyph.isNotEmpty()) prefixes[member.nick.lowercase()] = glyph
+            MemberPrefix.mark(member.modes, prefix)?.let { prefixes[member.nick.lowercase()] = it }
         }
         return prefixes
     }

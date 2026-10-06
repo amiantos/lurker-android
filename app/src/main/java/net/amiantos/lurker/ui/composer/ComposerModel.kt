@@ -28,6 +28,7 @@ import net.amiantos.lurkerkit.model.member
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.support.TextRange
 import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
+import net.amiantos.lurkerkit.model.PrefixMode
 
 /*
  * The composer's decisions, with no Compose in them — lurker-ios's `ComposerBar`, `SuggestionsView`
@@ -127,6 +128,8 @@ internal data class ComposerChrome(
     val nick: String?,
     /** Ours alone, not the nicklist: every away-notify flip in a busy channel would get through. */
     val ownModes: List<String>,
+    /** The network's PREFIX, which says what [ownModes] look like (lurker-ios#191). */
+    val prefix: List<PrefixMode>? = null,
     val dccSession: Boolean?,
     val away: AwayState?,
 ) {
@@ -135,13 +138,20 @@ internal data class ComposerChrome(
      * held whole and unsearched, and compared by identity — the store replaces a list it changed —
      * because comparing it so is O(1) and searching it is O(n) every time.
      */
-    class Inputs(val nick: String?, val members: List<Member>?, val dccSession: Boolean?, val away: AwayState?) {
+    class Inputs(
+        val nick: String?,
+        val members: List<Member>?,
+        val prefix: List<PrefixMode>?,
+        val dccSession: Boolean?,
+        val away: AwayState?,
+    ) {
         companion object {
             fun of(state: ChatState, key: BufferKey, kind: BufferKind): Inputs {
                 val networkId = key.networkId
                 return Inputs(
                     nick = networkId?.let { state.networks[it]?.nick },
                     members = if (kind == BufferKind.Channel) state.members[key.id] else null,
+                    prefix = networkId?.let { state.networks[it]?.modeSpec?.prefix },
                     dccSession = if (kind == BufferKind.Dcc) state.dccChatSession(key) else null,
                     // ⚠ Not the list's `awayState`, which leaves the server log out on purpose: that's
                     // about where a divider is noise. This is whether you're away, and you are in every
@@ -152,17 +162,18 @@ internal data class ComposerChrome(
             }
 
             fun same(old: Inputs, new: Inputs): Boolean =
-                old.nick == new.nick && old.members === new.members && old.dccSession == new.dccSession &&
-                    old.away == new.away
+                old.nick == new.nick && old.members === new.members && old.prefix == new.prefix &&
+                    old.dccSession == new.dccSession && old.away == new.away
         }
     }
 
     companion object {
-        val Empty = ComposerChrome(nick = null, ownModes = emptyList(), dccSession = null, away = null)
+        val Empty = ComposerChrome(nick = null, ownModes = emptyList(), prefix = null, dccSession = null, away = null)
 
         fun of(inputs: Inputs) = ComposerChrome(
             nick = inputs.nick,
             ownModes = inputs.members?.member(named = inputs.nick ?: "")?.modes ?: emptyList(),
+            prefix = inputs.prefix,
             dccSession = inputs.dccSession,
             away = inputs.away,
         )
@@ -458,9 +469,9 @@ internal object ComposerModel {
         }
         val nick = chrome.nick
         if (nick.isNullOrEmpty()) return "Message"
-        // The conventional glyph, the one your own lines and the nicklist show — the prompt
-        // disagreeing with them about you would be the stranger mistake.
-        return MemberPrefix.of(chrome.ownModes) + nick
+        // The network's own glyph (its PREFIX), the one your own lines and the nicklist show — the
+        // prompt disagreeing with them about you would be the stranger mistake.
+        return MemberPrefix.of(chrome.ownModes, chrome.prefix) + nick
     }
 
     // MARK: - Send

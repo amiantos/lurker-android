@@ -167,10 +167,11 @@ object MessageText {
      * under width pressure the provenance goes before the speaker does.
      */
     fun headerName(header: CompactHeader, style: MessageTextStyle): AnnotatedString = buildAnnotatedString {
-        val prefix = header.modePrefix
-        val rank = style.colors.memberPrefix(prefix)
+        val mark = header.modeMark
+        val prefix = mark?.glyph.orEmpty()
         withStyle(SpanStyle(color = header.color)) {
-            if (rank != null && prefix.isNotEmpty() && header.nick.startsWith(prefix)) {
+            if (mark != null && prefix.isNotEmpty() && header.nick.startsWith(prefix)) {
+                val rank = style.colors.memberPrefix(mark.tier)
                 withStyle(SpanStyle(color = rank, fontWeight = FontWeight.Bold)) { append(prefix) }
                 append(header.nick.substring(prefix.length))
             } else {

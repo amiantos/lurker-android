@@ -29,6 +29,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
+import net.amiantos.lurkerkit.model.MemberPrefix
 
 /**
  * The conversation's decisions: hydrating, noticing a buffer leave, the rows it builds, and what its
@@ -285,12 +286,12 @@ class ConversationModelTest {
     @Test
     fun `mode glyphs are drawn only when the setting asks, and only in a channel`() {
         val members = listOf(Member("alice", modes = listOf("o")), Member("bob"))
-        assertTrue(ConversationModel.modePrefixes(BufferKind.Channel, members, showsPrefix = false).isEmpty())
-        assertEquals(mapOf("alice" to "@"), ConversationModel.modePrefixes(BufferKind.Channel, members, showsPrefix = true))
-        assertTrue(ConversationModel.modePrefixes(BufferKind.Dm, members, showsPrefix = true).isEmpty())
+        assertTrue(ConversationModel.modePrefixes(BufferKind.Channel, members, showsPrefix = false, prefix = null).isEmpty())
+        assertEquals(mapOf("alice" to MemberPrefix.Mark("@", MemberPrefix.Tier.Op)), ConversationModel.modePrefixes(BufferKind.Channel, members, showsPrefix = true, prefix = null))
+        assertTrue(ConversationModel.modePrefixes(BufferKind.Dm, members, showsPrefix = true, prefix = null).isEmpty())
         val on = Settings(registry = emptyMap(), values = mapOf("look.nick.show_mode_prefix" to SettingValue.Bool(true)))
         val projected = inputs(state(settings = on, members = mapOf(channel.id to members)))
-        assertEquals(mapOf("alice" to "@"), projected.modePrefixes)
+        assertEquals(mapOf("alice" to MemberPrefix.Mark("@", MemberPrefix.Tier.Op)), projected.modePrefixes)
     }
 
     // MARK: - Inputs

@@ -4,36 +4,68 @@
 package net.amiantos.lurkerkit.model
 
 /**
- * Channel user-mode prefixes, ported from the web client's `memberPrefix.ts` so the
- * @/+/%/~/& glyph and the ordering match between clients.
+ * Channel user-mode prefixes — a member's glyph, rank and glyph colour — read from the network's
+ * own PREFIX (`Network.modeSpec.prefix`, highest rank first), as the web client's
+ * `memberPrefix.ts` does since lurker#1032 (lurker-ios#191). Display only: rank gates go through
+ * `ChannelRank`.
  *
- * NOTE (inherited from the reference): the q/a/o/h/v → ~/&/@/%/+ mapping is the
- * conventional RFC/ISUPPORT default and is hardcoded. Neither client reads a network's
- * ISUPPORT PREFIX yet, so a server that diverges from the standard ordering won't be
- * honored — a known, deliberate limitation, not an oversight to fix here.
+ * `prefix` is null while the network hasn't sent its ISUPPORT yet; that falls back to the
+ * conventional q/a/o/h/v → ~/&/@/%/+ table ([conventional]).
  */
 object MemberPrefix {
-    /** Ranked owner > admin > op > halfop > voice. Highest held mode wins. */
-    val rank: List<String> = listOf("q", "a", "o", "h", "v")
-    private val glyph: Map<String, String> = mapOf("q" to "~", "a" to "&", "o" to "@", "h" to "%", "v" to "+")
+    /** The conventional PREFIX, `(qaohv)~&@%+`, for a network that hasn't said. */
+    val conventional: List<PrefixMode> = listOf(
+        PrefixMode(mode = "q", symbol = "~"), PrefixMode(mode = "a", symbol = "&"),
+        PrefixMode(mode = "o", symbol = "@"), PrefixMode(mode = "h", symbol = "%"),
+        PrefixMode(mode = "v", symbol = "+"),
+    )
+
+    /** The five glyph colours (`look.color.member.*`). */
+    enum class Tier { Owner, Admin, Op, Halfop, Voice }
+
+    /** A member's glyph and the colour it wears. */
+    data class Mark(val glyph: String, val tier: Tier)
+
+    /** The symbol of the highest-ranked prefix mode the member holds, or "" when they hold none. */
+    fun of(modes: List<String>, prefix: List<PrefixMode>?): String = mark(modes, prefix)?.glyph ?: ""
 
     /**
-     * The single highest-ranked prefix glyph for a set of channel modes, or "" when the
-     * member holds none.
+     * The glyph and its colour tier, or null when the member holds no prefix mode.
+     *
+     * The tier is keyed by the LETTER's conventional role, not by the symbol and not by position:
+     * another symbol for op is still op, and on Libera's `(ov)@+` op is the top rank — by
+     * position it would take the owner colour. A letter outside q/a/o/h/v takes the tier of the
+     * nearest known letter that outranks it, or owner when none does: on `(Yqaohv)!~&@%+` a `Y`
+     * is coloured as an owner, whatever its symbol. The web's `prefixClass`.
      */
-    fun of(modes: List<String>): String {
-        for (letter in rank) {
-            if (modes.contains(letter)) return glyph[letter] ?: ""
+    fun mark(modes: List<String>, prefix: List<PrefixMode>?): Mark? {
+        val list = prefix ?: conventional
+        val index = ChannelRank.index(modes, list) ?: return null
+        var tier = Tier.Owner
+        for (candidate in list.subList(0, index + 1).asReversed()) {
+            val known = tierByLetter[candidate.mode]
+            if (known != null) {
+                tier = known
+                break
+            }
         }
-        return ""
+        return Mark(glyph = list[index].symbol, tier = tier)
     }
 
-    /** Sort position: lower is higher-ranked; unprivileged members sort last. */
-    fun order(modes: List<String>): Int {
-        for ((index, letter) in rank.withIndex()) {
-            if (modes.contains(letter)) return index
-        }
-        return rank.size
+    /**
+     * The conventional letters' tiers, in [conventional]'s order — paired with it rather than
+     * written out a second time (lurker-ios#98's lesson).
+     */
+    private val tierByLetter: Map<String, Tier> =
+        conventional.map { it.mode }.zip(listOf(Tier.Owner, Tier.Admin, Tier.Op, Tier.Halfop, Tier.Voice)).toMap()
+
+    /**
+     * Sort position: 0 for the top rank, and members with no prefix mode after every rank the
+     * network has.
+     */
+    fun order(modes: List<String>, prefix: List<PrefixMode>?): Int {
+        val list = prefix ?: conventional
+        return ChannelRank.index(modes, list) ?: list.size
     }
 
     /**
@@ -50,10 +82,10 @@ object MemberPrefix {
      * there and with `e` here). And this sort is stable — members that tie keep their incoming
      * order — which Swift's does not promise.
      */
-    fun sorted(members: List<Member>): List<Member> =
+    fun sorted(members: List<Member>, prefix: List<PrefixMode>?): List<Member> =
         members.sortedWith { lhs, rhs ->
-            val left = order(lhs.modes)
-            val right = order(rhs.modes)
+            val left = order(lhs.modes, prefix)
+            val right = order(rhs.modes, prefix)
             if (left != right) {
                 left.compareTo(right)
             } else {
@@ -62,10 +94,12 @@ object MemberPrefix {
         }
 
     /**
-     * The glyphs themselves, derived from the map above rather than written out again —
-     * a second hand-typed copy of a sigil set is exactly how lurker-ios#98 got in.
+     * The conventional glyphs, derived from the table above rather than written out again —
+     * a second hand-typed copy of a sigil set is exactly how lurker-ios#98 got in. The WHOIS
+     * split below keeps the conventional set, as lurker-ios#191 asked: which sigils lead a WHOIS
+     * channel token is a separate question from how a member's rank is drawn.
      */
-    private val glyphs: Set<Char> = glyph.values.mapNotNull { it.firstOrNull() }.toSet()
+    private val glyphs: Set<Char> = conventional.mapNotNull { it.symbol.firstOrNull() }.toSet()
 
     /**
      * What [splitChannelToken] answers: the sigils held in the channel, and the channel.
