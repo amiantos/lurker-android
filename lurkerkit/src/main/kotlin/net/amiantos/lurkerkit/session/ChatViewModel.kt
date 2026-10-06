@@ -85,6 +85,8 @@ import okhttp3.OkHttpClient
 import java.io.File
 import java.time.Duration
 import java.time.Instant
+import java.time.ZoneId
+import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.math.max
 import kotlin.math.min
@@ -528,6 +530,7 @@ class ChatViewModel(
         // particular must not carry across users. Both this and the deliberate sign-out clear
         // it, because either can be followed by someone else signing in on this phone.
         settingsCache.clear()
+        resetTimeZoneSync()
         // Previews carry the same hazard the settings cache does, plus two more: the metadata
         // is the previous account's reading history, and the `asked` set would suppress
         // re-resolution against a DIFFERENT instance — whose signed proxy tokens wouldn't verify
@@ -658,6 +661,70 @@ class ChatViewModel(
 
     /** Test seam: stands in for the socket a raw line goes out on (`/frobnicate`). */
     internal var sendRawSeam: ((String) -> Boolean)? = null
+
+    /** Test seam: stands in for the settings write `syncTimeZone` makes. */
+    internal var timeZoneWriteSeam: ((String) -> Unit)? = null
+
+    /**
+     * The phone's time zone, written to `system.timezone` when the server's differs (sweep L08), as
+     * the web's `syncDetectedTimezone` does. The server formats in it with no client connected: push
+     * quiet hours, and the "since …" others see in the auto-away message. A phone that never wrote
+     * it left both on the zone of whichever browser bootstrapped last, or on the server's clock.
+     *
+     * On each settings bootstrap — every start and every reconnect — so a phone that has travelled
+     * corrects it on its next foreground. Never in answer to a `settings` frame: another device's
+     * write isn't answered, so two devices in different zones can't trade it back and forth.
+     *
+     * Port note: `ZoneId.systemDefault()` where LurkerKit reads `TimeZone.autoupdatingCurrent` (not
+     * `current`, a snapshot that can outlive a zone change). Android resets the process's default
+     * zone when the system's changes, so it is already the live one.
+     *
+     * ⚠ One write out at a time, and a bootstrap that arrives meanwhile is answered when it lands,
+     * against the zone and the stored value as they are THEN. Two writes out together could land in
+     * either order and leave the old zone stored; a bootstrap simply skipped would be lost if the
+     * write out failed. Only a skipped bootstrap asks again, so a zone the server refuses is asked
+     * once per bootstrap, never in a loop.
+     */
+    internal fun syncTimeZone(detected: String = ZoneId.systemDefault().id) {
+        if (timeZoneWrite != null) {
+            timeZoneResyncOwed = true
+            return
+        }
+        if (detected.isEmpty() || store.state.settings.values["system.timezone"] == SettingValue.String(detected)) return
+        val write = UUID.randomUUID()
+        timeZoneWrite = write
+        // The seam's write never finishes on its own; a test finishes it (`timeZoneWriteFinished`).
+        timeZoneWriteSeam?.let { return it(detected) }
+        scope.task {
+            // Not worth a word on failure: the next bootstrap asks again.
+            client.updateSettings(mapOf("system.timezone" to SettingValue.String(detected)))
+            // A sign-out since then ended it; the next session starts clean.
+            if (timeZoneWrite == write) timeZoneWriteFinished()
+        }
+    }
+
+    /**
+     * The write out has landed, either way: a bootstrap that waited for it is answered now.
+     * Internal for tests.
+     */
+    internal fun timeZoneWriteFinished() {
+        timeZoneWrite = null
+        if (!timeZoneResyncOwed) return
+        timeZoneResyncOwed = false
+        syncTimeZone()
+    }
+
+    /** The time zone write out, if any, so its answer can tell it still belongs to this session. */
+    private var timeZoneWrite: UUID? = null
+
+    /** A bootstrap arrived while a write was out, and is answered when it lands. */
+    private var timeZoneResyncOwed = false
+
+    /** Session-scoped: a sign-out drops both, so the next account's first bootstrap is never skipped. */
+    private fun resetTimeZoneSync() {
+        timeZoneWrite = null
+        timeZoneResyncOwed = false
+    }
 
     /**
      * Open a DM and go there once its row exists (lurker-ios#201): Send Message on a profile, a
@@ -2521,6 +2588,7 @@ class ChatViewModel(
                 // Persist after folding, not from the frame: a `settingsChanged` patch carries only
                 // what moved, so the cache has to mirror the merged result rather than the delta.
                 settingsCache.save(store.state.settings.values)
+                if (frame is ServerFrame.SettingsBootstrap) syncTimeZone()
             }
             ServerFrame.Unauthorized ->
                 onAuthLost()
@@ -2867,6 +2935,7 @@ class ChatViewModel(
         // particular must not carry across users. Both this and the deliberate sign-out clear
         // it, because either can be followed by someone else signing in on this phone.
         settingsCache.clear()
+        resetTimeZoneSync()
         // Previews carry the same hazard the settings cache does, plus two more: the metadata
         // is the previous account's reading history, and the `asked` set would suppress
         // re-resolution against a DIFFERENT instance — whose signed proxy tokens wouldn't verify
