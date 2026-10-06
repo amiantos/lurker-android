@@ -1993,7 +1993,9 @@ class ChatViewModel(
      * than optimistically here: one path for "a setting changed", whatever caused it, and a
      * rejected write simply never lands instead of needing to be rolled back.
      *
-     * Returns the server's own error message on failure, null on success.
+     * Returns the server's own error message on failure, null on success. Also null, with nothing
+     * applied, when the session that asked ended while the write was out: its screen is gone, and its
+     * reply must not reach the next session.
      */
     suspend fun updateSettings(changes: Map<String, SettingValue>): String? = client.updateSettings(changes)
 
