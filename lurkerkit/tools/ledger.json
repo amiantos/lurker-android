@@ -1,5 +1,5 @@
 {
-  "pin": "5a75f27dd03eb56cb42ec3b0b31dbc7b14190d18",
+  "pin": "caaeab24723d3cb4413ce44c95c2a8a6c38072fd",
   "tranches": [
     {
       "id": "T1",
@@ -163,7 +163,7 @@
     {
       "id": "S3",
       "title": "Hardware keyboard (lurker-android#63)",
-      "about": "TabCompletion, the web composer's in-place Tab completion, ported from lurker-ios branch `hardware-keyboard` (be48c46) ahead of its merge. ⚠ The pin stays at 5a75f27 until that lands on lurker-ios main; move it then.",
+      "about": "TabCompletion, the web composer's in-place Tab completion (lurker-ios#225, pinned at its merge caaeab2).",
       "files": [
         "Model/TabCompletion.swift"
       ]
