@@ -7,7 +7,20 @@ import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.session.ChatViewModel
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import net.amiantos.lurkerkit.session.OAuthClients
+import net.amiantos.lurkerkit.session.PersistedSession
+import net.amiantos.lurkerkit.session.SessionStore
+import net.amiantos.lurkerkit.store.SettingsCache
 import java.util.TimeZone
+import java.util.concurrent.Executors
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -119,5 +132,47 @@ class TimeZoneSyncTests {
         val (model, written) = makeModel()
         model.syncTimeZone("")
         assertEquals(emptyList(), written())
+    }
+
+    // Port-only: the real write, not the seam — through the client, to a server that answers, and
+    // back. Every case above stops at `timeZoneWriteSeam`, so none of them runs the write's own
+    // completion (two reviews asked for it).
+
+    @Test
+    fun testARealWriteGoesOutAndItsAnswerFreesTheNext() = runBlocking {
+        val server = Answering(200, """{"values":{}}""")
+        val main = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+        val scope = CoroutineScope(main + SupervisorJob())
+        try {
+            val sessions = SessionStore(InMemorySecureStorage())
+            sessions.save(PersistedSession(server = "https://lurker.test", token = "live"))
+            val model = withContext(main) {
+                ChatViewModel(
+                    scope = scope,
+                    sessions = sessions,
+                    settingsCache = SettingsCache(InMemoryDefaultsStorage()),
+                    oauthClients = OAuthClients(InMemoryDefaultsStorage()),
+                    formatExpiry = { it.toString() },
+                    httpClient = server.http,
+                    startsInForeground = false,
+                )
+            }
+            val patches = { server.requests.count { it.startsWith("PATCH /api/settings ") } }
+            withContext(main) { model.handle(bootstrap(elsewhere)) }
+            withTimeout(5_000) { while (patches() < 1) delay(20) }
+            assertEquals("PATCH /api/settings Bearer live", server.requests.first { it.startsWith("PATCH") })
+            // Once it has landed, a bootstrap still holding the old zone writes again: the write's
+            // completion freed the slot. A completion that never ran would leave it owed, unsent.
+            withTimeout(5_000) {
+                while (true) {
+                    withContext(main) { model.handle(bootstrap(elsewhere)) }
+                    if (patches() >= 2) break
+                    delay(50)
+                }
+            }
+        } finally {
+            scope.cancel()
+            main.close()
+        }
     }
 }
