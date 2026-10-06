@@ -169,6 +169,13 @@ Client sweep L08 L13 (lurker-ios#221): the phone writes its time zone on each se
 |---|---:|---|---|
 | `Client/ImageAnimation.swift` | 33 | ported | UTIs → MIME types (PORTING.md), as `ImageShrink`: gif/png/webp/heic-sequence. `public.avis` has no MIME (a still and an AVIF sequence are both `image/avif`, and allowing that would let a gain-map AVIF play), so it is left out; `ImageAnimationTests.animationsPlay` checks the other four. Unused on Android: `ImageDecoder` returns an `AnimatedImageDrawable` only for a picture that animates. |
 
+### S3 — Hardware keyboard (lurker-android#63) (0/0)
+
+TabCompletion, the web composer's in-place Tab completion, ported from lurker-ios branch `hardware-keyboard` (be48c46) ahead of its merge. ⚠ The pin stays at 5a75f27 until that lands on lurker-ios main; move it then.
+
+| Swift file | Lines | Status | Notes |
+|---|---:|---|---|
+
 ## Tests
 
 Matched by method name. *Waiting* tests need a type that is not ported yet; *dropped* ones have no meaning on this platform. Both are named, with the reason, in `ledger.json`.

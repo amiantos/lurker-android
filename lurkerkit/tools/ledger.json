@@ -159,6 +159,14 @@
       "files": [
         "Client/ImageAnimation.swift"
       ]
+    },
+    {
+      "id": "S3",
+      "title": "Hardware keyboard (lurker-android#63)",
+      "about": "TabCompletion, the web composer's in-place Tab completion, ported from lurker-ios branch `hardware-keyboard` (be48c46) ahead of its merge. ⚠ The pin stays at 5a75f27 until that lands on lurker-ios main; move it then.",
+      "files": [
+        "Model/TabCompletion.swift"
+      ]
     }
   ],
   "notes": {
@@ -228,7 +236,8 @@
     "Model/FeedPaging.swift": "A mutable class (case 3), one owner (the app's `FeedPager`); `items` is replaced, never edited in place, so a snapshot holding an earlier list stays valid. `Fetch`/`Landing` constructors internal. Differentially checked against the Swift over 24,400 random ops: identical. `remove` pages only inside `prefetchWindow` and spends no hop (moved into LurkerKit from the app's old `FeedPager`); the app still keeps a removed row out of a reload already in flight, which LurkerKit lacks.",
     "Client/JSONTextRepair.swift": "Not ported: a workaround for Foundation's `JSONSerialization` (it refuses a lone surrogate escape and strips a leading U+FEFF), and kotlinx does neither (PORTING.md, JSON). The one visible difference: a lone surrogate the server sent reads as U+FFFD on iOS and as the lone unit here.",
     "Model/Speakers.swift": "Entries keep each nick as last spelled, for nick completion (`recent`, newest first, case-folded tiebreak).",
-    "Client/ImageAnimation.swift": "UTIs → MIME types (PORTING.md), as `ImageShrink`: gif/png/webp/heic-sequence. `public.avis` has no MIME (a still and an AVIF sequence are both `image/avif`, and allowing that would let a gain-map AVIF play), so it is left out; `ImageAnimationTests.animationsPlay` checks the other four. Unused on Android: `ImageDecoder` returns an `AnimatedImageDrawable` only for a picture that animates."
+    "Client/ImageAnimation.swift": "UTIs → MIME types (PORTING.md), as `ImageShrink`: gif/png/webp/heic-sequence. `public.avis` has no MIME (a still and an AVIF sequence are both `image/avif`, and allowing that would let a gain-map AVIF play), so it is left out; `ImageAnimationTests.animationsPlay` checks the other four. Unused on Android: `ImageDecoder` returns an `AnimatedImageDrawable` only for a picture that animates.",
+    "Model/TabCompletion.swift": "A mutable class (case 3): `cycle` moves the session and returns the edit. The token and its surroundings are `substring`s; the cuts fall only at whitespace or the text's ends, so no surrogate pair splits."
   },
   "testNotes": {
     "NotificationTapTests.swift": {
