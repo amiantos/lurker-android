@@ -10,6 +10,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.isActive
@@ -30,6 +33,9 @@ import net.amiantos.lurkerkit.client.UploadServerProgress
 import net.amiantos.lurkerkit.client.Uploads
 import net.amiantos.lurkerkit.client.VerbReply
 import net.amiantos.lurkerkit.commands.CommandEffect
+import net.amiantos.lurkerkit.push.DeviceKeys
+import net.amiantos.lurkerkit.push.PushRoute
+import net.amiantos.lurkerkit.push.RelayPush
 import net.amiantos.lurkerkit.commands.CommandParser
 import net.amiantos.lurkerkit.commands.ParsedInput
 import net.amiantos.lurkerkit.model.Buffer
@@ -516,12 +522,14 @@ class ChatViewModel(
             sessions.addPendingRevoke(PersistedSession(server = ending.server, token = ending.token), now)
             revokingNow.add(ending.token)
         }
-        client.logout(deviceToken = deviceToken, drafts = drafts) { outcome ->
+        client.logout(deviceToken = deviceToken, relayEndpoint = relayEndpoint, drafts = drafts) { outcome ->
             if (ending != null) revokeFinished(ending, outcome)
         }
         deviceToken = null
+        relayEndpoint = null
         // The next sign-in may be against a different server, whose answer differs.
         apnsSupported = null
+        _serverHasNoAppPush.value = false
         sessions.clear()
         // Port-only: an attempt a killed process left out in the browser goes too, so a late
         // redirect from its tab can't sign this phone back in after a deliberate sign-out.
@@ -606,6 +614,69 @@ class ChatViewModel(
         val supported = transports.contains("fcm")
         apnsSupported = supported
         return supported
+    }
+
+    /**
+     * How this install gets push from this server (lurker-dev/RELAY_PLAN.md §6.2): directly, through
+     * push.lurker.chat, or not at all. `null` means we couldn't ask, as for [serverSupportsAPNs].
+     *
+     * Only a direct answer is cached. The relay is a switch the server's admin can flip while the app
+     * runs, so a server without FCM is asked again on each activation — one small GET, on self-hosted
+     * servers only, so turning the relay on reaches phones without a restart.
+     *
+     * [allowAnyHttpsRelay] is for debug builds only: see [RelayPush.route].
+     */
+    suspend fun pushRoute(allowAnyHttpsRelay: Boolean): PushRoute? {
+        if (apnsSupported == true) return PushRoute.Native
+        val config = client.pushConfig() ?: return null
+        val route = RelayPush.route(config, allowAnyHttpsRelay)
+        if (route == PushRoute.Native) apnsSupported = true
+        _serverHasNoAppPush.value = route == PushRoute.None
+        return route
+    }
+
+    /**
+     * True once this server has answered that it can't push to the app — no FCM key of its own, and
+     * its admin hasn't turned on push.lurker.chat — so Settings can say so rather than leave a user
+     * wondering why notifications never come. Reset at sign-out.
+     */
+    val serverHasNoAppPush: StateFlow<Boolean> get() = _serverHasNoAppPush.asStateFlow()
+    private val _serverHasNoAppPush = MutableStateFlow(false)
+
+    /** The push.lurker.chat endpoint this session filed, so sign-out can take it back off. */
+    private var relayEndpoint: String? = null
+
+    /** How filing a relay endpoint went. */
+    enum class RelayRegistration {
+        Registered,
+
+        /** `403`: the admin turned the relay off since the config was read. No push, not a failure. */
+        RelayOff,
+
+        /** No answer, or one we don't take as either of the above. */
+        Failed,
+    }
+
+    /**
+     * File [endpoint] — built by [PushRoute.Relay.endpoint] from this install's FCM token — as a Web
+     * Push subscription with this install's [keys]. Idempotent: the server upserts, and moves the
+     * endpoint to this account if another one on this phone held it.
+     */
+    suspend fun registerRelaySubscription(endpoint: String, keys: DeviceKeys): RelayRegistration {
+        if (session != SessionState.LoggedIn) return RelayRegistration.Failed
+        val code = client.registerRelaySubscription(endpoint, keys.p256dh, keys.auth) ?: return RelayRegistration.Failed
+        return when {
+            code in 200..<300 -> {
+                relayEndpoint = endpoint
+                _serverHasNoAppPush.value = false
+                RelayRegistration.Registered
+            }
+            code == 403 -> {
+                _serverHasNoAppPush.value = true
+                RelayRegistration.RelayOff
+            }
+            else -> RelayRegistration.Failed
+        }
     }
 
     /**

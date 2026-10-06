@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit.client
 
+import net.amiantos.lurkerkit.push.PushConfig
 import java.io.File
 import java.io.IOException
 import java.net.UnknownServiceException
@@ -1719,7 +1720,15 @@ internal class LurkerClient(
      * An older server (pre-lurker#490) has no `transports` key and correctly reads as `[]` —
      * it answered, and it has no native push.
      */
-    suspend fun pushTransports(): List<String>? {
+    suspend fun pushTransports(): List<String>? = pushConfig()?.transports
+
+    /**
+     * The whole of `/api/push/config`: the transports (see [pushTransports]), the server's VAPID
+     * public key, and — only while its admin has opted in — push.lurker.chat's origin as `relay`
+     * (lurker-dev/RELAY_PLAN.md §5a). A server older than 2.4.0 has no `relay`, which reads as off.
+     * `null` means we couldn't ask, as for [pushTransports].
+     */
+    suspend fun pushConfig(): PushConfig? {
         val token = token ?: return null
         val url = (baseURL + "/api/push/config").toHttpUrlOrNull() ?: return null
         val request = Request.Builder().url(url).header("Authorization", "Bearer $token").build()
@@ -1730,7 +1739,48 @@ internal class LurkerClient(
         }
         if (code !in 200..<300) return null
         val body = FrameParser.jsonObject(data) ?: return null
-        return body.strings("transports") ?: emptyList()
+        return PushConfig(
+            publicKey = body.stringOrNull("publicKey"),
+            transports = body.strings("transports") ?: emptyList(),
+            relay = body.stringOrNull("relay"),
+        )
+    }
+
+    /**
+     * File a push.lurker.chat endpoint as a Web Push subscription (`POST /api/push/subscriptions`,
+     * lurker-dev/RELAY_PLAN.md §6.2) with this install's keys. The status the server answered, or
+     * null when it didn't answer at all: a `403` means the admin turned the relay off since the
+     * config was read, which the caller treats as "no push", not as a failure.
+     */
+    suspend fun registerRelaySubscription(endpoint: String, p256dh: String, auth: String): Int? {
+        val sessionToken = this.token ?: return null
+        val url = (baseURL + "/api/push/subscriptions").toHttpUrlOrNull() ?: return null
+        val request = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer $sessionToken")
+            .header("Content-Type", "application/json")
+            .post(
+                jsonBody(
+                    buildJsonObject {
+                        put("endpoint", endpoint)
+                        put(
+                            "keys",
+                            buildJsonObject {
+                                put("p256dh", p256dh)
+                                put("auth", auth)
+                            },
+                        )
+                        put("userAgent", "Lurker Android")
+                    },
+                ),
+            )
+            .build()
+        val (code, _) = try {
+            session.await(request)
+        } catch (_: IOException) {
+            return null
+        }
+        return code
     }
 
     /**
@@ -2100,6 +2150,7 @@ internal class LurkerClient(
      */
     fun logout(
         deviceToken: String? = null,
+        relayEndpoint: String? = null,
         drafts: List<KeyedDraft> = emptyList(),
         onRevoked: ((RevokeOutcome) -> Unit)? = null,
     ) {
@@ -2118,6 +2169,9 @@ internal class LurkerClient(
             }
             if (deviceToken != null) {
                 deregisterDevice(session = session, baseURL = base, sessionToken = revokeToken, deviceToken = deviceToken)
+            }
+            if (relayEndpoint != null) {
+                deregisterRelaySubscription(session = session, baseURL = base, sessionToken = revokeToken, endpoint = relayEndpoint)
             }
             val outcome = revoke(session = session, baseURL = base, token = revokeToken)
             onRevoked?.invoke(outcome)
@@ -2619,6 +2673,30 @@ internal class LurkerClient(
             return buildJsonObject {
                 put("messageId", reply.messageId)
                 put("addressed", reply.addressed)
+            }
+        }
+
+        /**
+         * Drop this device's push.lurker.chat subscription (`DELETE /api/push/subscriptions`) — the
+         * relay's [deregisterDevice], and called at the same point for the same reason: before the
+         * revoke, with the session it is about to destroy.
+         */
+        suspend fun deregisterRelaySubscription(
+            session: OkHttpClient,
+            baseURL: String,
+            sessionToken: String,
+            endpoint: String,
+        ) {
+            val url = (baseURL + "/api/push/subscriptions").toHttpUrlOrNull() ?: return
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer $sessionToken")
+                .header("Content-Type", "application/json")
+                .delete(jsonBody(buildJsonObject { put("endpoint", endpoint) }))
+                .build()
+            try {
+                session.await(request)
+            } catch (_: IOException) {
             }
         }
 
