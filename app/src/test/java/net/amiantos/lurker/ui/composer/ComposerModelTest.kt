@@ -23,6 +23,7 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.time.Instant
+import net.amiantos.lurkerkit.model.PrefixMode
 
 /** The composer's decisions — lurker-ios's `ComposerBar` and the composer half of `ChatViewController`. */
 class ComposerModelTest {
@@ -259,6 +260,8 @@ class ComposerModelTest {
         assertEquals(listOf("o"), ComposerChrome.of(inputs).ownModes)
         assertTrue(ComposerChrome.Inputs.same(inputs, ComposerChrome.Inputs("amiantos", members, null, null, away)))
         assertFalse(ComposerChrome.Inputs.same(inputs, ComposerChrome.Inputs("amiantos", members.toList(), null, null, away)))
+        // The network's PREFIX says what our modes look like, and can land after the nicklist (lurker-ios#191).
+        assertFalse(ComposerChrome.Inputs.same(inputs, ComposerChrome.Inputs("amiantos", members, listOf(PrefixMode("o", "!")), null, away)))
     }
 
     @Test

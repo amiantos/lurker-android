@@ -110,10 +110,10 @@ class MessageListLayoutTest {
         val prefixes = mapOf("alice" to MemberPrefix.Mark("@", MemberPrefix.Tier.Op))
         val plain = plans(rows(line("alice", 0)), prefixes)[0].header()!!
         assertEquals("@alice", plain.nick)
-        assertEquals("@", plain.modePrefix)
+        assertEquals("@", plain.modeMark?.glyph)
         val relayed = plans(rows(line("alice", 0, relayBot = true)), prefixes)[0].header()!!
         assertEquals("alice", relayed.nick)
-        assertEquals("", relayed.modePrefix)
+        assertNull(relayed.modeMark)
         assertEquals("github", relayed.relaySource)
     }
 

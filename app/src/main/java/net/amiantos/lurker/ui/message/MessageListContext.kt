@@ -175,9 +175,6 @@ data class CompactHeader(
      */
     val relaySource: String? = null,
 ) {
-    /** The glyph alone, "" when there's no mark. */
-    val modePrefix: String get() = modeMark?.glyph ?: ""
-
     /**
      * The name as TalkBack hears it. Relay provenance needs a connective it doesn't need in print,
      * where colour separates the two words: read out bare, "alice github" is two names.

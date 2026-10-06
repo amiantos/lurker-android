@@ -16,6 +16,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import net.amiantos.lurkerkit.model.MemberPrefix
 import net.amiantos.lurkerkit.model.PrefixMode
+import net.amiantos.lurkerkit.model.ModeSpec
 
 /** The member list's rules — lurker-ios's `MemberListViewController`. */
 class MemberListModelTest {
@@ -63,7 +64,7 @@ class MemberListModelTest {
         // folded nick, and two equal keys crash it.
         val rows = MemberListModel.rows(listOf(Member("Bob", modes = listOf("o")), Member("alice"), Member("bob", away = true)), prefix = null)
         assertEquals(listOf("Bob", "alice"), rows.map { it.nick })
-        assertEquals(MemberRow("Bob", "@", tier = MemberPrefix.Tier.Op, away = false), rows.first())
+        assertEquals(MemberRow("Bob", MemberPrefix.Mark("@", MemberPrefix.Tier.Op), away = false), rows.first())
         assertEquals(rows.size, rows.map { it.id }.toSet().size)
     }
 
@@ -110,12 +111,12 @@ class MemberListModelTest {
 
     @Test
     fun talkBackHearsTheRankInWordsAndAway() {
-        assertEquals("alice, operator", MemberListModel.accessibilityLabel(MemberRow("alice", "@", tier = MemberPrefix.Tier.Op, away = false)))
-        assertEquals("bob, half-operator, away", MemberListModel.accessibilityLabel(MemberRow("bob", "%", tier = MemberPrefix.Tier.Halfop, away = true)))
-        assertEquals("carol", MemberListModel.accessibilityLabel(MemberRow("carol", "", away = false)))
-        assertEquals("dan, owner", MemberListModel.accessibilityLabel(MemberRow("dan", "~", tier = MemberPrefix.Tier.Owner, away = false)))
-        assertEquals("erin, admin", MemberListModel.accessibilityLabel(MemberRow("erin", "&", tier = MemberPrefix.Tier.Admin, away = false)))
-        assertEquals("fay, voiced", MemberListModel.accessibilityLabel(MemberRow("fay", "+", tier = MemberPrefix.Tier.Voice, away = false)))
+        assertEquals("alice, operator", MemberListModel.accessibilityLabel(MemberRow("alice", MemberPrefix.Mark("@", MemberPrefix.Tier.Op), away = false)))
+        assertEquals("bob, half-operator, away", MemberListModel.accessibilityLabel(MemberRow("bob", MemberPrefix.Mark("%", MemberPrefix.Tier.Halfop), away = true)))
+        assertEquals("carol", MemberListModel.accessibilityLabel(MemberRow("carol", null, away = false)))
+        assertEquals("dan, owner", MemberListModel.accessibilityLabel(MemberRow("dan", MemberPrefix.Mark("~", MemberPrefix.Tier.Owner), away = false)))
+        assertEquals("erin, admin", MemberListModel.accessibilityLabel(MemberRow("erin", MemberPrefix.Mark("&", MemberPrefix.Tier.Admin), away = false)))
+        assertEquals("fay, voiced", MemberListModel.accessibilityLabel(MemberRow("fay", MemberPrefix.Mark("+", MemberPrefix.Tier.Voice), away = false)))
     }
 
     @Test
@@ -149,5 +150,9 @@ class MemberListModelTest {
         assertFalse(MemberListInputs.same(a, MemberListInputs.of(base.copy(ignores = IgnoreSet(global = emptyList())), key)))
         // So does our own nick.
         assertFalse(MemberListInputs.same(a, MemberListInputs.of(state(members, nick = "me_"), key)))
+        // And the network's PREFIX, whose ISUPPORT can land after the nicklist (lurker-ios#191).
+        val spec = ModeSpec(list = "b", always = "k", onSet = "l", flags = "nt", prefix = listOf(PrefixMode("o", "!")), maxModes = null, topicLen = null)
+        val specced = base.copy(networks = mapOf(1 to Network(id = 1, name = "Libera", nick = "me", modeSpec = spec)))
+        assertFalse(MemberListInputs.same(a, MemberListInputs.of(specced, key)))
     }
 }

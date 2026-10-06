@@ -64,12 +64,19 @@ class MemberListInputs private constructor(
 /** One member as the list draws it: the rank glyph apart from the nick, so only the glyph is coloured. */
 data class MemberRow(
     val nick: String,
-    /** `MemberPrefix.of` — "" for a member holding no mode. */
-    val prefix: String,
-    /** The glyph's colour tier, by its mode letter's role (lurker-ios#191); null with no glyph. */
-    val tier: MemberPrefix.Tier? = null,
+    /**
+     * `MemberPrefix.mark`: the glyph and its colour tier, by its mode letter's role (lurker-ios#191),
+     * as one value so they can't disagree — null for a member holding no mode.
+     */
+    val mark: MemberPrefix.Mark?,
     val away: Boolean,
 ) {
+    /** The glyph the row draws, "" with no mark. */
+    val prefix: String get() = mark?.glyph.orEmpty()
+
+    /** The glyph's colour tier, null with no mark. */
+    val tier: MemberPrefix.Tier? get() = mark?.tier
+
     /** The list's key: a nick appears once per channel, and folding keeps a case-flip from re-keying it. */
     val id: String get() = nick.lowercase()
 }
@@ -100,8 +107,7 @@ object MemberListModel {
     fun rows(visible: List<Member>, prefix: List<PrefixMode>?): List<MemberRow> =
         MemberPrefix.sorted(visible.distinctBy { it.nick.lowercase() }, prefix)
             .map { member ->
-                val mark = MemberPrefix.mark(member.modes, prefix)
-                MemberRow(nick = member.nick, prefix = mark?.glyph.orEmpty(), tier = mark?.tier, away = member.away)
+                MemberRow(nick = member.nick, mark = MemberPrefix.mark(member.modes, prefix), away = member.away)
             }
 
     fun title(count: Int): String = if (count == 0) "Members" else "Members ($count)"

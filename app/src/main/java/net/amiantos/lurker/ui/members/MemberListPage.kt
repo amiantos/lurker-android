@@ -275,12 +275,12 @@ private fun MemberListRow(
 // MARK: - Previews
 
 private val previewRows = listOf(
-    MemberRow("ChanServ", "@", tier = MemberPrefix.Tier.Op, away = false),
-    MemberRow("alice", "@", away = false),
-    MemberRow("bob", "%", away = true),
-    MemberRow("carol", "+", away = false),
-    MemberRow("dave", "", away = false),
-    MemberRow("erin", "", away = true),
+    MemberRow("ChanServ", MemberPrefix.Mark("@", MemberPrefix.Tier.Op), away = false),
+    MemberRow("alice", MemberPrefix.Mark("@", MemberPrefix.Tier.Op), away = false),
+    MemberRow("bob", MemberPrefix.Mark("%", MemberPrefix.Tier.Halfop), away = true),
+    MemberRow("carol", MemberPrefix.Mark("+", MemberPrefix.Tier.Voice), away = false),
+    MemberRow("dave", null, away = false),
+    MemberRow("erin", null, away = true),
 )
 
 @Composable

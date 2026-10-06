@@ -177,7 +177,7 @@
     "Session/OAuthClients.swift": "`UserDefaults` → the kit’s `DefaultsStorage` (shared with `SettingsCache`); the client ids travel as a `JsonObject` of strings, read all-or-nothing. `key` keeps its value and must survive sign-out.",
     "Store/SettingsCache.swift": "`UserDefaults` → `DefaultsStorage` (`dictionary`, `set`, `removeObject`, mirroring the three calls), implemented by `:app`; no default storage. Values travel as `JsonObject`.",
     "Client/Uploads.swift": "`UploadProgressDelegate` keeps its name and whole-percent coalescing; `UploadProgressBody` is the counting OkHttp `RequestBody` (a `ForwardingSink`) that feeds it. `upload` streams the already-assembled multipart file, as the Swift does. `assemble` deletes its partial file on failure, which LurkerKit leaves to iOS. `UploadLimits.maxUploadBytes` is `Long` (a byte count).",
-    "Model/Typing.swift": "`OutgoingTyping` is a mutable class (PORTING.md, structs that mutate, case 3). Composing is judged on the trimmed draft and a `//`-escaped line counts as a message (lurker-ios#202).",
+    "Model/Typing.swift": "`OutgoingTyping` is a mutable class (PORTING.md, structs that mutate, case 3). Composing is judged on the draft's first character, as the send decides it (lurker-ios#210, reversing #202's trim), and a `//`-escaped line counts as a message.",
     "Session/NewestAnswer.swift": "A mutable class (case 3).",
     "Model/UploadContentTypes.swift": "`[UTType]` → MIME patterns. Adds `application/json`, which `text/*` cannot reach and `.text` does by conformance.",
     "Model/ServerAddress.swift": "Parses by hand to match `URLComponents`, then also requires that OkHttp can load the address — stricter than iOS at a few edges, pinned by a port-only test.",

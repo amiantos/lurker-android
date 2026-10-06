@@ -135,16 +135,18 @@ internal class ConversationProjector(private val key: BufferKey, private val kin
         val showsPrefix = state.settings.bool("look.nick.show_mode_prefix", default = false)
         // The network's PREFIX (lurker-ios#191) — its ISUPPORT can land after the nicklist.
         val prefix = key.networkId?.let { state.networks[it]?.modeSpec?.prefix }
-        if (lastShowsPrefix == null || members !== lastMembers || ownNick != lastOwnNick || showsPrefix != lastShowsPrefix ||
-            prefix != lastPrefix
-        ) {
-            lastMembers = members
-            lastOwnNick = ownNick
-            lastShowsPrefix = showsPrefix
-            lastPrefix = prefix
+        val membersMoved = members !== lastMembers || ownNick != lastOwnNick
+        if (lastShowsPrefix == null || membersMoved || showsPrefix != lastShowsPrefix || prefix != lastPrefix) {
             modePrefixes = ConversationModel.modePrefixes(kind, members.orEmpty(), showsPrefix, prefix)
+        }
+        // Not on a PREFIX or setting change: who to colour doesn't depend on either.
+        if (lastShowsPrefix == null || membersMoved) {
             highlighterNicks = ConversationModel.highlighterNicks(kind, key, members.orEmpty(), ownNick)
         }
+        lastMembers = members
+        lastOwnNick = ownNick
+        lastShowsPrefix = showsPrefix
+        lastPrefix = prefix
         return ConversationInputs(
             key = key,
             kind = kind,

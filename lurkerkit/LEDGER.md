@@ -37,7 +37,7 @@ Files with no dependency on any other LurkerKit type.
 | `Model/ServerAddress.swift` | 78 | ported | Parses by hand to match `URLComponents`, then also requires that OkHttp can load the address — stricter than iOS at a few edges, pinned by a port-only test. |
 | `Model/Settings.swift` | 243 | ported | `SettingValue.Int` is 32-bit; a wire number past that is skipped rather than wrapped. |
 | `Model/Speakers.swift` | 122 | ported | Entries keep each nick as last spelled, for nick completion (`recent`, newest first, case-folded tiebreak). |
-| `Model/Typing.swift` | 179 | ported | `OutgoingTyping` is a mutable class (PORTING.md, structs that mutate, case 3). Composing is judged on the trimmed draft and a `//`-escaped line counts as a message (lurker-ios#202). |
+| `Model/Typing.swift` | 179 | ported | `OutgoingTyping` is a mutable class (PORTING.md, structs that mutate, case 3). Composing is judged on the draft's first character, as the send decides it (lurker-ios#210, reversing #202's trim), and a `//`-escaped line counts as a message. |
 | `Model/UploadContentTypes.swift` | 36 | ported | `[UTType]` → MIME patterns. Adds `application/json`, which `text/*` cannot reach and `.text` does by conformance. |
 | `Model/UploadKind.swift` | 58 | ported |  |
 | `Rendering/IRCFormatting.swift` | 269 | ported | `rawIndex` is tested from `RelayEnvelopeTests` (T3); checked against the Swift meanwhile. |
