@@ -378,6 +378,21 @@ class MessageTextTest {
     }
 
     @Test
+    fun `a reason of nothing but codes has no parentheses`() {
+        assertEquals("alice left", activity(message("\u0002\u0002\u000f", type = EventType.Part)))
+    }
+
+    @Test
+    fun `a spoiler in a reason opens`() {
+        val reason = message("\u000301,01secret\u0003", type = EventType.Quit)
+        val hidden = MessageText.renderCompactBody(reason, style, onToggleSpoiler = { })
+        val open = MessageText.renderCompactBody(reason, style, revealed = setOf(0), onToggleSpoiler = { })
+        val at = hidden.indexOf("secret")
+        assertEquals(hidden.styleAt(at).color, hidden.styleAt(at).background)
+        assertTrue(open.styleAt(open.indexOf("secret")).color != open.styleAt(open.indexOf("secret")).background)
+    }
+
+    @Test
     fun `activity lines narrate, starting flush`() {
         assertEquals("alice joined", activity(message(null, type = EventType.Join)))
         assertEquals("alice left (bye now)", activity(message("bye now", type = EventType.Part)))

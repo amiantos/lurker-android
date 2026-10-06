@@ -216,7 +216,7 @@ object MessageText {
             // No arrow column. "alice joined" already says which direction it went, and the
             // narration starts flush with the nicks above it, so arrows would be an extra column of
             // punctuation buying nothing.
-            return finish(activity(message, style, settings), style, flushFirstLine = true, onToggleSpoiler = onToggleSpoiler)
+            return finish(activity(message, style, settings, revealed), style, flushFirstLine = true, onToggleSpoiler = onToggleSpoiler)
         }
         // `fg`, explicitly: `body` stamps a foreground on every run, so this fallback IS the log's
         // primary text colour.
@@ -587,13 +587,14 @@ object MessageText {
     /**
      * A part, quit or kick reason in parentheses, or nothing when there isn't one. Through [body], as a
      * topic is (sweep L06): a reason carries mIRC colours and links like any message, and as plain text
-     * its colour digits leaked ("(04Leaving") and its URLs couldn't be tapped.
+     * its colour digits leaked ("(04Leaving") and its URLs couldn't be tapped. Judged empty on its
+     * visible text: a reason of nothing but formatting codes has no words to put in the parentheses.
      */
-    private fun appendReason(line: StyledBody, message: Message, style: MessageTextStyle) {
+    private fun appendReason(line: StyledBody, message: Message, style: MessageTextStyle, revealed: Set<Int>) {
         val text = message.text
-        if (text == null || text.trimmingWhitespacesAndNewlines().isEmpty()) return
+        if (text == null || IRCFormatting.strip(text).trimmingWhitespacesAndNewlines().isEmpty()) return
         line.append(" (", muted(style))
-        line.append(body(message, style, fallback = style.colors.fgMuted))
+        line.append(body(message, style, fallback = style.colors.fgMuted, revealed = revealed))
         line.append(")", muted(style))
     }
 
@@ -637,7 +638,8 @@ object MessageText {
      * and any nicks it names are coloured; the connective words are muted, so the line reads as
      * narration about the room rather than something someone said in it.
      */
-    private fun activity(message: Message, style: MessageTextStyle, settings: Settings): StyledBody {
+    /** [revealed] reaches the one body a line can carry — a topic or a reason — so a spoiler in it opens. */
+    private fun activity(message: Message, style: MessageTextStyle, settings: Settings, revealed: Set<Int>): StyledBody {
         val line = StyledBody()
         val actor = { nickToken(line, message.nick, style, isSelf = message.isSelf) }
         // Both off by default, matching the registry. The account sits between the nick and the
@@ -661,12 +663,12 @@ object MessageText {
             EventType.Part -> {
                 actor()
                 line.append("$host left", muted)
-                appendReason(line, message, style)
+                appendReason(line, message, style, revealed)
             }
             EventType.Quit -> {
                 actor()
                 line.append("$host quit", muted)
-                appendReason(line, message, style)
+                appendReason(line, message, style, revealed)
             }
             EventType.Nick -> {
                 actor()
@@ -678,7 +680,7 @@ object MessageText {
                 nickToken(line, message.kicked, style)
                 line.append(" was kicked by ", muted)
                 actor()
-                appendReason(line, message, style)
+                appendReason(line, message, style, revealed)
             }
             EventType.Mode -> {
                 actor()
@@ -706,7 +708,7 @@ object MessageText {
                     line.append(": ", muted)
                     // The same muted as the ": " before it — two greys mid-sentence read as a seam,
                     // and the topic is a continuation of the narration, not a quote.
-                    line.append(body(message, style, fallback = style.colors.fgMuted))
+                    line.append(body(message, style, fallback = style.colors.fgMuted, revealed = revealed))
                 }
             }
             EventType.Invite -> {
