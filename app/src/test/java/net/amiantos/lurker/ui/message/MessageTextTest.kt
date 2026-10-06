@@ -351,6 +351,8 @@ class MessageTextTest {
         assertEquals(colors.memberOp, name.styleAt(0).color)
         assertEquals(FontWeight.Bold, name.styleAt(0).fontWeight)
         assertEquals(Color.Red, name.styleAt(1).color)
+        // The name is the body's weight, as on the web and iOS; only the glyph is bold.
+        assertNull(name.styleAt(1).fontWeight)
     }
 
     @Test
