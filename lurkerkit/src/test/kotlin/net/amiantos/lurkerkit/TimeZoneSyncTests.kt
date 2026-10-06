@@ -7,7 +7,7 @@ import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.session.ChatViewModel
-import java.time.ZoneId
+import java.util.TimeZone
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -27,7 +27,7 @@ class TimeZoneSyncTests {
         return model to { written.toList() }
     }
 
-    private val here: String get() = ZoneId.systemDefault().id
+    private val here: String get() = TimeZone.getDefault().id
 
     /** A zone no test machine is in, so it always differs from [here]. */
     private val elsewhere: String get() = if (here == "Pacific/Chatham") "Pacific/Kiritimati" else "Pacific/Chatham"

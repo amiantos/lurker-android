@@ -85,7 +85,7 @@ import okhttp3.OkHttpClient
 import java.io.File
 import java.time.Duration
 import java.time.Instant
-import java.time.ZoneId
+import java.util.TimeZone
 import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.math.max
@@ -675,9 +675,11 @@ class ChatViewModel(
      * corrects it on its next foreground. Never in answer to a `settings` frame: another device's
      * write isn't answered, so two devices in different zones can't trade it back and forth.
      *
-     * Port note: `ZoneId.systemDefault()` where LurkerKit reads `TimeZone.autoupdatingCurrent` (not
-     * `current`, a snapshot that can outlive a zone change). Android resets the process's default
-     * zone when the system's changes, so it is already the live one.
+     * Port note: `java.util.TimeZone.getDefault().id` where LurkerKit reads
+     * `TimeZone.autoupdatingCurrent` (not `current`, a snapshot that can outlive a zone change). Android
+     * resets the process's default zone when the system's changes, so it is already the live one. Not
+     * `ZoneId.systemDefault()`: that can throw for an ID java.time doesn't know, and turns a legacy
+     * short ID (`EST`) into an offset (`-05:00`) rather than the IANA name the server stores.
      *
      * ⚠ One write out at a time, and a bootstrap that arrives meanwhile is answered when it lands,
      * against the zone and the stored value as they are THEN. Two writes out together could land in
@@ -685,7 +687,7 @@ class ChatViewModel(
      * write out failed. Only a skipped bootstrap asks again, so a zone the server refuses is asked
      * once per bootstrap, never in a loop.
      */
-    internal fun syncTimeZone(detected: String = ZoneId.systemDefault().id) {
+    internal fun syncTimeZone(detected: String = TimeZone.getDefault().id) {
         if (timeZoneWrite != null) {
             timeZoneResyncOwed = true
             return
