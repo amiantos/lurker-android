@@ -364,6 +364,39 @@ class MessageTextTest {
 
     private fun activity(message: Message) = MessageText.renderCompactBody(message, style).text
 
+    // Sweep L06: a reason is formatted like any message — colour digits never leak, links open.
+    @Test
+    fun `a quit reason's colours are colours and its link opens`() {
+        val line = MessageText.renderCompactBody(
+            message("\u000304Leaving\u0003 https://x.example", type = EventType.Quit), style,
+        )
+        assertEquals("alice quit (Leaving https://x.example)", line.text)
+        assertEquals(colors.mirc[4], line.styleAt(line.indexOf("Leaving")).color)
+        assertEquals(listOf("https://x.example" to "https://x.example"), line.urls())
+        // The rest of the reason is in the narration's grey, as the topic's text is.
+        assertEquals(colors.fgMuted, line.styleAt(line.indexOf(" https")).color)
+    }
+
+    @Test
+    fun `a reason or topic of nothing but codes draws no body`() {
+        assertEquals("alice left", activity(message("\u0002\u0002\u000f", type = EventType.Part)))
+        assertEquals("alice set the topic", activity(message("\u0003\u000f", type = EventType.Topic)))
+        assertEquals(
+            "bob was kicked by alice (out)",
+            activity(message("\u0002out\u0002", type = EventType.Kick, kicked = "bob")),
+        )
+    }
+
+    @Test
+    fun `a spoiler in a reason opens`() {
+        val reason = message("\u000301,01secret\u0003", type = EventType.Quit)
+        val hidden = MessageText.renderCompactBody(reason, style, onToggleSpoiler = { })
+        val open = MessageText.renderCompactBody(reason, style, revealed = setOf(0), onToggleSpoiler = { })
+        val at = hidden.indexOf("secret")
+        assertEquals(hidden.styleAt(at).color, hidden.styleAt(at).background)
+        assertTrue(open.styleAt(open.indexOf("secret")).color != open.styleAt(open.indexOf("secret")).background)
+    }
+
     @Test
     fun `activity lines narrate, starting flush`() {
         assertEquals("alice joined", activity(message(null, type = EventType.Join)))
