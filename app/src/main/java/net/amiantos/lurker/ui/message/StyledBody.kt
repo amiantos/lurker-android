@@ -127,7 +127,8 @@ internal class StyledBody : AttributedBody {
      * The finished line.
      *
      * Links become `LinkAnnotation.Url`s in [linkStyles], which `Text` opens through the platform's
-     * `UriHandler`. A spoiler becomes a string annotation (what `spoken` and the TalkBack actions
+     * `UriHandler`. ⚠ Never null: Material's `Text` gives a link with null styles the theme's primary
+     * colour and an underline (lurker-android#70); pass `TextLinkStyles()` for none. A spoiler becomes a string annotation (what `spoken` and the TalkBack actions
      * read) and, when [onToggleSpoiler] is given, a `LinkAnnotation.Clickable` that toggles it —
      * styled by nothing, so a box stays exactly the colours it was sent in. No callback (a screen
      * with nothing to toggle) leaves a spoiler hidden and untappable, which is iOS's rule for a
@@ -137,7 +138,7 @@ internal class StyledBody : AttributedBody {
      */
     fun toAnnotatedString(
         paragraph: ParagraphStyle?,
-        linkStyles: TextLinkStyles?,
+        linkStyles: TextLinkStyles,
         onToggleSpoiler: ((Int) -> Unit)?,
     ): AnnotatedString = buildAnnotatedString {
         append(text.toString())
@@ -149,8 +150,16 @@ internal class StyledBody : AttributedBody {
                     addStringAnnotation(MessageText.SPOILER_TAG, kind.ordinal.toString(), mark.start, mark.end)
                     if (onToggleSpoiler != null) {
                         val ordinal = kind.ordinal
+                        // ⚠ Styles that style nothing, never null (lurker-android#70). Material's `Text`
+                        // gives a link with null styles its own — the theme's primary colour and an
+                        // underline — which painted a hidden spoiler's text purple over its box, in plain
+                        // sight. A spoiler is a tap target, not a link: its colours are the run's own.
+                        // Every slot null, not an empty `SpanStyle`: any non-null style switches on
+                        // foundation's per-link state tracking, for a style that does nothing.
                         addLink(
-                            LinkAnnotation.Clickable("${MessageText.SPOILER_TAG}:$ordinal") { onToggleSpoiler(ordinal) },
+                            LinkAnnotation.Clickable("${MessageText.SPOILER_TAG}:$ordinal", spoilerStyles) {
+                                onToggleSpoiler(ordinal)
+                            },
                             mark.start,
                             mark.end,
                         )
@@ -161,5 +170,10 @@ internal class StyledBody : AttributedBody {
             }
         }
         if (paragraph != null && length > 0) addStyle(paragraph, 0, length)
+    }
+
+    private companion object {
+        /** A spoiler's tap target, unstyled — see the ⚠ in [toAnnotatedString]. */
+        val spoilerStyles = TextLinkStyles()
     }
 }
