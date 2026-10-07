@@ -41,7 +41,7 @@ android {
         // needs more: lint (NewApi) holds the app and, via :lurkerkit-device, the kit to it.
         minSdk = 28
         targetSdk = 36
-        versionCode = 1
+        versionCode = 2
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
