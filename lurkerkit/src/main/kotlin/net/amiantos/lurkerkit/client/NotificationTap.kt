@@ -67,12 +67,12 @@ data class NotificationTap(
          *   and not on iOS either since lurker-ios#229: JSON `true` arrives there as an
          *   `NSNumber` that `as? Int` would read as 1, and LurkerKit refuses it by type ("it isn't
          *   an id").
+         * - A string is read the way `Int(String)` reads it: an optional sign and ASCII digits,
+         *   nothing else. `toLongOrNull` alone would also take other scripts' digits (`"٧"`).
          *
          * Port note: LurkerKit's `intField` is internal, shared with `RelayNotification`, which
          * reads the same keys out of a relayed push. That file isn't ported (lurker-android#80
          * hands a relayed push to the app as FCM's string map instead), so this stays private.
-         * - A string is read the way `Int(String)` reads it: an optional sign and ASCII digits,
-         *   nothing else. `toLongOrNull` alone would also take other scripts' digits (`"٧"`).
          */
         private fun longField(value: Any?): Long? =
             when (value) {

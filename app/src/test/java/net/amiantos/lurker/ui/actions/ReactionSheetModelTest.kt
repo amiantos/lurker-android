@@ -158,4 +158,14 @@ class ReactionSheetModelTest {
         assertEquals(ReactionChoice.Refused, choose(state(allTags, connected = false), "🎉"))
         assertEquals(listOf("🎉", "😂", "👍"), sent)
     }
+
+    /**
+     * A value the sheet shows but can't send is said, not silently left as text: TalkBack hears why,
+     * and — since a state description replaces Compose's own "Selected" — that it's yours.
+     */
+    @Test
+    fun `an unavailable value says why, and that it's ours`() {
+        assertEquals("Selected. This network can't take a reaction back.", ReactionSheetModel.unavailableState(mine = true))
+        assertEquals("This network can't take a reaction back.", ReactionSheetModel.unavailableState(mine = false))
+    }
 }

@@ -22,12 +22,12 @@ import net.amiantos.lurkerkit.model.MessageRows
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.ReactionGroup
 import net.amiantos.lurkerkit.model.Reactions
-import net.amiantos.lurkerkit.model.TagSupport
 import net.amiantos.lurkerkit.model.RelayBotSet
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.model.SpeakerMap
 import net.amiantos.lurkerkit.model.StatusLight
+import net.amiantos.lurkerkit.model.TagSupport
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
 import java.time.Instant

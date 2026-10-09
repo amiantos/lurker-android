@@ -249,7 +249,7 @@ private fun QuickPick(value: String, mine: Boolean, works: Boolean, modifier: Mo
                     }
                 } else {
                     disabled()
-                    stateDescription = ReactionSheetModel.NO_TAKE_BACK
+                    stateDescription = ReactionSheetModel.unavailableState(mine)
                 }
             }
             .heightIn(min = 48.dp)
@@ -292,6 +292,11 @@ private fun StandingRow(group: ReactionGroup, works: Boolean, onClick: () -> Uni
                         onClick()
                         true
                     }
+                } else {
+                    // Said, not just dropped: a row that silently stops being a button reads to TalkBack
+                    // as text, with nothing to say why.
+                    disabled()
+                    stateDescription = ReactionSheetModel.unavailableState(group.mine)
                 }
             }
             .fillMaxWidth()

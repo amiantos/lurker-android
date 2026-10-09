@@ -29,8 +29,12 @@ data class ReactionSheetInputs(
      */
     val canRemove: Boolean,
 ) {
-    /** The values that are ours — what lights a quick pick, and what makes choosing one a take-back. */
-    val mine: Set<String> get() = groups.filter { it.mine }.map { it.value }.toSet()
+    /**
+     * The values that are ours — what lights a quick pick, and what makes choosing one a take-back.
+     * Worked out once per inputs (iOS's `mineValues`, cached per render), not per control that asks:
+     * a body `val`, so it stays out of `equals` — it follows from [groups].
+     */
+    val mine: Set<String> = groups.filter { it.mine }.map { it.value }.toSet()
 
     /**
      * Whether choosing [value] would go out: ours takes it back, anything else adds ours — the kit's
@@ -143,6 +147,13 @@ object ReactionSheetModel {
      * under the standing list and at the field, and why our own values are greyed out.
      */
     const val NO_TAKE_BACK = "This network can't take a reaction back."
+
+    /**
+     * What TalkBack hears for a value the sheet shows but can't send — ours, on a network that won't
+     * take it back. A state description replaces Compose's own "Selected", so it's said here: without
+     * it nothing would say the value is yours.
+     */
+    fun unavailableState(mine: Boolean): String = if (mine) "Selected. $NO_TAKE_BACK" else NO_TAKE_BACK
 
     /**
      * A choice on the sheet, re-checked against [state] at the tap rather than trusted from whenever
