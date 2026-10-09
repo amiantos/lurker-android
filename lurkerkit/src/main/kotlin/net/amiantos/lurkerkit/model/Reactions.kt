@@ -142,13 +142,24 @@ object Reactions {
             (message.type == EventType.Message || message.type == EventType.Action || message.type == EventType.Notice)
 
     /**
-     * Whether this client may send a reaction on `message`: a `message`/`action` the server
-     * named with a msgid, in a channel or DM, not end-to-end encrypted. The server re-checks all
-     * of it (`reactionSendTarget`) and refuses in silence — so this is what keeps a control off a
-     * line where it could only do nothing. `networkCanReact` is `ChatState.canReact`.
+     * Whether this client may send a new reaction on `message`: a `message`/`action` the server
+     * named with a msgid, in a channel or DM, not end-to-end encrypted, on a network that takes
+     * one. The server re-checks all of it (`reactionSendTarget`) and refuses in silence — so this
+     * is what keeps a control off a line where it could only do nothing. `support` is
+     * `ChatState.tagSupport(networkId:)`.
      */
-    fun canSend(message: Message, target: String, networkCanReact: Boolean): Boolean =
-        networkCanReact && lineTakes(message, target = target)
+    fun canSend(message: Message, target: String, support: TagSupport): Boolean =
+        canToggle(mine = false, message = message, target = target, support = support)
+
+    /**
+     * Whether choosing a value on `message` would do anything: one of ours (`mine`) takes it back,
+     * which needs `canRemoveReaction`; anything else adds ours, which needs `canAddReaction`. A
+     * network can allow adding one and deny the take-back — irc.so's UnrealIRCd does (lurker#1101) —
+     * and the server refuses a take-back there in silence. Every entry point asks this, through
+     * `ChatState.canToggleReaction`, so none offers what the send would lose.
+     */
+    fun canToggle(mine: Boolean, message: Message, target: String, support: TagSupport): Boolean =
+        (if (mine) support.canRemoveReaction else support.canAddReaction) && lineTakes(message, target = target)
 
     /**
      * The line half of `canSend`: whether this line could ever take a reaction from here,

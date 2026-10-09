@@ -136,13 +136,18 @@ class MessageListContext(
 }
 
 /**
- * What a row needs to draw reaction chips: the groups standing on a line, whether a reaction can go
- * out on it now, and where a tap goes. Resolvers rather than values, so a rebuild reads the store
+ * What a row needs to draw reaction chips: the groups standing on a line, whether tapping each would
+ * do anything now, and where a tap goes. Resolvers rather than values, so a rebuild reads the store
  * once per drawn row and not per loaded one. lurker-ios's `ReactionContext`.
  */
 class ReactionContext(
     val groups: (Message) -> List<ReactionGroup>,
-    val canToggle: (Message) -> Boolean,
+    /**
+     * Whether tapping each of a line's chips can go out now — ours takes it back, anyone else's adds
+     * ours, and a network can allow one and not the other (`Reactions.canToggle`, lurker#1101). Asked
+     * once per row, which resolves what the network takes once for its chips.
+     */
+    val canToggle: (Message) -> (ReactionGroup) -> Boolean,
     /**
      * Whether the line could ever take a reaction from here — a notice or an encrypted line shows
      * its chips but offers no add chip.
@@ -186,8 +191,11 @@ data class CompactHeader(
 /** A reply's quote line: the line it answers (null for "unavailable"), and where a tap on it goes. */
 data class ReplyLine(val quote: ReplyQuote?, val onJump: ((ReplyQuote) -> Unit)?)
 
-/** The chips under a line, and whether a tap can send. */
-data class ReactionChips(val groups: List<ReactionGroup>, val canToggle: Boolean, val showsAdd: Boolean)
+/** The chips under a line, each with whether a tap on it can send. */
+data class ReactionChips(val chips: List<Chip>, val showsAdd: Boolean) {
+    /** One standing reaction, and whether tapping it can go out right now (else it opens the sheet). */
+    data class Chip(val group: ReactionGroup, val canToggle: Boolean)
+}
 
 /**
  * How one row of the stream is drawn, decided without drawing it — the half of lurker-ios's
@@ -370,7 +378,11 @@ object MessageListLayout {
         val reactions = context.reactions ?: return null
         val groups = reactions.groups(message)
         if (groups.isEmpty()) return null
-        return ReactionChips(groups = groups, canToggle = reactions.canToggle(message), showsAdd = reactions.showsAdd(message))
+        val canToggle = reactions.canToggle(message)
+        return ReactionChips(
+            chips = groups.map { ReactionChips.Chip(it, canToggle = canToggle(it)) },
+            showsAdd = reactions.showsAdd(message),
+        )
     }
 
     /**

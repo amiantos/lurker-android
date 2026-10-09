@@ -1205,18 +1205,34 @@ class ChatViewModel(
     private val canWrite: Boolean get() = store.state.socketWritable
 
     /**
-     * React with `value` on a line, or take ours back when it's already there (lurker-ios#183).
+     * React with `value` on a line in `key`'s buffer, or take ours back when it's already there
+     * (lurker-ios#183).
      *
      * The direction comes from the store as it stands, like the web's `toggle`: a chip is drawn
      * from the same map, so tapping a lit one takes it back. Never optimistic — the network's
      * echo is what lights a reaction up (see `LurkerClient.react`). False when the value can't
-     * go out at all or there's no socket to carry it.
+     * go out at all — the line or the network can't take it in that direction
+     * (`ChatState.canToggleReaction`: irc.so refuses a take-back, lurker#1101) — or there's no
+     * socket to carry it.
      */
-    fun toggleReaction(messageId: Long, value: String): Boolean {
-        if (messageId == 0L || !Reactions.isValidValue(value)) return false
-        val mine = state.reactions[messageId].orEmpty().any { it.isSelf && it.value == value }
-        return client.react(messageId = messageId, value = value, remove = mine)
+    fun toggleReaction(value: String, message: Message, key: BufferKey): Boolean {
+        val state = store.state
+        if (!(Reactions.isValidValue(value) &&
+                state.canToggleReaction(value, message = message, target = key.target, networkId = key.networkId))
+        ) {
+            return false
+        }
+        return sendReact(message.id, value, remove = state.isOwnReaction(value, messageId = message.id))
     }
+
+    /** Every reaction's way onto the socket — through `reactSeam` when a test has set one. */
+    private fun sendReact(messageId: Long, value: String, remove: Boolean): Boolean {
+        reactSeam?.let { return it(messageId, value, remove) }
+        return client.react(messageId = messageId, value = value, remove = remove)
+    }
+
+    /** Test seam: stands in for the socket a `react` verb goes out on — message id, value, remove. */
+    internal var reactSeam: ((Long, String, Boolean) -> Boolean)? = null
 
     /**
      * Upload a prepared file and return the stored object's URL for the composer to paste
@@ -1728,7 +1744,7 @@ class ChatViewModel(
      */
     private fun react(value: String, key: BufferKey) {
         val state = store.state
-        if (!(state.canReact(networkId = key.networkId) && Reactions.isConversation(key.target))) {
+        if (!(state.tagSupport(networkId = key.networkId).canAddReaction && Reactions.isConversation(key.target))) {
             store.appendLocal(key, text = "this network can't carry reactions right now")
             return
         }
@@ -1744,11 +1760,11 @@ class ChatViewModel(
                 store.appendLocal(key, text = target.error.text)
             is Result.Success -> {
                 val line = target.value
-                if (state.reactions[line.id].orEmpty().any { it.isSelf && it.value == value }) {
+                if (state.isOwnReaction(value, messageId = line.id)) {
                     store.appendLocal(key, text = "you already reacted $value to ${line.nick ?: "that"}")
                     return
                 }
-                if (!client.react(messageId = line.id, value = value, remove = false)) {
+                if (!sendReact(line.id, value, remove = false)) {
                     store.appendLocal(key, text = "not connected — the reaction wasn't sent")
                 }
             }

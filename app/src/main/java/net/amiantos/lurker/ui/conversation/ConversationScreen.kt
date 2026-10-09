@@ -664,14 +664,12 @@ fun ConversationScreen(
                 groups = { message ->
                     if (Reactions.canCarry(message, networkId = key.networkId)) inputs.reactionGroups(message.id) else emptyList()
                 },
-                canToggle = { message ->
-                    Reactions.canSend(message, target = key.target, networkCanReact = inputs.canReact)
-                },
+                canToggle = { message -> ConversationModel.chipToggles(message, key.target, inputs.support) },
                 showsAdd = { message -> Reactions.lineTakes(message, target = key.target) },
                 onToggle = { message, value ->
                     // The chip doesn't move until the network echoes it, so the tap is acknowledged
                     // here — and a send that went nowhere says so the same way, rather than nothing.
-                    val sent = model.toggleReaction(messageId = message.id, value = value)
+                    val sent = model.toggleReaction(value, message = message, key = key)
                     haptics.performHapticFeedback(if (sent) HapticFeedbackType.Confirm else HapticFeedbackType.Reject)
                 },
                 // The add chip, or a chip that can't toggle: the reaction sheet, keyboard down first.

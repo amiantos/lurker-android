@@ -32,15 +32,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.ImeAction
@@ -61,7 +64,10 @@ enum class ReactionChoice {
     /** No socket — nothing went out. The sheet says so and stays. */
     NotConnected,
 
-    /** The line can't take one right now after all (the network dropped since it was drawn). */
+    /**
+     * That choice can't go out after all — the network dropped since the sheet was drawn, or it's a
+     * take-back of ours the network refuses (lurker#1101). Nothing went out; the sheet stays.
+     */
     Refused,
 }
 
@@ -72,7 +78,9 @@ enum class ReactionChoice {
  * Who reacted with what (the only place a touch screen can see that: the web names them in a hover
  * title), a grid of quick picks, and a field for anything else — an emoji from the keyboard's emoji
  * panel, or plain text like "lol", which the spec allows and IRC people actually use. Every choice
- * toggles: picking a reaction you already gave takes it back.
+ * toggles: picking a reaction you already gave takes it back — where the network allows that. irc.so
+ * takes a reaction but not a take-back (lurker#1101), so there your own are shown but can't be chosen,
+ * and the sheet says why.
  *
  * Live, unlike the actions sheet: [inputs] follows the store, so a reaction landing while it's open
  * shows up in the list instead of the sheet asserting an answer that has since moved.
@@ -128,9 +136,10 @@ internal fun ReactionSheetContent(
 ) {
     val colors = LurkerTheme.colors
     var typed by remember { mutableStateOf("") }
-    val verdict = TypedReaction.of(typed)
-    // The field's own problem wins while it has one; a refused send is said until the next edit.
-    val shownProblem = if (verdict.tooLong) ReactionSheetModel.TOO_LONG else problem
+    val verdict = TypedReaction.of(typed, inputs)
+    // The field's own problem wins while it has one — too long, or one of ours the network won't take
+    // back; a send that went nowhere is said until the next edit.
+    val shownProblem = verdict.problem ?: problem
     Column(
         Modifier
             .fillMaxWidth()
@@ -144,13 +153,15 @@ internal fun ReactionSheetContent(
         val quote = ReactionSheetModel.quote(message)
         SheetHeader(ReactionSheetModel.title(message), quote?.shown, spokenDetail = quote?.spoken, detailLines = 2)
 
-        if (inputs.canReact) {
+        if (inputs.canAdd) {
             val mine = inputs.mine
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 for (row in ReactionSheetModel.quickRows()) {
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         for (value in row) {
-                            QuickPick(value, mine = value in mine, modifier = Modifier.weight(1f)) { onChoose(value) }
+                            QuickPick(
+                                value, mine = value in mine, works = inputs.works(value), modifier = Modifier.weight(1f),
+                            ) { onChoose(value) }
                         }
                     }
                 }
@@ -168,7 +179,7 @@ internal fun ReactionSheetContent(
                         modifier = Modifier.weight(1f),
                         placeholder = { Text("Any emoji or text") },
                         singleLine = true,
-                        isError = verdict.tooLong,
+                        isError = verdict.problem != null,
                         keyboardOptions = KeyboardOptions(
                             capitalization = KeyboardCapitalization.None,
                             autoCorrectEnabled = false,
@@ -199,7 +210,15 @@ internal fun ReactionSheetContent(
                     color = colors.fgMuted,
                 )
                 for (group in inputs.groups) {
-                    StandingRow(group, canReact = inputs.canReact) { onChoose(group.value) }
+                    StandingRow(group, works = inputs.works(group.value)) { onChoose(group.value) }
+                }
+                if (inputs.noTakeBack) {
+                    Text(
+                        ReactionSheetModel.NO_TAKE_BACK,
+                        modifier = Modifier.padding(top = 4.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = colors.fgMuted,
+                    )
                 }
             }
         }
@@ -209,9 +228,12 @@ internal fun ReactionSheetContent(
 /**
  * One quick pick: the emoji, ours framed in the accent. A glyph button, so the emoji is drawn larger
  * than the text around it — the one-size rule is about text, not icons.
+ *
+ * [works] off — ours, on a network that won't take it back — dims it and takes the tap away: dimmed,
+ * not just disabled, because an emoji doesn't take a disabled tint. The footnote says why.
  */
 @Composable
-private fun QuickPick(value: String, mine: Boolean, modifier: Modifier, onClick: () -> Unit) {
+private fun QuickPick(value: String, mine: Boolean, works: Boolean, modifier: Modifier, onClick: () -> Unit) {
     val colors = LurkerTheme.colors
     val shape = RoundedCornerShape(4.dp)
     Box(
@@ -220,16 +242,22 @@ private fun QuickPick(value: String, mine: Boolean, modifier: Modifier, onClick:
                 contentDescription = value
                 selected = mine
                 role = Role.Button
-                onClick(label = if (mine) "take your reaction back" else "react") {
-                    onClick()
-                    true
+                if (works) {
+                    onClick(label = if (mine) "take your reaction back" else "react") {
+                        onClick()
+                        true
+                    }
+                } else {
+                    disabled()
+                    stateDescription = ReactionSheetModel.unavailableState(mine)
                 }
             }
             .heightIn(min = 48.dp)
+            .alpha(if (works) 1f else 0.4f)
             .clip(shape)
             .background(if (mine) colors.accent.copy(alpha = 0.15f) else colors.bgSoft, shape)
             .border(1.dp, if (mine) colors.accent else colors.border, shape)
-            .clickable(role = Role.Button, onClick = onClick)
+            .clickable(enabled = works, role = Role.Button, onClick = onClick)
             .padding(vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -239,11 +267,12 @@ private fun QuickPick(value: String, mine: Boolean, modifier: Modifier, onClick:
 
 /**
  * One standing reaction: the value — whole, wrapping, the one place a long text reaction is shown in
- * full — and everyone who gave it. Tapping it toggles yours. Not greyed when it can't be tapped: the
- * list of who reacted would look like an error, and it's still information.
+ * full — and everyone who gave it. Tapping it toggles yours, where that [works]. Not greyed when it
+ * can't be tapped: the list of who reacted would look like an error, and it's still information (the
+ * footnote says why, when it's ours on a network that won't take it back).
  */
 @Composable
-private fun StandingRow(group: ReactionGroup, canReact: Boolean, onClick: () -> Unit) {
+private fun StandingRow(group: ReactionGroup, works: Boolean, onClick: () -> Unit) {
     val colors = LurkerTheme.colors
     val shape = RoundedCornerShape(4.dp)
     val line = buildAnnotatedString {
@@ -257,18 +286,23 @@ private fun StandingRow(group: ReactionGroup, canReact: Boolean, onClick: () -> 
             .clearAndSetSemantics {
                 contentDescription = spoken
                 selected = group.mine
-                if (canReact) {
+                if (works) {
                     role = Role.Button
                     onClick(label = if (group.mine) "take your reaction back" else "add your reaction") {
                         onClick()
                         true
                     }
+                } else {
+                    // Said, not just dropped: a row that silently stops being a button reads to TalkBack
+                    // as text, with nothing to say why.
+                    disabled()
+                    stateDescription = ReactionSheetModel.unavailableState(group.mine)
                 }
             }
             .fillMaxWidth()
             .clip(shape)
             .background(if (group.mine) colors.accent.copy(alpha = 0.12f) else colors.bgSoft, shape)
-            .then(if (canReact) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
+            .then(if (works) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
             .padding(horizontal = 10.dp, vertical = 8.dp),
         style = MaterialTheme.typography.bodyLarge,
     )
@@ -285,13 +319,13 @@ private val previewGroups = listOf(
 )
 
 @Composable
-private fun ReactionsPreview(dark: Boolean, canReact: Boolean) {
+private fun ReactionsPreview(dark: Boolean, canAdd: Boolean, canRemove: Boolean = canAdd) {
     LurkerTheme(darkTheme = dark) {
         Column(Modifier.background(MaterialTheme.colorScheme.surfaceContainerLow).padding(top = 16.dp)) {
             ReactionSheetContent(
                 message = previewMessage,
                 target = "#lurker",
-                inputs = ReactionSheetInputs(previewGroups, canReact = canReact),
+                inputs = ReactionSheetInputs(previewGroups, canAdd = canAdd, canRemove = canRemove),
                 problem = null,
                 onProblem = {},
                 onChoose = {},
@@ -302,16 +336,25 @@ private fun ReactionsPreview(dark: Boolean, canReact: Boolean) {
 
 @Preview(name = "Reaction sheet — light", widthDp = 360)
 @Composable
-private fun ReactionsPreviewLight() = ReactionsPreview(dark = false, canReact = true)
+private fun ReactionsPreviewLight() = ReactionsPreview(dark = false, canAdd = true)
 
 @Preview(name = "Reaction sheet — dark", widthDp = 360)
 @Composable
-private fun ReactionsPreviewDark() = ReactionsPreview(dark = true, canReact = true)
+private fun ReactionsPreviewDark() = ReactionsPreview(dark = true, canAdd = true)
 
 @Preview(name = "Reaction sheet, offline — light", widthDp = 360)
 @Composable
-private fun ReactionsOfflinePreviewLight() = ReactionsPreview(dark = false, canReact = false)
+private fun ReactionsOfflinePreviewLight() = ReactionsPreview(dark = false, canAdd = false)
 
 @Preview(name = "Reaction sheet, offline — dark", widthDp = 360)
 @Composable
-private fun ReactionsOfflinePreviewDark() = ReactionsPreview(dark = true, canReact = false)
+private fun ReactionsOfflinePreviewDark() = ReactionsPreview(dark = true, canAdd = false)
+
+/** irc.so (lurker#1101): a reaction goes out, a take-back doesn't — ours dimmed, and the footnote. */
+@Preview(name = "Reaction sheet, no take-back — light", widthDp = 360)
+@Composable
+private fun ReactionsNoTakeBackPreviewLight() = ReactionsPreview(dark = false, canAdd = true, canRemove = false)
+
+@Preview(name = "Reaction sheet, no take-back — dark", widthDp = 360)
+@Composable
+private fun ReactionsNoTakeBackPreviewDark() = ReactionsPreview(dark = true, canAdd = true, canRemove = false)

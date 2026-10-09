@@ -4,10 +4,16 @@
 package net.amiantos.lurker.ui.actions
 
 import net.amiantos.lurkerkit.commands.IgnoreArgs
+import net.amiantos.lurkerkit.model.BufferKey
+import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageActionKey
 import net.amiantos.lurkerkit.model.MessageActionScope
+import net.amiantos.lurkerkit.model.Network
+import net.amiantos.lurkerkit.model.TagSupport
+import net.amiantos.lurkerkit.store.ChatState
+import net.amiantos.lurkerkit.store.SocketStatus
 import net.amiantos.lurkerkit.support.Result
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -27,8 +33,10 @@ class MessageActionsModelTest {
         id: Long = 42,
     ) = Message(id = id, type = type, nick = nick, text = text, isSelf = isSelf, userhost = userhost, msgid = "m$id")
 
-    private fun scope(networkId: Int? = 1, saved: Boolean = false, target: String = "#lurker", canReact: Boolean = true) =
-        MessageActionScope(networkId = networkId, isBookmarked = saved, target = target, canReact = canReact)
+    private val allTags = TagSupport(canAddReaction = true, canRemoveReaction = true, canReply = true)
+
+    private fun scope(networkId: Int? = 1, saved: Boolean = false, target: String = "#lurker", support: TagSupport = allTags) =
+        MessageActionScope(networkId = networkId, isBookmarked = saved, target = target, support = support)
 
     private fun titles(subject: ActionSubject) = MessageActionsModel.rows(subject).map { it.title }
 
@@ -40,6 +48,31 @@ class MessageActionsModelTest {
             listOf("Reply to alice", "React", "Copy Text", "Save Message", "Profile of alice", "Ignore alice…"),
             titles(ActionSubject.Line(line(), scope())),
         )
+    }
+
+    /**
+     * lurker#1101: the press reads all three answers off the store, so irc.so — a reply's tag and a new
+     * reaction, no take-back — offers Reply to yourself (tag-only) and React on your own line. Read as
+     * one "can react" flag (both directions) it offered neither.
+     */
+    @Test
+    fun `the press reads each tag's own answer — irc_so offers a tag-only reply and React`() {
+        val ircSo = TagSupport(canAddReaction = true, canRemoveReaction = false, canReply = true)
+        val state = ChatState(
+            connection = SocketStatus.Connected,
+            networks = mapOf(1 to Network(id = 1, name = "irc.so", state = ConnectionState.Connected, nick = "me", tagSupport = ircSo)),
+        )
+        val key = BufferKey(1, "#lurker")
+        val scope = MessageActionsModel.scope(state, key, isBookmarked = false)
+        assertEquals(ircSo, scope.support)
+        val own = titles(ActionSubject.Line(line(nick = "me", isSelf = true), scope))
+        assertTrue(own.contains("Reply to yourself"))
+        assertTrue(own.contains("React"))
+        // A network that's down carries nothing, whatever it last said.
+        val down = state.copy(connection = SocketStatus.Reconnecting)
+        val offline = titles(ActionSubject.Line(line(nick = "me", isSelf = true), MessageActionsModel.scope(down, key, isBookmarked = false)))
+        assertFalse(offline.contains("Reply to yourself"))
+        assertFalse(offline.contains("React"))
     }
 
     @Test

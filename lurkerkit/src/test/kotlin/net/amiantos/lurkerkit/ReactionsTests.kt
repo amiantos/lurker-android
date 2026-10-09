@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.ChannelSnapshot
 import net.amiantos.lurkerkit.client.FrameParser
 import net.amiantos.lurkerkit.client.HistoryMode
 import net.amiantos.lurkerkit.client.NetworkSnapshot
@@ -27,6 +28,7 @@ import net.amiantos.lurkerkit.model.MessageReaction
 import net.amiantos.lurkerkit.model.ReactionChange
 import net.amiantos.lurkerkit.model.ReactionGroup
 import net.amiantos.lurkerkit.model.Reactions
+import net.amiantos.lurkerkit.model.TagSupport
 import net.amiantos.lurkerkit.store.LurkerStore
 import net.amiantos.lurkerkit.support.Result
 import kotlin.test.Test
@@ -37,6 +39,14 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
+
+/** The shapes a network's tag support comes in, shared by the reaction and reply tests. */
+val TagSupport.Companion.all: TagSupport
+    get() = TagSupport(canAddReaction = true, canRemoveReaction = true, canReply = true)
+
+/** irc.so's UnrealIRCd (lurker#1101): `+draft/react` and `+reply` allowed, `+draft/unreact` not. */
+val TagSupport.Companion.ircSo: TagSupport
+    get() = TagSupport(canAddReaction = true, canRemoveReaction = false, canReply = true)
 
 /** IRCv3 reactions (lurker-ios#183): the wire, the side map, and the gates. */
 class ReactionsTests {
@@ -145,17 +155,54 @@ class ReactionsTests {
         )
     }
 
+    private fun reactSupport(fields: String): ServerFrame =
+        FrameParser.parseWs(
+            """{"kind":"irc","type":"react-support","networkId":3,"target":":server:3"""" + fields + "}",
+        )
+
+    private fun snapshotSupport(fields: String): TagSupport? {
+        val frame = FrameParser.parseWs(
+            """{"kind":"snapshot","networks":[{"networkId":3,"state":"connected","nick":"me","channels":[]""" +
+                fields + "}]}",
+        )
+        if (frame !is ServerFrame.Snapshot) fail("$frame")
+        return frame.networks[0].tagSupport
+    }
+
+    /**
+     * lurker#1101: irc.so's shape — a reaction and a reply's tag, but no take-back. `canReact`
+     * (both directions) is false there and must not drag the other two down with it.
+     */
     @Test
-    fun testReactSupportAndSnapshotCanReactParse() {
+    fun testTheSplitParsesOnBothCarriers() {
+        val ircSo = ""","canReact":false,"canAddReaction":true,"canRemoveReaction":false,"canReply":true"""
+        assertEquals(ServerFrame.ReactSupport(networkId = 3, support = TagSupport.ircSo), reactSupport(ircSo))
+        assertEquals(TagSupport.ircSo, snapshotSupport(ircSo))
+        val all = ""","canReact":true,"canAddReaction":true,"canRemoveReaction":true,"canReply":true"""
+        assertEquals(ServerFrame.ReactSupport(networkId = 3, support = TagSupport.all), reactSupport(all))
+        assertEquals(TagSupport.all, snapshotSupport(all))
+    }
+
+    /** An older server sends only `canReact`, and it stands for all three: absent is not false. */
+    @Test
+    fun testAnOldServersCanReactCoversAllThree() {
+        assertEquals(ServerFrame.ReactSupport(networkId = 3, support = TagSupport.all), reactSupport(""","canReact":true"""))
+        assertEquals(TagSupport.all, snapshotSupport(""","canReact":true"""))
         assertEquals(
-            ServerFrame.ReactSupport(networkId = 3, canReact = true),
-            FrameParser.parseWs("""{"kind":"irc","type":"react-support","networkId":3,"target":":server:3","canReact":true}"""),
+            ServerFrame.ReactSupport(networkId = 3, support = TagSupport.nothing),
+            reactSupport(""","canReact":false"""),
         )
-        val snapshot = FrameParser.parseWs(
-            """{"kind":"snapshot","networks":[{"networkId":3,"state":"connected","nick":"me","channels":[],"canReact":true}]}""",
+        assertEquals(TagSupport.nothing, snapshotSupport(""","canReact":false"""))
+        assertEquals(
+            ServerFrame.ReactSupport(networkId = 3, support = TagSupport.nothing), reactSupport(""),
+            "nothing said is nothing allowed",
         )
-        if (snapshot !is ServerFrame.Snapshot) fail("$snapshot")
-        assertTrue(snapshot.networks[0].canReact)
+        assertEquals(TagSupport.nothing, snapshotSupport(""))
+        // Each field falls back on its own: one present doesn't make the others false.
+        assertEquals(
+            TagSupport(canAddReaction = true, canRemoveReaction = false, canReply = true),
+            snapshotSupport(""","canReact":true,"canRemoveReaction":false"""),
+        )
     }
 
     // MARK: - Side map
@@ -300,10 +347,9 @@ class ReactionsTests {
         assertFalse(ids.contains(9999), "system lines are another id space")
     }
 
-    // MARK: - canReact
+    // MARK: - Tag support
 
-    @Test
-    fun testCanReactNeedsTheFlagAndALiveLink() {
+    private fun connectedStore(support: TagSupport? = null): LurkerStore {
         val store = LurkerStore()
         store.apply(ServerFrame.SocketOpen)
         store.apply(
@@ -312,18 +358,33 @@ class ReactionsTests {
                 globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
-        assertFalse(store.state.canReact(networkId = 1), "false until the burst says otherwise")
-        store.apply(ServerFrame.ReactSupport(networkId = 1, canReact = true))
-        assertTrue(store.state.canReact(networkId = 1))
+        if (support != null) store.apply(ServerFrame.ReactSupport(networkId = 1, support = support))
+        return store
+    }
 
-        // The link drops: whatever the last registration allowed is no answer now…
+    private fun answers(store: LurkerStore, networkId: Int? = 1): List<Boolean> {
+        val support = store.state.tagSupport(networkId = networkId)
+        return listOf(support.canAddReaction, support.canRemoveReaction, store.state.canReply(networkId = networkId))
+    }
+
+    @Test
+    fun testTagSupportNeedsTheFlagsAndALiveLink() {
+        val store = connectedStore()
+        assertEquals(listOf(false, false, false), answers(store), "nothing until the burst says otherwise")
+        store.apply(ServerFrame.ReactSupport(networkId = 1, support = TagSupport.ircSo))
+        assertEquals(listOf(true, false, true), answers(store), "each answer is its own")
+        store.apply(ServerFrame.ReactSupport(networkId = 1, support = TagSupport.all))
+        assertEquals(listOf(true, true, true), answers(store))
+
+        // The link drops: whatever the last registration allowed is no answer now — all of it…
         store.apply(ServerFrame.NetworkState(networkId = 1, state = ConnectionState.Reconnecting, nick = null))
-        assertFalse(store.state.canReact(networkId = 1))
+        assertEquals(listOf(false, false, false), answers(store))
+        assertEquals(TagSupport.nothing, store.state.networks[1]?.tagSupport, "reset, not just hidden")
         // …and coming back isn't one either until the new burst re-announces it.
         store.apply(ServerFrame.NetworkState(networkId = 1, state = ConnectionState.Connected, nick = null))
-        assertFalse(store.state.canReact(networkId = 1))
-        assertFalse(store.state.canReact(networkId = null))
-        assertFalse(store.state.canReact(networkId = 99))
+        assertEquals(listOf(false, false, false), answers(store))
+        assertEquals(listOf(false, false, false), answers(store, null))
+        assertEquals(listOf(false, false, false), answers(store, 99))
     }
 
     /**
@@ -331,22 +392,160 @@ class ReactionsTests {
      * send goes nowhere.
      */
     @Test
-    fun testCanReactNeedsOurOwnSocket() {
+    fun testTagSupportNeedsOurOwnSocket() {
         val store = LurkerStore()
         store.apply(ServerFrame.SocketOpen)
         store.apply(
             ServerFrame.Snapshot(
                 listOf(
                     NetworkSnapshot(
-                        id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList(), canReact = true,
+                        id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList(),
+                        tagSupport = TagSupport.all,
                     ),
                 ),
                 globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
             ),
         )
-        assertTrue(store.state.canReact(networkId = 1))
+        assertEquals(listOf(true, true, true), answers(store))
         store.apply(ServerFrame.SocketClosed(reason = null, code = null))
-        assertFalse(store.state.canReact(networkId = 1))
+        assertEquals(listOf(false, false, false), answers(store))
+    }
+
+    /** A resume's snapshot lands on a network the store already holds: it replaces the answer. */
+    @Test
+    fun testASnapshotRestatesAKnownNetwork() {
+        val store = connectedStore(TagSupport.all)
+        store.apply(
+            ServerFrame.Snapshot(
+                listOf(
+                    NetworkSnapshot(
+                        id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList(),
+                        tagSupport = TagSupport.ircSo,
+                    ),
+                ),
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
+            ),
+        )
+        assertEquals(listOf(true, false, true), answers(store))
+    }
+
+    // MARK: - Toggle
+
+    /** Line 1 carries our 👍 and bob's 🎉. */
+    private fun toggleStore(support: TagSupport): LurkerStore {
+        val store = connectedStore(support)
+        store.apply(backlog(listOf(line(1, reactions = listOf(MessageReaction(nick = "me", value = "👍", isSelf = true), party)))))
+        return store
+    }
+
+    private val party = MessageReaction(nick = "bob", value = "🎉", isSelf = false)
+
+    private fun toggles(store: LurkerStore, value: String, message: Message? = null): Boolean =
+        store.state.canToggleReaction(value, message = message ?: line(1), target = "#lurker", networkId = 1)
+
+    /**
+     * lurker#1101: on irc.so tapping our own chip would send a removal the server refuses in
+     * silence; anyone else's chip, or a new value, adds ours, which works.
+     */
+    @Test
+    fun testIrcSoRefusesOnlyTheTakeBack() {
+        val store = toggleStore(TagSupport.ircSo)
+        assertFalse(toggles(store, "👍"), "ours — a take-back")
+        assertTrue(toggles(store, "🎉"), "bob's chip adds ours")
+        assertTrue(toggles(store, "😂"), "a new one")
+    }
+
+    @Test
+    fun testBothDirectionsWhereTheNetworkTakesBoth() {
+        val store = toggleStore(TagSupport.all)
+        assertTrue(toggles(store, "👍"))
+        assertTrue(toggles(store, "🎉"))
+        assertTrue(toggles(store, "😂"))
+    }
+
+    /** The old server's single flag, through the parser and the store, end to end. */
+    @Test
+    fun testAnOldServersFlagDecidesEveryToggle() {
+        val allowed = toggleStore(TagSupport.nothing)
+        allowed.apply(reactSupport1(""","canReact":true"""))
+        assertEquals(listOf(true, true, true), listOf(toggles(allowed, "👍"), toggles(allowed, "🎉"), toggles(allowed, "😂")))
+        assertTrue(allowed.state.canReply(networkId = 1))
+
+        val refused = toggleStore(TagSupport.all)
+        refused.apply(reactSupport1(""","canReact":false"""))
+        assertEquals(listOf(false, false, false), listOf(toggles(refused, "👍"), toggles(refused, "🎉"), toggles(refused, "😂")))
+        assertFalse(refused.state.canReply(networkId = 1))
+    }
+
+    private fun reactSupport1(fields: String): ServerFrame =
+        FrameParser.parseWs(
+            """{"kind":"irc","type":"react-support","networkId":1,"target":":server:1"""" + fields + "}",
+        )
+
+    /**
+     * `ChatViewModel.toggleReaction` is the last gate before the socket: a take-back the network
+     * refuses never goes out, nor does anything while the link is down — and adding still does.
+     */
+    @Test
+    fun testTheSendItselfRefusesWhatTheNetworkWould() {
+        val model = testViewModel()
+        var sent = mutableListOf<String>()
+        model.reactSeam = { id, value, remove -> sent.add("$id $value ${if (remove) "remove" else "add"}"); true }
+        model.handle(ServerFrame.SocketOpen)
+        model.handle(
+            ServerFrame.Snapshot(
+                listOf(
+                    NetworkSnapshot(
+                        id = 1, state = ConnectionState.Connected, nick = "me",
+                        channels = listOf(ChannelSnapshot(name = "#lurker", topic = null, members = emptyList())),
+                    ),
+                ),
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
+            ),
+        )
+        model.handle(backlog(listOf(line(1, reactions = listOf(MessageReaction(nick = "me", value = "👍", isSelf = true), party)))))
+        val key = BufferKey(networkId = 1, target = "#lurker")
+
+        model.handle(ServerFrame.ReactSupport(networkId = 1, support = TagSupport.ircSo))
+        assertFalse(model.toggleReaction("👍", message = line(1), key = key), "ours: a take-back irc.so refuses")
+        assertTrue(model.toggleReaction("🎉", message = line(1), key = key))
+        assertTrue(model.toggleReaction("😂", message = line(1), key = key))
+        assertEquals(listOf("1 🎉 add", "1 😂 add"), sent)
+
+        sent = mutableListOf()
+        model.handle(ServerFrame.ReactSupport(networkId = 1, support = TagSupport.all))
+        assertTrue(model.toggleReaction("👍", message = line(1), key = key))
+        assertEquals(listOf("1 👍 remove"), sent)
+
+        sent = mutableListOf()
+        model.handle(ServerFrame.NetworkState(networkId = 1, state = ConnectionState.Reconnecting, nick = null))
+        assertFalse(model.toggleReaction("😂", message = line(1), key = key), "the link is down")
+        assertFalse(model.toggleReaction("👍", message = line(1), key = key))
+        assertEquals(emptyList(), sent)
+    }
+
+    @Test
+    fun testTheLineStillHasToTakeOne() {
+        val store = toggleStore(TagSupport.all)
+        assertFalse(toggles(store, "😂", message = line(1, msgid = null)))
+        assertFalse(toggles(store, "😂", message = line(1, type = EventType.Notice)))
+        assertFalse(store.state.canToggleReaction("😂", message = line(1), target = ":server:1", networkId = 1))
+    }
+
+    @Test
+    fun testTheToggleRule() {
+        val ok = line(1)
+        assertTrue(Reactions.canToggle(mine = false, message = ok, target = "#lurker", support = TagSupport.ircSo))
+        assertFalse(Reactions.canToggle(mine = true, message = ok, target = "#lurker", support = TagSupport.ircSo))
+        assertTrue(Reactions.canToggle(mine = true, message = ok, target = "#lurker", support = TagSupport.all))
+        assertFalse(Reactions.canToggle(mine = false, message = ok, target = "#lurker", support = TagSupport.nothing))
+        // A reply tag alone carries no reaction.
+        assertFalse(
+            Reactions.canToggle(
+                mine = false, message = ok, target = "#lurker",
+                support = TagSupport(canAddReaction = false, canRemoveReaction = false, canReply = true),
+            ),
+        )
     }
 
     /**
@@ -419,48 +618,89 @@ class ReactionsTests {
     @Test
     fun testSendGate() {
         val ok = line(1)
-        assertTrue(Reactions.canSend(ok, target = "#lurker", networkCanReact = true))
-        assertTrue(Reactions.canSend(ok, target = "bob", networkCanReact = true), "a DM")
-        assertTrue(Reactions.canSend(line(1, type = EventType.Action), target = "#lurker", networkCanReact = true))
-        assertFalse(Reactions.canSend(ok, target = "#lurker", networkCanReact = false))
-        assertFalse(Reactions.canSend(line(1, msgid = null), target = "#lurker", networkCanReact = true))
-        assertFalse(Reactions.canSend(line(0), target = "#lurker", networkCanReact = true))
-        assertFalse(Reactions.canSend(line(1, isE2E = true), target = "#lurker", networkCanReact = true))
-        assertFalse(Reactions.canSend(line(1, type = EventType.Notice), target = "#lurker", networkCanReact = true))
-        assertFalse(Reactions.canSend(ok, target = ":server:1", networkCanReact = true))
-        assertFalse(Reactions.canSend(ok, target = "=bob", networkCanReact = true), "DCC chat")
+        assertTrue(Reactions.canSend(ok, target = "#lurker", support = TagSupport.all))
+        assertTrue(Reactions.canSend(ok, target = "#lurker", support = TagSupport.ircSo), "adding needs no take-back")
+        assertTrue(Reactions.canSend(ok, target = "bob", support = TagSupport.all), "a DM")
+        assertTrue(Reactions.canSend(line(1, type = EventType.Action), target = "#lurker", support = TagSupport.all))
+        assertFalse(Reactions.canSend(ok, target = "#lurker", support = TagSupport.nothing))
+        assertFalse(Reactions.canSend(line(1, msgid = null), target = "#lurker", support = TagSupport.all))
+        assertFalse(Reactions.canSend(line(0), target = "#lurker", support = TagSupport.all))
+        assertFalse(Reactions.canSend(line(1, isE2E = true), target = "#lurker", support = TagSupport.all))
+        assertFalse(Reactions.canSend(line(1, type = EventType.Notice), target = "#lurker", support = TagSupport.all))
+        assertFalse(Reactions.canSend(ok, target = ":server:1", support = TagSupport.all))
+        assertFalse(Reactions.canSend(ok, target = "=bob", support = TagSupport.all), "DCC chat")
     }
 
     @Test
     fun testReactActionFollowsTheSendGate() {
-        val keys = { message: Message, canReact: Boolean ->
+        val keys = { message: Message, support: TagSupport ->
             MessageActions.build(
                 message,
-                scope = MessageActionScope(networkId = 1, isBookmarked = false, target = "#lurker", canReact = canReact),
+                scope = MessageActionScope(networkId = 1, isBookmarked = false, target = "#lurker", support = support),
             ).map { it.key }
         }
-        assertTrue(keys(line(1), true).contains(MessageActionKey.React))
-        assertTrue(keys(line(1, isSelf = true), true).contains(MessageActionKey.React), "you can react to your own line")
-        assertFalse(keys(line(1), false).contains(MessageActionKey.React))
-        assertFalse(keys(line(1, type = EventType.Notice), true).contains(MessageActionKey.React))
+        assertTrue(keys(line(1), TagSupport.all).contains(MessageActionKey.React))
+        assertTrue(keys(line(1), TagSupport.ircSo).contains(MessageActionKey.React), "irc.so takes a new reaction")
+        assertTrue(
+            keys(line(1, isSelf = true), TagSupport.all).contains(MessageActionKey.React),
+            "you can react to your own line",
+        )
+        assertFalse(keys(line(1), TagSupport.nothing).contains(MessageActionKey.React))
+        assertFalse(keys(line(1, type = EventType.Notice), TagSupport.all).contains(MessageActionKey.React))
 
         var reacted: Message? = null
         val context = MessageActionContext(
             reply = { _ -> }, copy = { _ -> }, setBookmark = { _, _ -> }, showProfile = { _ -> },
             react = { reacted = it },
         )
-        val scope = MessageActionScope(networkId = 1, isBookmarked = false, target = "#lurker", canReact = false)
+        val scope = MessageActionScope(networkId = 1, isBookmarked = false, target = "#lurker", support = TagSupport.nothing)
         MessageActions.run(MessageActionKey.React, line(1), scope = scope, context = context)
         assertNull(reacted, "not offered, so not run")
         MessageActions.run(
             MessageActionKey.React, line(1),
-            scope = MessageActionScope(networkId = 1, isBookmarked = false, target = "#lurker", canReact = true),
+            scope = MessageActionScope(networkId = 1, isBookmarked = false, target = "#lurker", support = TagSupport.all),
             context = context,
         )
         assertEquals(1L, reacted?.id)
     }
 
     // Port-only:
+
+    /**
+     * `/react` asks `canAddReaction` alone (lurker#1101): on irc.so — `canReact` false, a new
+     * reaction allowed — it goes out, where the single flag refused it; on a network that takes
+     * nothing it still says so. The Swift changed this gate without a test of its own.
+     */
+    @Test
+    fun testReactCommandAsksCanAddReactionAlone() {
+        val model = testViewModel()
+        val sent = mutableListOf<String>()
+        model.reactSeam = { id, value, remove -> sent.add("$id $value ${if (remove) "remove" else "add"}"); true }
+        model.handle(ServerFrame.SocketOpen)
+        model.handle(
+            ServerFrame.Snapshot(
+                listOf(
+                    NetworkSnapshot(
+                        id = 1, state = ConnectionState.Connected, nick = "me",
+                        channels = listOf(ChannelSnapshot(name = "#lurker", topic = null, members = emptyList())),
+                    ),
+                ),
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
+            ),
+        )
+        model.handle(backlog(listOf(line(1))))
+        val key = BufferKey(networkId = 1, target = "#lurker")
+
+        model.handle(reactSupport1(""","canReact":false,"canAddReaction":true,"canRemoveReaction":false,"canReply":true"""))
+        model.send(key, "/react 🎉")
+        assertEquals(listOf("1 🎉 add"), sent)
+
+        sent.clear()
+        model.handle(ServerFrame.ReactSupport(networkId = 1, support = TagSupport.nothing))
+        model.send(key, "/react 😂")
+        assertEquals(emptyList(), sent)
+        assertEquals("this network can't carry reactions right now", model.state.messages[key.id]?.lastOrNull()?.text)
+    }
 
     /**
      * Pins the unit of the limit. Swift's `count` is grapheme clusters for free; a UTF-16

@@ -4,8 +4,11 @@
 package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
+import net.amiantos.lurkerkit.client.UploadLimits
 import net.amiantos.lurkerkit.model.BufferKey
+import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.model.IgnoreSet
@@ -20,6 +23,7 @@ import net.amiantos.lurkerkit.model.RelayBotSet
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.ReplyContext
 import net.amiantos.lurkerkit.model.ReplyParent
+import net.amiantos.lurkerkit.model.TagSupport
 import net.amiantos.lurkerkit.model.UnsentCorrelator
 import net.amiantos.lurkerkit.store.LurkerStore
 import net.amiantos.lurkerkit.store.UnsentLine
@@ -189,31 +193,66 @@ class RepliesTests {
 
     // MARK: - Reply gate
 
-    private fun replyTitle(message: Message, target: String, canReact: Boolean): String? =
+    private fun replyTitle(message: Message, target: String, support: TagSupport): String? =
         MessageActions.build(
             message,
-            scope = MessageActionScope(networkId = 1, isBookmarked = false, target = target, canReact = canReact),
+            scope = MessageActionScope(networkId = 1, isBookmarked = false, target = target, support = support),
         ).firstOrNull { it.key == MessageActionKey.Reply }?.title
 
     @Test
     fun testChannelReplyIsAlwaysOffered() {
-        assertEquals("Reply to bob", replyTitle(line(), target = "#c", canReact = false))
-        assertEquals("Reply to bob", replyTitle(line(msgid = null), target = "#c", canReact = false), "it still addresses them")
+        assertEquals("Reply to bob", replyTitle(line(), target = "#c", support = TagSupport.nothing))
+        assertEquals(
+            "Reply to bob", replyTitle(line(msgid = null), target = "#c", support = TagSupport.nothing),
+            "it still addresses them",
+        )
     }
 
     @Test
     fun testYourOwnLineIsTagOnly() {
-        assertEquals("Reply to yourself", replyTitle(line(isSelf = true), target = "#c", canReact = true))
-        assertNull(replyTitle(line(isSelf = true), target = "#c", canReact = false))
-        assertNull(replyTitle(line(isSelf = true, msgid = null), target = "#c", canReact = true))
+        assertEquals("Reply to yourself", replyTitle(line(isSelf = true), target = "#c", support = TagSupport.all))
+        assertNull(replyTitle(line(isSelf = true), target = "#c", support = TagSupport.nothing))
+        assertNull(replyTitle(line(isSelf = true, msgid = null), target = "#c", support = TagSupport.all))
     }
 
     @Test
     fun testADmIsTagOnly() {
-        assertEquals("Reply to bob", replyTitle(line(), target = "bob", canReact = true))
-        assertNull(replyTitle(line(), target = "bob", canReact = false))
-        assertNull(replyTitle(line(e2e = true), target = "bob", canReact = true))
-        assertNull(replyTitle(line(), target = "=bob", canReact = true), "a DCC chat carries no tags")
+        assertEquals("Reply to bob", replyTitle(line(), target = "bob", support = TagSupport.all))
+        assertNull(replyTitle(line(), target = "bob", support = TagSupport.nothing))
+        assertNull(replyTitle(line(e2e = true), target = "bob", support = TagSupport.all))
+        assertNull(replyTitle(line(), target = "=bob", support = TagSupport.all), "a DCC chat carries no tags")
+    }
+
+    /**
+     * lurker#1101: the reply TAG is its own answer. irc.so carries it while refusing a reaction's
+     * take-back — the old single `canReact` was false there, so iOS never sent a reply tag — and a
+     * network that takes reactions but not the reply tag offers no tag-only reply.
+     */
+    @Test
+    fun testATagOnlyReplyAsksCanReplyAlone() {
+        assertEquals("Reply to yourself", replyTitle(line(isSelf = true), target = "#c", support = TagSupport.ircSo))
+        assertEquals("Reply to bob", replyTitle(line(), target = "bob", support = TagSupport.ircSo))
+        val reactionsOnly = TagSupport(canAddReaction = true, canRemoveReaction = true, canReply = false)
+        assertNull(replyTitle(line(isSelf = true), target = "#c", support = reactionsOnly))
+        assertNull(replyTitle(line(), target = "bob", support = reactionsOnly))
+    }
+
+    /** The store's accessor is what the chat screen asks before a channel reply goes PENDING. */
+    @Test
+    fun testCanReplyFollowsItsOwnFlagAndTheLink() {
+        val store = LurkerStore()
+        store.apply(ServerFrame.SocketOpen)
+        store.apply(
+            ServerFrame.Snapshot(
+                listOf(NetworkSnapshot(id = 1, state = ConnectionState.Connected, nick = "me", channels = emptyList())),
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
+            ),
+        )
+        assertFalse(store.state.canReply(networkId = 1), "nothing until the burst says so")
+        store.apply(ServerFrame.ReactSupport(networkId = 1, support = TagSupport.ircSo))
+        assertTrue(store.state.canReply(networkId = 1))
+        store.apply(ServerFrame.NetworkState(networkId = 1, state = ConnectionState.Reconnecting, nick = null))
+        assertFalse(store.state.canReply(networkId = 1))
     }
 
     @Test

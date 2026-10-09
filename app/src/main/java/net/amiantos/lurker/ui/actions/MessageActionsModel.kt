@@ -4,6 +4,7 @@
 package net.amiantos.lurker.ui.actions
 
 import net.amiantos.lurkerkit.commands.IgnoreArgs
+import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.LinkActionContext
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageAction
@@ -11,6 +12,7 @@ import net.amiantos.lurkerkit.model.MessageActionContext
 import net.amiantos.lurkerkit.model.MessageActionKey
 import net.amiantos.lurkerkit.model.MessageActionScope
 import net.amiantos.lurkerkit.model.MessageActions
+import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.support.Result
 import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import java.net.URI
@@ -65,6 +67,19 @@ data class ActionHeader(val title: String, val detail: String?, val spokenDetail
  * one. What's added here is only what the kit leaves to the screen: Ignore, and the header.
  */
 object MessageActionsModel {
+
+    /**
+     * The scope a long press reads, at the press: whether the line is saved, and which tags the
+     * network takes right now — all three, since a network can carry a reply's tag and a new reaction
+     * but refuse a take-back (irc.so, lurker#1101), and the kit asks each for its own action.
+     */
+    fun scope(state: ChatState, key: BufferKey, isBookmarked: Boolean): MessageActionScope =
+        MessageActionScope(
+            networkId = key.networkId,
+            isBookmarked = isBookmarked,
+            target = key.target,
+            support = state.tagSupport(networkId = key.networkId),
+        )
 
     /** The rows for [subject], in menu order — empty when it offers nothing (no sheet then, as iOS). */
     fun rows(subject: ActionSubject): List<ActionRow> =
