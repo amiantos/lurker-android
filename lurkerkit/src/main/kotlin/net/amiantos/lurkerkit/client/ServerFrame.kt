@@ -21,6 +21,7 @@ import net.amiantos.lurkerkit.model.RelayBot
 import net.amiantos.lurkerkit.model.SettingOption
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Speaker
+import net.amiantos.lurkerkit.model.TagSupport
 import net.amiantos.lurkerkit.model.TypingActivity
 import java.time.Instant
 
@@ -336,10 +337,10 @@ internal sealed interface ServerFrame {
     ) : ServerFrame
 
     /**
-     * Live `react-support` (§7.2): whether reactions can go out on this network changed — the
-     * burst ended (CLIENTTAGDENY rides a 005 after the snapshot), or a later 005 moved it.
+     * Live `react-support` (§7.2): which tags can go out on this network changed — the burst
+     * ended (CLIENTTAGDENY rides a 005 after the snapshot), or a later 005 moved it.
      */
-    data class ReactSupport(val networkId: Int, val canReact: Boolean) : ServerFrame
+    data class ReactSupport(val networkId: Int, val support: TagSupport) : ServerFrame
 
     /**
      * WS `upload-progress`: how far along the server is with an upload *this* device is
@@ -671,10 +672,10 @@ internal data class NetworkSnapshot(
     /** Peers whose DCC chat offer to us still awaits an answer. */
     val dccChatOffers: List<String> = emptyList(),
     /**
-     * Whether reactions (and reply tags) can be sent on this network (§5.1). False until the
-     * registration burst ends, then kept current by `react-support`.
+     * Which tags can be sent on this network — reactions, taking ours back, reply tags (§5.1).
+     * None until the registration burst ends, then kept current by `react-support`.
      */
-    val canReact: Boolean = false,
+    val tagSupport: TagSupport = TagSupport.nothing,
     /**
      * The network's channel-mode vocabulary (§5.1). ⚠ Null until the registration burst ends —
      * "unknown", not the RFC defaults — then kept current by `mode-spec`.

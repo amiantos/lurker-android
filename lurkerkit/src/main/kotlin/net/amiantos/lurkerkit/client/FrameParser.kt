@@ -51,6 +51,7 @@ import net.amiantos.lurkerkit.model.SettingType
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Speaker
 import net.amiantos.lurkerkit.model.SystemLevel
+import net.amiantos.lurkerkit.model.TagSupport
 import net.amiantos.lurkerkit.model.TypingActivity
 import net.amiantos.lurkerkit.model.UploadItem
 import net.amiantos.lurkerkit.model.UploadsPage
@@ -658,7 +659,7 @@ internal object FrameParser {
                 pinned = network.strings("pinned") ?: emptyList(),
                 dccChats = nonEmptyStrings(network["dccChats"]),
                 dccChatOffers = nonEmptyStrings(network["dccChatOffers"]),
-                canReact = network.bool("canReact"),
+                tagSupport = tagSupport(network),
                 modeSpec = parseModeSpec(network["modeSpec"]),
             )
         }
@@ -667,6 +668,24 @@ internal object FrameParser {
             globalIgnores = obj.objects("globalIgnores").map(::parseIgnoreRule),
             uploadLimits = advertisedUploadLimits(obj),
             cursor = obj.longOrNull("cursor"),
+        )
+    }
+
+    /**
+     * The `canReact` family off a snapshot entry or a `react-support` frame (§5.1, lurker#1101).
+     *
+     * ⚠ Absent is not false. A server that predates the split sends only `canReact`, and then it
+     * covers all three; one that sends the split means `canReact` as "both reaction directions"
+     * (= `canRemoveReaction`), which is never the answer for adding one or for a reply's tag —
+     * irc.so allows those and denies the take-back. So each field falls back to `canReact` only
+     * when the key isn't there.
+     */
+    fun tagSupport(obj: JsonObject): TagSupport {
+        val legacy = obj.bool("canReact")
+        return TagSupport(
+            canAddReaction = obj.bool("canAddReaction", legacy),
+            canRemoveReaction = obj.bool("canRemoveReaction", legacy),
+            canReply = obj.bool("canReply", legacy),
         )
     }
 
@@ -1212,7 +1231,7 @@ internal object FrameParser {
         // `react-support` is network-scoped state on a `:server:<id>` carrier, like those above.
         if (obj.string("type") == "react-support") {
             val networkId = obj.intOrNull("networkId") ?: return ServerFrame.Ignored
-            return ServerFrame.ReactSupport(networkId = networkId, canReact = obj.bool("canReact"))
+            return ServerFrame.ReactSupport(networkId = networkId, support = tagSupport(obj))
         }
         // …and so is `mode-spec`. Below the guard it would land in the server log as a line with
         // no text, and the channel settings would wait forever for a vocabulary that came.

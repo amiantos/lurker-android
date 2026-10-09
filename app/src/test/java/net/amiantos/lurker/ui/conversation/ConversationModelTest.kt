@@ -3,8 +3,13 @@
 
 package net.amiantos.lurker.ui.conversation
 
+import net.amiantos.lurker.ui.message.MessageListContext
+import net.amiantos.lurker.ui.message.MessageListLayout
+import net.amiantos.lurker.ui.message.MessageTextStyle
+import net.amiantos.lurker.ui.message.ReactionContext
 import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.shell.StateSymbol
+import net.amiantos.lurker.ui.theme.LurkerColors
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
@@ -15,12 +20,16 @@ import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.MessageReaction
 import net.amiantos.lurkerkit.model.MessageRow
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.PresenceState
+import net.amiantos.lurkerkit.model.Reactions
+import net.amiantos.lurkerkit.model.RunPosition
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.model.StatusLight
+import net.amiantos.lurkerkit.model.TagSupport
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
 import org.junit.Assert.assertEquals
@@ -313,5 +322,62 @@ class ConversationModelTest {
         assertTrue(ConversationModel.followsTail(0, 150, 200))
         assertFalse(ConversationModel.followsTail(0, 250, 200))
         assertFalse(ConversationModel.followsTail(1, 0, 200))
+    }
+
+    // MARK: - Reaction chips (lurker#1101)
+
+    /**
+     * Each chip asks the kit's toggle rule with its own `mine`: on irc.so — a reaction goes out, a
+     * take-back doesn't — our own chip can't toggle (its tap opens the sheet, which says why) while
+     * anyone else's still adds ours. One "can react" flag for the whole row would have sent a removal
+     * the server refuses in silence.
+     */
+    @Test
+    fun `on irc_so our own chip opens the sheet and anyone else's adds ours`() {
+        val ircSo = TagSupport(canAddReaction = true, canRemoveReaction = false, canReply = true)
+        val line = Message(
+            id = 7, type = EventType.Message, nick = "alice", text = "hi", msgid = "x",
+            reactions = listOf(MessageReaction("me", "👍", isSelf = true), MessageReaction("bob", "🎉", isSelf = false)),
+        )
+        val rows = listOf(MessageRow.Bubble(line, RunPosition.solo))
+        fun chips(support: TagSupport): List<Pair<String, Boolean>> {
+            val context = MessageListContext.over(
+                rows,
+                style = MessageTextStyle(colors = LurkerColors.Dark),
+                reactions = ReactionContext(
+                    groups = { Reactions.groups(it.reactions.orEmpty()) },
+                    canToggle = { message -> ConversationModel.chipToggles(message, channel.target, support) },
+                    showsAdd = { true },
+                    onToggle = { _, _ -> },
+                    onOpen = {},
+                ),
+            )
+            return MessageListLayout.reactions(line, context)!!.chips.map { it.group.value to it.canToggle }
+        }
+        assertEquals(listOf("👍" to false, "🎉" to true), chips(ircSo))
+        assertEquals(
+            listOf("👍" to true, "🎉" to true),
+            chips(TagSupport(canAddReaction = true, canRemoveReaction = true, canReply = true)),
+        )
+        assertEquals(listOf("👍" to false, "🎉" to false), chips(TagSupport.nothing))
+    }
+
+    /**
+     * The frame's inputs carry what goes out right now, and compare on it: our own socket dropping
+     * changes no network row, yet every chip stops toggling.
+     */
+    @Test
+    fun `the inputs carry tag support and compare on it`() {
+        val ircSo = TagSupport(canAddReaction = true, canRemoveReaction = false, canReply = true)
+        val state = ChatState(
+            connection = SocketStatus.Connected,
+            networks = mapOf(1 to libera.copy(tagSupport = ircSo)),
+        )
+        val projector = ConversationProjector(channel, BufferKind.Channel)
+        val first = projector.project(state)
+        assertEquals(ircSo, first.support)
+        val dropped = projector.project(state.copy(connection = SocketStatus.Reconnecting))
+        assertEquals(TagSupport.nothing, dropped.support)
+        assertFalse(ConversationInputs.same(first, dropped))
     }
 }

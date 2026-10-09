@@ -408,11 +408,13 @@ internal object ComposerModel {
      * real reply, pending above the composer. In a channel the composer also addresses its author,
      * which is what a client without replies sees (and what the quote hides for us). On your own
      * line, or in a DM, there's nobody to address: the tag is all it is, so it needs the network to
-     * carry one right now ([canReact], re-checked at the tap).
+     * carry one right now ([canReply], re-checked at the tap).
      *
-     * ⚠ Unlike the web, a channel reply needs the tags to go out too before it's PENDING: the strip
-     * says "Replying to alice", and on a network that can't carry the tag right now that would be a
-     * promise the server then quietly breaks with a plain line. The address still goes in.
+     * ⚠ Unlike the web, a channel reply needs its tag to go out too ([canReply]) before it's PENDING:
+     * the strip says "Replying to alice", and on a network that can't carry the tag right now that
+     * would be a promise the server then quietly breaks with a plain line. The address still goes in.
+     * `canReply`, not whether reactions go out: irc.so takes a reply's tag and refuses a reaction's
+     * take-back (lurker#1101).
      *
      * Reply again to the same author in a channel keeps the address the first Reply put there, so a
      * cancel may still take it back. Any other pending reply goes first, with its address — or the
@@ -421,11 +423,11 @@ internal object ComposerModel {
      *
      * Null when the line has no author to reply to.
      */
-    fun replyPlan(message: Message, target: String, canReact: Boolean, pending: PendingReply?): ReplyPlan? {
+    fun replyPlan(message: Message, target: String, canReply: Boolean, pending: PendingReply?): ReplyPlan? {
         val nick = message.nick
         if (nick.isNullOrEmpty()) return null
         val unaddressed = message.isSelf || Replies.isPrivate(target)
-        val started = Replies.replyable(message, target = target) && canReact
+        val started = Replies.replyable(message, target = target) && canReply
         val keepsAddress = started && !unaddressed && pending?.addressed == true &&
             NickCompletion.sameNick(pending.nick, nick)
         return ReplyPlan(
@@ -435,6 +437,13 @@ internal object ComposerModel {
             marksAddressed = started,
         )
     }
+
+    /**
+     * [replyPlan] as the composer asks it, at the tap: whether a reply's tag goes out on [key]'s
+     * network right now is `ChatState.canReply` — its own answer, not whether reactions do.
+     */
+    fun replyPlan(message: Message, key: BufferKey, state: ChatState, pending: PendingReply?): ReplyPlan? =
+        replyPlan(message, key.target, canReply = state.canReply(networkId = key.networkId), pending = pending)
 
     /** The strip: the pending reply if there is one, else the away strip if you're away, else none. */
     fun strip(reply: PendingReply?, away: AwayStrip?): Strip = when {

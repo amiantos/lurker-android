@@ -73,12 +73,12 @@ data class Network(
      */
     val blocked: Boolean = false,
     /**
-     * Whether a reaction — or a reply's tag — can go out on this network as the server last
-     * said (`canReact` on the snapshot, then `react-support`). **Read through
-     * `ChatState.canReact(networkId:)`**, which also requires the network to be connected: the
-     * flag describes the last registration, and a dropped link carries nothing.
+     * Which client tags can go out on this network as the server last said — a reaction, taking
+     * one of ours back, a reply's tag (the snapshot, then `react-support`). **Read through
+     * `ChatState.tagSupport(networkId:)`** and its accessors, which also require the network to
+     * be connected: this describes the last registration, and a dropped link carries nothing.
      */
-    val canReact: Boolean = false,
+    val tagSupport: TagSupport = TagSupport.nothing,
     /**
      * The network's channel-mode vocabulary (lurker#727) — which letters are lists, flags and
      * params, its PREFIX ladder, MODES and TOPICLEN.
@@ -128,6 +128,32 @@ data class Network(
          * lying in the one place the fix didn't reach.
          */
         const val unnamedDisplayName = "Unnamed network"
+    }
+}
+
+/**
+ * What a network lets this client's tags carry (§5.1): a reaction, taking one of ours back, and a
+ * reply's tag — three answers, not one, because a network can allow some and deny others. irc.so's
+ * UnrealIRCd takes `+draft/react` and `+reply` but denies `+draft/unreact` (lurker#1101), and a
+ * reply's tag needs no echo-message, so it can be allowed where reactions aren't.
+ *
+ * ⚠ Resolved at parse time from the server's four booleans (`FrameParser.tagSupport`): a server
+ * that predates the split sends only `canReact`, which then stands for all three.
+ */
+data class TagSupport(
+    /** A `react` verb without `remove` can go out. */
+    val canAddReaction: Boolean,
+    /** A `react` with `remove: true` can go out. The server refuses a removal otherwise, silently. */
+    val canRemoveReaction: Boolean,
+    /**
+     * A line sent with `replyTo` carries its reply tag. Where it can't, it still goes out, as a
+     * plain line.
+     */
+    val canReply: Boolean,
+) {
+    companion object {
+        /** Nothing goes out: before the burst ends, and on a link that's down. */
+        val nothing = TagSupport(canAddReaction = false, canRemoveReaction = false, canReply = false)
     }
 }
 

@@ -40,9 +40,10 @@ import net.amiantos.lurkerkit.model.ReactionGroup
  * further lines rather than scrolling, so every chip is reachable without a gesture the message list
  * would fight over.
  *
- * Tapping a chip adds our reaction or takes it back, when [ReactionChips.canToggle] says one can go
- * out right now; when it can't, the tap opens the reaction sheet instead of sending something the
- * server would refuse in silence. The trailing add chip — always there while the line has reactions,
+ * Tapping a chip adds our reaction or takes it back, when [ReactionChips.Chip.canToggle] says that can
+ * go out right now — and the two can differ: irc.so takes a reaction but not a take-back (lurker#1101),
+ * so there our own chip can't toggle while anyone else's can. When it can't, the tap opens the reaction
+ * sheet instead of sending something the server would refuse in silence, and the sheet says why. The trailing add chip — always there while the line has reactions,
  * as Slack does, unless `showsAdd` is off (a notice, an encrypted line) — opens the sheet too, which is
  * also where a touch screen sees who gave what. A long press on the row of chips opens it as well
  * (`RowPress.Reactions`, resolved by the row).
@@ -62,8 +63,10 @@ internal fun ReactionChipRow(
         horizontalArrangement = Arrangement.spacedBy(CHIP_GAP),
         verticalArrangement = Arrangement.spacedBy(CHIP_GAP),
     ) {
-        for (group in chips.groups) {
-            ReactionChip(group, canToggle = chips.canToggle, style = style, textStyle = textStyle, onToggle = onToggle, onOpen = onOpen)
+        for (chip in chips.chips) {
+            ReactionChip(
+                chip.group, canToggle = chip.canToggle, style = style, textStyle = textStyle, onToggle = onToggle, onOpen = onOpen,
+            )
         }
         if (chips.showsAdd && onOpen != null) AddChip(style = style, textStyle = textStyle, onOpen = onOpen)
     }

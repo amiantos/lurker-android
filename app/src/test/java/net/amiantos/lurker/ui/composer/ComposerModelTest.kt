@@ -9,14 +9,19 @@ import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.ComposerDraft
+import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.model.SpeakerMap
+import net.amiantos.lurkerkit.model.TagSupport
+import net.amiantos.lurkerkit.store.ChatState
+import net.amiantos.lurkerkit.store.SocketStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -176,7 +181,7 @@ class ComposerModelTest {
 
     @Test
     fun `a channel reply starts pending and addresses its author`() {
-        val plan = ComposerModel.replyPlan(line(), "#lurker", canReact = true, pending = null)!!
+        val plan = ComposerModel.replyPlan(line(), "#lurker", canReply = true, pending = null)!!
         assertFalse(plan.cancelFirst)
         assertEquals(7L, plan.start?.messageId)
         assertFalse(plan.start!!.addressed)
@@ -186,18 +191,18 @@ class ComposerModelTest {
 
     @Test
     fun `without tags right now a channel Reply only addresses — no promise in the strip`() {
-        val plan = ComposerModel.replyPlan(line(), "#lurker", canReact = false, pending = null)!!
+        val plan = ComposerModel.replyPlan(line(), "#lurker", canReply = false, pending = null)!!
         assertNull(plan.start)
         assertEquals("alice", plan.address)
         assertFalse(plan.marksAddressed)
         // A line with no msgid can't be replied to either.
-        assertNull(ComposerModel.replyPlan(line(msgid = null), "#lurker", canReact = true, pending = null)!!.start)
+        assertNull(ComposerModel.replyPlan(line(msgid = null), "#lurker", canReply = true, pending = null)!!.start)
     }
 
     @Test
     fun `your own line and a DM address nobody`() {
-        assertNull(ComposerModel.replyPlan(line(isSelf = true), "#lurker", canReact = true, pending = null)!!.address)
-        val dm = ComposerModel.replyPlan(line(), "alice", canReact = true, pending = null)!!
+        assertNull(ComposerModel.replyPlan(line(isSelf = true), "#lurker", canReply = true, pending = null)!!.address)
+        val dm = ComposerModel.replyPlan(line(), "alice", canReply = true, pending = null)!!
         assertNull(dm.address)
         assertEquals(7L, dm.start?.messageId)
     }
@@ -205,17 +210,39 @@ class ComposerModelTest {
     @Test
     fun `replying again to the same author keeps the address, anyone else cancels first`() {
         val pending = PendingReply(messageId = 3, nick = "Alice", type = EventType.Message, text = "x", isSelf = false, addressed = true)
-        val again = ComposerModel.replyPlan(line(), "#lurker", canReact = true, pending = pending)!!
+        val again = ComposerModel.replyPlan(line(), "#lurker", canReply = true, pending = pending)!!
         assertFalse(again.cancelFirst)
         assertTrue(again.start!!.addressed)
-        val other = ComposerModel.replyPlan(line(nick = "bob"), "#lurker", canReact = true, pending = pending)!!
+        val other = ComposerModel.replyPlan(line(nick = "bob"), "#lurker", canReply = true, pending = pending)!!
         assertTrue(other.cancelFirst)
         assertFalse(other.start!!.addressed)
     }
 
+    /**
+     * lurker#1101: the composer asks `canReply` — its own answer. irc.so carries a reply's tag while
+     * refusing a reaction's take-back, so a channel reply goes PENDING there, and a DM reply (tag-only)
+     * starts at all; a network that takes reactions but not the reply tag starts none.
+     */
+    @Test
+    fun `the reply gate is canReply alone`() {
+        fun state(support: TagSupport) = ChatState(
+            connection = SocketStatus.Connected,
+            networks = mapOf(1 to Network(id = 1, name = "irc.so", state = ConnectionState.Connected, nick = "me", tagSupport = support)),
+        )
+        val ircSo = state(TagSupport(canAddReaction = true, canRemoveReaction = false, canReply = true))
+        val channel = BufferKey(1, "#lurker")
+        assertEquals(7L, ComposerModel.replyPlan(line(), channel, ircSo, pending = null)!!.start?.messageId)
+        assertEquals(7L, ComposerModel.replyPlan(line(), BufferKey(1, "alice"), ircSo, pending = null)!!.start?.messageId)
+        val reactionsOnly = state(TagSupport(canAddReaction = true, canRemoveReaction = true, canReply = false))
+        val plan = ComposerModel.replyPlan(line(), channel, reactionsOnly, pending = null)!!
+        assertNull(plan.start)
+        assertEquals("alice", plan.address)
+        assertNull(ComposerModel.replyPlan(line(), BufferKey(1, "alice"), reactionsOnly, pending = null)!!.start)
+    }
+
     @Test
     fun `a line with no author has nothing to reply to`() {
-        assertNull(ComposerModel.replyPlan(line(nick = ""), "#lurker", canReact = true, pending = null))
+        assertNull(ComposerModel.replyPlan(line(nick = ""), "#lurker", canReply = true, pending = null))
     }
 
     @Test

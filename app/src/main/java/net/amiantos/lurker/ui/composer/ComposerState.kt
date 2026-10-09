@@ -593,7 +593,7 @@ internal class ComposerState(
      * and a cancel un-addresses. See `ComposerModel.replyPlan` for the rules.
      */
     fun startReply(message: Message) {
-        val plan = ComposerModel.replyPlan(message, key.target, model.state.canReact(networkId = key.networkId), reply) ?: return
+        val plan = ComposerModel.replyPlan(message, key, model.state, reply) ?: return
         var focuses = false
         batch {
             if (plan.cancelFirst) cancelReply()

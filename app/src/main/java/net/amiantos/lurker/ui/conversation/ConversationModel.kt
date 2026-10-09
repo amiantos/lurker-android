@@ -22,6 +22,7 @@ import net.amiantos.lurkerkit.model.MessageRows
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.ReactionGroup
 import net.amiantos.lurkerkit.model.Reactions
+import net.amiantos.lurkerkit.model.TagSupport
 import net.amiantos.lurkerkit.model.RelayBotSet
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.Settings
@@ -61,7 +62,8 @@ import net.amiantos.lurkerkit.model.PrefixMode
  *    changing a message.
  *  - [reactionsRevision]: reactions ride beside the rows, so a `reaction` frame changes a chip with no
  *    message changing. One integer per buffer; [reactions] rides along uncompared.
- *  - [canReact]: whether a chip can be tapped moves with the network and our own socket.
+ *  - [support]: whether a chip can be tapped moves with the network and our own socket — and with
+ *    which tags the network takes, since ours and anyone else's can differ (lurker#1101).
  */
 internal class ConversationInputs(
     val key: BufferKey,
@@ -79,7 +81,8 @@ internal class ConversationInputs(
     val reactionsRevision: Int,
     /** Not compared — [reactionsRevision] stands for it. */
     val reactions: Map<Long, List<MessageReaction>>,
-    val canReact: Boolean,
+    /** `ChatState.tagSupport` for this buffer's network, resolved once per frame for every chip. */
+    val support: TagSupport,
     val modePrefixes: Map<String, MemberPrefix.Mark>,
     /** Who the in-body nick colouring looks for — see `ConversationModel.highlighterNicks`. */
     val highlighterNicks: List<String>,
@@ -108,7 +111,7 @@ internal class ConversationInputs(
                 old.typists == new.typists &&
                 old.rosterSettled == new.rosterSettled &&
                 old.reactionsRevision == new.reactionsRevision &&
-                old.canReact == new.canReact &&
+                old.support == new.support &&
                 old.modePrefixes == new.modePrefixes &&
                 old.highlighterNicks == new.highlighterNicks
     }
@@ -161,7 +164,7 @@ internal class ConversationProjector(private val key: BufferKey, private val kin
             rosterSettled = state.rosterSettled,
             reactionsRevision = state.reactionsRevision(key),
             reactions = state.reactions,
-            canReact = state.canReact(key.networkId),
+            support = state.tagSupport(networkId = key.networkId),
             modePrefixes = modePrefixes,
             highlighterNicks = highlighterNicks,
         )
@@ -174,6 +177,16 @@ internal class ConversationProjector(private val key: BufferKey, private val kin
  * there's nothing to draw. lurker-ios's `ChatViewController.apply` and the static helpers beside it.
  */
 internal object ConversationModel {
+
+    /**
+     * Whether tapping each of [message]'s chips can go out now — ours takes it back, anyone else's
+     * adds ours, and a network can allow one and not the other (irc.so takes a reaction but not a
+     * take-back, lurker#1101). The kit's `Reactions.canToggle` over the group's own `mine`, with the
+     * network's answer resolved once for the row (iOS's `ReactionContext.canToggle`). A chip that
+     * can't opens the sheet instead, which says why.
+     */
+    fun chipToggles(message: Message, target: String, support: TagSupport): (ReactionGroup) -> Boolean =
+        { group -> Reactions.canToggle(mine = group.mine, message = message, target = target, support = support) }
 
     /**
      * The messages this frame draws, filtered: iOS's `apply` filter chain, its `messages`.

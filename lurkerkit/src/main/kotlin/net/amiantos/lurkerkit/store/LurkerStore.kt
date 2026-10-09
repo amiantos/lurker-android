@@ -42,6 +42,7 @@ import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.model.Speaker
 import net.amiantos.lurkerkit.model.SpeakerMap
 import net.amiantos.lurkerkit.model.SystemLevel
+import net.amiantos.lurkerkit.model.TagSupport
 import net.amiantos.lurkerkit.model.TypingActivity
 import net.amiantos.lurkerkit.model.TypingEntry
 import net.amiantos.lurkerkit.model.WhoisResult
@@ -889,17 +890,40 @@ data class ChatState(
     }
 
     /**
-     * Whether a reaction — or a reply's tags — can go out on this network right now: it's
-     * connected and its last registration said yes (§5.1). The server's own gate needs a reply
-     * tag allowed too, so this is also the nearest signal for "a reply will carry its tag".
+     * Which tags can go out on this network right now: it's connected and its last registration
+     * said so (§5.1). `.nothing` otherwise. Each answer is its own — irc.so takes a reaction and a
+     * reply's tag but not a take-back (lurker#1101) — so read the field you mean. Resolve it once
+     * for everything drawn together (a row's chips, the sheet), not per control.
      *
      * ⚠ Our own socket first, like `presence`: while it's down `network.state` is whatever the
      * last snapshot said, and nothing we send goes anywhere.
      */
-    fun canReact(networkId: Int?): Boolean {
-        if (!canWrite(networkId = networkId) || networkId == null) return false
-        return networks[networkId]?.canReact == true
+    fun tagSupport(networkId: Int?): TagSupport {
+        if (!canWrite(networkId = networkId) || networkId == null) return TagSupport.nothing
+        return networks[networkId]?.tagSupport ?: TagSupport.nothing
     }
+
+    /**
+     * Whether a line sent with `replyTo` here right now carries its reply tag — what makes a
+     * reply a reply rather than a plain line.
+     */
+    fun canReply(networkId: Int?): Boolean = tagSupport(networkId = networkId).canReply
+
+    /** Whether we've reacted `value` to this line — what makes choosing it a take-back. */
+    fun isOwnReaction(value: String, messageId: Long): Boolean =
+        reactions[messageId].orEmpty().any { it.isSelf && it.value == value }
+
+    /**
+     * Whether choosing `value` on `message` (in `target`, on `networkId`) would do anything right
+     * now — `Reactions.canToggle` for a caller that doesn't already know whether the value is
+     * ours: the send itself (`ChatViewModel.toggleReaction`) and a tap re-checked against the
+     * store. Where a `ReactionGroup` is in hand, ask `Reactions.canToggle` with its `mine`.
+     */
+    fun canToggleReaction(value: String, message: Message, target: String, networkId: Int?): Boolean =
+        Reactions.canToggle(
+            mine = isOwnReaction(value, messageId = message.id), message = message, target = target,
+            support = tagSupport(networkId = networkId),
+        )
 
     /**
      * The newest lines of every loaded network buffer, for a `sync-reactions` after a resume:
@@ -1549,7 +1573,9 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                         // its burst ends the server can't say what it allows (it re-announces
                         // `react-support` then). Holding the old answer would offer React on the
                         // strength of the last connection's CLIENTTAGDENY.
-                        if (connection != ConnectionState.Connected) updated = updated.copy(canReact = false)
+                        if (connection != ConnectionState.Connected) {
+                            updated = updated.copy(tagSupport = TagSupport.nothing)
+                        }
                         // Same for the mode vocabulary: the next registration restates it once
                         // its burst ends, and until then the last link's answer is not this one's.
                         if (connection != ConnectionState.Connected) updated = updated.copy(modeSpec = null)
@@ -1581,7 +1607,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                         state
                     } else {
                         state.copy(
-                            networks = state.networks + (frame.networkId to network.copy(canReact = frame.canReact)),
+                            networks = state.networks + (frame.networkId to network.copy(tagSupport = frame.support)),
                         )
                     }
                 }
@@ -2057,7 +2083,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                         // a stale "away" divider in every buffer with no event able to retract
                         // it.
                         away = snapshot.away,
-                        canReact = snapshot.canReact,
+                        tagSupport = snapshot.tagSupport,
                         modeSpec = snapshot.modeSpec,
                     )
                 } else {
@@ -2072,7 +2098,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                     // and re-reads the roster.
                     nets[snapshot.id] = Network(
                         id = snapshot.id, name = null, state = snapshot.state, nick = snapshot.nick,
-                        away = snapshot.away, canReact = snapshot.canReact, modeSpec = snapshot.modeSpec,
+                        away = snapshot.away, tagSupport = snapshot.tagSupport, modeSpec = snapshot.modeSpec,
                     )
                 }
                 for (channel in snapshot.channels) {

@@ -588,7 +588,7 @@ private fun ReactionsPreview(dark: Boolean) {
             style = style,
             reactions = ReactionContext(
                 groups = { Reactions.groups(it.reactions.orEmpty()) },
-                canToggle = { true },
+                canToggle = { { true } },
                 showsAdd = { true },
                 onToggle = { _, _ -> },
                 onOpen = {},

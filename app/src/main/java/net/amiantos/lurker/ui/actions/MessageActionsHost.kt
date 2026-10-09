@@ -35,7 +35,6 @@ import net.amiantos.lurker.platform.confirmCopy
 import net.amiantos.lurker.ui.message.RowPress
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.Message
-import net.amiantos.lurkerkit.model.MessageActionScope
 import net.amiantos.lurkerkit.session.ChatViewModel
 
 /** Which of a conversation's message sheets is up. */
@@ -74,11 +73,8 @@ internal class MessageActionsState(private val model: ChatViewModel, private val
             is RowPress.Line -> actions(
                 ActionSubject.Line(
                     press.message,
-                    MessageActionScope(
-                        networkId = key.networkId,
-                        isBookmarked = model.isBookmarked(press.message.id),
-                        target = key.target,
-                        canReact = model.state.canReact(key.networkId),
+                    MessageActionsModel.scope(
+                        model.state, key, isBookmarked = model.isBookmarked(press.message.id),
                     ),
                 ),
             )
@@ -205,11 +201,10 @@ internal fun MessageActionsHost(
                 inputs = inputs,
                 onChoose = { value ->
                     // Re-checked against the store at the tap, not trusted from the frame the buttons
-                    // were drawn on: the network may have dropped since. ⚠ A WRITE.
-                    when {
-                        !ReactionSheetInputs.of(model.state, message, key).canReact -> ReactionChoice.Refused
-                        model.toggleReaction(messageId = message.id, value = value) -> ReactionChoice.Sent
-                        else -> ReactionChoice.NotConnected
+                    // were drawn on: the network may have dropped since, and a take-back it refuses
+                    // never goes out. ⚠ A WRITE.
+                    ReactionSheetModel.choose(model.state, message, key, value) {
+                        model.toggleReaction(value, message = message, key = key)
                     }
                 },
                 onDismiss = state::dismiss,

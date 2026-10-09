@@ -3,11 +3,19 @@
 
 package net.amiantos.lurker.ui.actions
 
+import net.amiantos.lurkerkit.model.BufferKey
+import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.MessageReaction
+import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.ReactionGroup
+import net.amiantos.lurkerkit.model.TagSupport
+import net.amiantos.lurkerkit.store.ChatState
+import net.amiantos.lurkerkit.store.SocketStatus
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -68,8 +76,86 @@ class ReactionSheetModelTest {
     @Test
     fun `ours are the groups we're in, and the spoken form names everyone`() {
         val groups = listOf(ReactionGroup("👍", listOf("bob", "me"), mine = true), ReactionGroup("🎉", listOf("carol"), mine = false))
-        assertEquals(setOf("👍"), ReactionSheetInputs(groups, canReact = true).mine)
+        assertEquals(setOf("👍"), ReactionSheetInputs(groups, canAdd = true, canRemove = true).mine)
         assertEquals("👍, 2: bob, me", ReactionSheetModel.spoken(groups[0]))
         assertEquals("bob, me", ReactionSheetModel.names(groups[0]))
+    }
+
+    // MARK: - What the network takes (lurker#1101)
+
+    private val key = BufferKey(1, "#lurker")
+    private val ircSo = TagSupport(canAddReaction = true, canRemoveReaction = false, canReply = true)
+    private val allTags = TagSupport(canAddReaction = true, canRemoveReaction = true, canReply = true)
+
+    /** Line 7 carries our 👍 and bob's 🎉, on a connected network that takes [support]. */
+    private fun state(support: TagSupport, connected: Boolean = true) = ChatState(
+        connection = if (connected) SocketStatus.Connected else SocketStatus.Reconnecting,
+        networks = mapOf(1 to Network(id = 1, name = "irc.so", state = ConnectionState.Connected, nick = "me", tagSupport = support)),
+        reactions = mapOf(
+            7L to listOf(MessageReaction("me", "👍", isSelf = true), MessageReaction("bob", "🎉", isSelf = false)),
+        ),
+    )
+
+    /**
+     * irc.so takes a new reaction and refuses a take-back: the picks and the field stay, our own value
+     * doesn't go, and the sheet says why under the list. Read as one flag, the sheet either hid
+     * everything (the server's `canReact` is false there) or offered a take-back it refuses in silence.
+     */
+    @Test
+    fun `on irc_so the sheet adds but never offers taking ours back`() {
+        val inputs = ReactionSheetInputs.of(state(ircSo), line(), key)
+        assertTrue("the picks and the field are there", inputs.canAdd)
+        assertFalse(inputs.canRemove)
+        assertFalse("ours: a take-back", inputs.works("👍"))
+        assertTrue("bob's adds ours", inputs.works("🎉"))
+        assertTrue("a new one", inputs.works("😂"))
+        assertTrue(inputs.noTakeBack)
+
+        val all = ReactionSheetInputs.of(state(allTags), line(), key)
+        assertTrue(all.works("👍"))
+        assertFalse(all.noTakeBack)
+        // Nothing of ours standing: nothing to explain.
+        assertFalse(ReactionSheetInputs(emptyList(), canAdd = true, canRemove = false).noTakeBack)
+        // Nothing goes out at all: the offline line says so instead.
+        val down = ReactionSheetInputs.of(state(ircSo, connected = false), line(), key)
+        assertFalse(down.canAdd)
+        assertFalse(down.noTakeBack)
+    }
+
+    /** A typed value that's ours is a take-back too, refused at the field rather than sent to nothing. */
+    @Test
+    fun `typing our own value on irc_so says why and won't submit`() {
+        val inputs = ReactionSheetInputs.of(state(ircSo), line(), key)
+        val ours = TypedReaction.of(" 👍 ", inputs)
+        assertTrue(ours.refused)
+        assertFalse(ours.canSubmit)
+        assertEquals(ReactionSheetModel.NO_TAKE_BACK, ours.problem)
+        val fresh = TypedReaction.of("lol", inputs)
+        assertTrue(fresh.canSubmit)
+        assertNull(fresh.problem)
+        // Too long says that, not the take-back.
+        assertEquals(ReactionSheetModel.TOO_LONG, TypedReaction.of("x".repeat(65), inputs).problem)
+        // Where the network takes it back, ours is a take-back like any other.
+        assertTrue(TypedReaction.of("👍", ReactionSheetInputs.of(state(allTags), line(), key)).canSubmit)
+    }
+
+    /**
+     * The tap is re-checked against the store and goes through the kit's one rule: on irc.so our own
+     * value is refused without anything going out; anything else goes, and a send with no socket says so.
+     */
+    @Test
+    fun `a choice the network would refuse never reaches the socket`() {
+        val sent = mutableListOf<String>()
+        fun choose(state: ChatState, value: String, goesOut: Boolean = true) =
+            ReactionSheetModel.choose(state, line(), key, value) {
+                sent.add(value)
+                goesOut
+            }
+        assertEquals(ReactionChoice.Refused, choose(state(ircSo), "👍"))
+        assertEquals(ReactionChoice.Sent, choose(state(ircSo), "🎉"))
+        assertEquals(ReactionChoice.NotConnected, choose(state(ircSo), "😂", goesOut = false))
+        assertEquals(ReactionChoice.Sent, choose(state(allTags), "👍"))
+        assertEquals(ReactionChoice.Refused, choose(state(allTags, connected = false), "🎉"))
+        assertEquals(listOf("🎉", "😂", "👍"), sent)
     }
 }
