@@ -63,8 +63,14 @@ data class NotificationTap(
          *
          * Port note: the two arms are written out to match what the Swift ones accept.
          * - A number is read the way an `NSNumber` bridges to `Int`: only when it is exactly a
-         *   whole number, so `7.0` is 7 and `7.5` is nothing. A `Boolean` is NOT a number here.
-         *   (JSON `true` is 1 on iOS, where it arrives as an `NSNumber`.)
+         *   whole number, so `7.0` is 7 and `7.5` is nothing. A `Boolean` is NOT a number here,
+         *   and not on iOS either since lurker-ios#229: JSON `true` arrives there as an
+         *   `NSNumber` that `as? Int` would read as 1, and LurkerKit refuses it by type ("it isn't
+         *   an id").
+         *
+         * Port note: LurkerKit's `intField` is internal, shared with `RelayNotification`, which
+         * reads the same keys out of a relayed push. That file isn't ported (lurker-android#80
+         * hands a relayed push to the app as FCM's string map instead), so this stays private.
          * - A string is read the way `Int(String)` reads it: an optional sign and ASCII digits,
          *   nothing else. `toLongOrNull` alone would also take other scripts' digits (`"٧"`).
          */
