@@ -1,5 +1,5 @@
 {
-  "pin": "e00fb77f3b9988cc93f4d55dd0cfc7439198bd29",
+  "pin": "9988e47ea7179b8ff48068470878f3ccd124e681",
   "tranches": [
     {
       "id": "T1",
@@ -188,6 +188,15 @@
         "Commands/ColorMarkup.swift",
         "Commands/TextEdit.swift"
       ]
+    },
+    {
+      "id": "S6",
+      "title": "Sync to lurker-ios 9988e47",
+      "about": "lurker-ios#234 and #235 (lurker#1098, lurker#1099), in-app notifications and the composer's status row: `StatusNotification` (the server's `notify` verdict picked into a kind and gated on its toggle; a friend's witnessed offline→online flip; which bundled sound a kind plays) and `StatusToast` / `StatusToastQueue` (what a toast surface shows, one at a time, a burst from one source updating in place, a notice first) are new; `Message` carries the server's `notify`/`dm`/`notifyAlways`/`selfKicked`, `FrameParser` reads them, `ChatState.alreadyHolds` is the store's own live dedupe shared with the alert, and `ChatViewModel.onNotify` fires after `handle` applies a frame it read the prior state for. All ported. `IRCFormatting`'s change was a doc comment moving back onto `readDigits`, which the Kotlin already had in place.",
+      "files": [
+        "Model/StatusNotification.swift",
+        "Model/StatusToast.swift"
+      ]
     }
   ],
   "notes": {
@@ -267,7 +276,9 @@
     "Client/RelayNotification.swift": "Not ported: iOS's extension rebuilds an APNs-shaped notification. Android hands the decrypted body to `:app` as the string map a direct FCM push carries (`RelayPush.flatten`), so one parser (`PushMessage`) and one tap path (`NotificationTap`) read both. No 4 KB plaintext cap: FCM caps the data message, ciphertext included, at 4 KB, so a bigger plaintext can't arrive. Collapsing by tag is `:app`'s `PushNotifier`.",
     "Client/ProvisioningProfile.swift": "Not ported: which APNs gateway issued the token, read from `embedded.mobileprovision`. FCM has one gateway.",
     "Commands/ColorMarkup.swift": "Cells, the bare head and `prefix` are grapheme clusters (`graphemeBoundaries`), as LurkerKit's `Character`s; a CRLF is one cell. `chatBody` alone builds its cells per UTF-16 unit, because `SpoilerMarkup.layout` must be read in the units `apply` walks — so it agrees with `apply` (and the web) where LurkerKit doesn't: a combining mark after a `|` or `\\`. `CommandParser` cuts by unit, so a `/` or a space wearing a mark is read differently by the two; Port note. `ColorSpan` is an immutable data class.",
-    "Commands/TextEdit.swift": "Snaps to grapheme clusters where LurkerKit asks `rangeOfComposedCharacterSequence`, which ends between the halves of a CRLF and treats a regional indicator wearing a mark differently. Against the Swift, 122 of 4,000 generated edits fell elsewhere (115 at a CRLF), each giving the same text; these never cut a cluster. Returns `TextEdit.Difference` (`TextRange` for `NSRange`)."
+    "Commands/TextEdit.swift": "Snaps to grapheme clusters where LurkerKit asks `rangeOfComposedCharacterSequence`, which ends between the halves of a CRLF and treats a regional indicator wearing a mark differently. Against the Swift, 122 of 4,000 generated edits fell elsewhere (115 at a CRLF), each giving the same text; these never cut a cluster. Returns `TextEdit.Difference` (`TextRange` for `NSRange`).",
+    "Model/StatusNotification.swift": "`id` is a `UUID` minted per instance, as in the Swift; the data class compares every field, which is the same answer as LurkerKit's `==` on `id` alone. `cameOnline(frame, before, now)` is internal, as the Swift's is. `sound(settings)` / `sound(kind, settings)` take the settings as a plain parameter (the Swift's `in:` label).",
+    "Model/StatusToast.swift": "`StatusToastQueue` is case 3 (a struct whose mutators return values): a plain mutable class with `private set` on `active` and `waiting`, one owner (a surface's presenter), never published. `presentNext` returns a `Presented(toast, hold: Duration)` for the Swift's named tuple."
   },
   "testNotes": {
     "NotificationTapTests.swift": {

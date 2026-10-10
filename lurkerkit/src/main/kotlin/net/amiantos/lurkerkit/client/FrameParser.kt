@@ -1482,6 +1482,10 @@ internal object FrameParser {
             replyToSelf = event.bool("replyToSelf"),
             // Only a 421 carries it, naming the verb the ircd didn't know.
             unknownCommand = if (type == EventType.Error) event.stringOrNull("unknownCommand") else null,
+            notify = event.bool("notify"),
+            dm = event.bool("dm"),
+            notifyAlways = event.bool("notifyAlways"),
+            selfKicked = event.bool("selfKicked"),
         )
     }
 

@@ -57,6 +57,7 @@ import net.amiantos.lurkerkit.model.HistoryCountBy
 import net.amiantos.lurkerkit.model.JoinNotice
 import net.amiantos.lurkerkit.model.MediaFetch
 import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.StatusNotification
 import net.amiantos.lurkerkit.model.ModeListResult
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NetworkAction
@@ -252,6 +253,13 @@ class ChatViewModel(
      * is never answered loses nothing. Not fired for a channel we're already in.
      */
     var onInvited: ((networkId: Int, channel: String, from: String) -> Unit)? = null
+
+    /**
+     * A live line the server says to alert about, with its kind's toggle on (see
+     * `StatusNotification`). The app decides whether it's worth showing — not for the buffer
+     * already on screen, not while backgrounded, where push has it.
+     */
+    var onNotify: ((StatusNotification) -> Unit)? = null
 
     /**
      * Where each raw line this device sent was typed, and when, by network and verb, oldest
@@ -2723,6 +2731,14 @@ class ChatViewModel(
      * does.
      */
     internal fun handle(frame: ServerFrame) {
+        // Read before the store moves: a came-online is a transition, and after `apply` the prior
+        // state is gone.
+        val cameOnline = StatusNotification.cameOnline(frame, before = store.state)
+        // Likewise a repeat: after `apply` every line is one the store holds.
+        var repeatsLine = false
+        if (frame is ServerFrame.Live) {
+            repeatsLine = store.state.alreadyHolds(frame.message, BufferKey(networkId = frame.networkId, target = frame.target).id)
+        }
         when (frame) {
             is ServerFrame.SettingsBootstrap, is ServerFrame.SettingsChanged, is ServerFrame.SettingsValues -> {
                 store.apply(frame)
@@ -2920,9 +2936,17 @@ class ChatViewModel(
                     ChannelEvent.Line(BufferKey(networkId = frame.networkId, target = frame.target), frame.message),
                 )
                 noteUnknownCommand(frame.networkId, frame.message)
+                // Not for a line already held — the store dropped it, and the alert went with it.
+                if (!repeatsLine) {
+                    StatusNotification.make(
+                        networkId = frame.networkId, target = frame.target, message = frame.message, settings = store.state.settings,
+                    )?.let { onNotify?.invoke(it) }
+                }
             }
             is ServerFrame.Snapshot ->
                 channelEventsSubject.tryEmit(ChannelEvent.Resynced)
+            is ServerFrame.PeerPresence ->
+                if (cameOnline != null) onNotify?.invoke(cameOnline)
             is ServerFrame.Invited -> {
                 val joined = store.state.buffers[BufferKey(networkId = frame.networkId, target = frame.channel).id]?.joined == true
                 // Someone ignored outright doesn't get to put a prompt in front of us; their

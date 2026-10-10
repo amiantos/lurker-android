@@ -709,6 +709,18 @@ data class ChatState(
     }
 
     /**
+     * Whether [message] is a persisted line this buffer already holds — a backlog/live overlap,
+     * which a live frame must not append twice, or alert about twice. Held lines count: a
+     * detached buffer keeps live ones in `heldLive` rather than `messages`. Id 0 is ephemeral
+     * and never a repeat.
+     */
+    internal fun alreadyHolds(message: Message, key: String): Boolean {
+        if (message.id == 0L) return false
+        return messages[key]?.any { it.id == message.id } == true ||
+            heldLive[key]?.any { it.id == message.id } == true
+    }
+
+    /**
      * What the app-icon badge should read: unread highlights across every buffer (lurker#490).
      *
      * Mirrors the server's `computeTotalHighlights`, which is what it stamps on each push
@@ -2259,9 +2271,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             var next = state
             val key = BufferKey(networkId = networkId, target = target).id
             val existing = next.messages[key].orEmpty()
-            // De-dupe backlog/live overlap by persisted id; id 0 is ephemeral and always
-            // appended.
-            if (message.id != 0L && existing.any { it.id == message.id }) return next
+            if (next.alreadyHolds(message, key)) return next
             // ⚠⚠ A channel row comes from a persisted line or not at all (§9.1: `channel-joined`
             // is the materialization signal, and our own join's line is the persisted one that
             // beats it). An ephemeral event can name a channel we're NOT in — a refused join's
