@@ -274,6 +274,13 @@ class SpoilerRoundTripTests {
         assertTrue(SpoilerMarkup.apply("||a||,b").endsWith("\u0003,b"))
     }
 
+    /** A keycap is not an ASCII character, but its first scalar is the digit the parser reads. */
+    @Test
+    fun testAKeycapIsACollision() {
+        val wire = SpoilerMarkup.apply("||a||1\uFE0F\u20E3")
+        assertTrue(wire.endsWith("a\u000399,991\uFE0F\u20E3"), wire.map { it.code }.toString())
+    }
+
     /**
      * ⚠ The trigger is ASCII `0`–`9`, because that is exactly what `IRCFormatting` reads after a
      * `\u0003`. `Char.isDigit` is true of some of these and none of them can start a colour

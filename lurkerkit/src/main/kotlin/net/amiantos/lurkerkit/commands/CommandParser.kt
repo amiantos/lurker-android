@@ -49,9 +49,12 @@ object CommandParser {
      * ⚠ Only the PAYLOAD is rewritten. Anything showing the user their own line back — a
      * failed-send notice, input history — must keep the TYPED text, so what they see and recall
      * is `||…||` rather than raw control codes.
+     *
+     * A body the composer coloured has its spoilers made inside the colour (`ColorMarkup`);
+     * anything else goes through `SpoilerMarkup.apply` unchanged.
      */
     private fun chatBody(text: String): String =
-        SpoilerMarkup.apply(text)
+        ColorMarkup.chatBody(text)
 
     /**
      * The line a composer sends for [draft], or null when there's nothing to send (empty, or only

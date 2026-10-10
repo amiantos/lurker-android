@@ -131,23 +131,19 @@ object IRCFormatting {
                 }
                 0x03 -> { // color: \x03[FG[,BG]]
                     flush()
-                    i += 1
-                    val (foreground, consumed) = readDigits(scalars, i)
-                    if (foreground == null) {
+                    val code = readColorCode(scalars, i)
+                    i = code.end
+                    val foreground = code.fg
+                    if (foreground != null) {
+                        fg = IRCColor.Slot(foreground)
+                        // A bare FG (no ,BG) leaves the existing bg untouched.
+                        val background = code.bg
+                        if (background != null) bg = IRCColor.Slot(background)
+                        continue
+                    } else {
                         // Bare \x03 resets both foreground and background.
                         fg = null
                         bg = null
-                    } else {
-                        fg = IRCColor.Slot(foreground)
-                        i = consumed
-                        // Optional ,BG. A bare FG (no ,BG) leaves the existing bg untouched.
-                        if (i + 1 < scalars.size && scalars[i] == 0x2C && isDigit(scalars[i + 1])) {
-                            i += 1 // consume comma
-                            val (background, afterBg) = readDigits(scalars, i)
-                            bg = background?.let(IRCColor::Slot)
-                            i = afterBg
-                        }
-                        continue
                     }
                 }
                 0x04 -> { // truecolour: \x04[RRGGBB[,RRGGBB]]
@@ -263,6 +259,46 @@ object IRCFormatting {
             count += 1
         }
         return i
+    }
+
+    /**
+     * Every slot a `\x03` code in `text` names, in order — including codes no text follows,
+     * which `parse` makes no run for. Read by the same scanner `parse` uses, so the two agree on
+     * what a code is (`ColorMarkup.decode` vets slots with this).
+     */
+    internal fun colorSlots(text: String): List<Int> {
+        val scalars = text.codePoints().toArray()
+        val slots = mutableListOf<Int>()
+        var i = 0
+        while (i < scalars.size) {
+            if (scalars[i] != 0x03) { i += 1; continue }
+            val code = readColorCode(scalars, i)
+            slots += listOfNotNull(code.fg, code.bg)
+            i = code.end
+        }
+        return slots
+    }
+
+    /**
+     * What [readColorCode] reads.
+     *
+     * Port note: the Swift returns a named tuple, `(fg: Int?, bg: Int?, end: Int)`.
+     */
+    private data class ColorCode(val fg: Int?, val bg: Int?, val end: Int)
+
+    /**
+     * The `\x03[FG[,BG]]` at `start` (which is the `\x03`): its slots, null for a part it
+     * doesn't have, and where the text after it begins. A comma is part of the code only with a
+     * digit after it.
+     */
+    private fun readColorCode(scalars: IntArray, start: Int): ColorCode {
+        val (foreground, afterFg) = readDigits(scalars, start + 1)
+        if (foreground == null) return ColorCode(null, null, start + 1)
+        if (!(afterFg + 1 < scalars.size && scalars[afterFg] == 0x2C && isDigit(scalars[afterFg + 1]))) {
+            return ColorCode(foreground, null, afterFg)
+        }
+        val (background, afterBg) = readDigits(scalars, afterFg + 1)
+        return ColorCode(foreground, background, afterBg)
     }
 
     /**
