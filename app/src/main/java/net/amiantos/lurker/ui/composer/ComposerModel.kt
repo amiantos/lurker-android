@@ -22,8 +22,11 @@ import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.NickCompletion
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.Replies
+import net.amiantos.lurkerkit.model.FriendPresence
 import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.model.SpeakerMap
+import net.amiantos.lurkerkit.model.StatusLight
+import net.amiantos.lurkerkit.model.StatusToast
 import net.amiantos.lurkerkit.model.member
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.support.TextRange
@@ -32,8 +35,8 @@ import net.amiantos.lurkerkit.commands.CommandParser
 
 /*
  * The composer's decisions, with no Compose in them — lurker-ios's `ComposerBar`, `SuggestionsView`
- * and the composer half of `ChatViewController` (send, replies, drafts, the away strip, the
- * prompt), minus the views. Everything here is a function of plain values so it can be tested;
+ * and the composer half of `ChatViewController` (send, replies, drafts, the away strip, the status
+ * row, the prompt), minus the views. Everything here is a function of plain values so it can be tested;
  * `ComposerState` holds the field and calls in.
  *
  * Offsets are UTF-16 throughout — a Kotlin `String`'s own indices, and what the kit's
@@ -95,28 +98,65 @@ internal data class Suggestion(val title: String, val value: String, val kind: K
 internal data class FieldEdit(val text: String, val caret: Int)
 
 /**
- * The away strip's or the pending reply's words, or nothing — the one slot above the field. iOS's
- * `ComposerBar.renderStrip`.
+ * The away strip's words, or nothing — the strip above the slab. iOS's `ComposerBar.renderAway`.
  *
- * The reply wins while one is pending — it's what the next send does — and the away strip comes
- * back once it's spent or cancelled. One slot rather than two stacked strips, which would eat into
- * the little conversation a phone shows above the keyboard.
+ * Its own strip rather than a line in the status row: being away is worth being nagged about, and
+ * the row has no room for the time. The pending reply, which used to share this slot, lives in the
+ * status row now ([StatusLead.Reply]).
  */
 internal sealed interface Strip {
     data object None : Strip
 
+    /** "**Away** since 2:32 PM · lunch", with Back. */
+    data class Away(val lead: String, val detail: String) : Strip {
+        val accessibility: String get() = lead + detail
+    }
+}
+
+/**
+ * Where this conversation is and how its connection is doing — what the top bar's title and
+ * subtitle used to say. The status row's resting content, under everything else on the left.
+ * iOS's `ComposerBar.Location`.
+ */
+internal data class Location(
+    /** "#lurker", "bob", or the network itself for its server log. */
+    val name: String,
+    /** Right after the name when the connection isn't up: "(Offline)", "(Connecting…)". */
+    val connection: String?,
+    /** In parentheses after the name: a DM peer's presence when it's news, "bob (Away)". */
+    val detail: String?,
+) {
+    /** What TalkBack reads for the words. */
+    val accessibility: String get() = listOfNotNull(name, connection, detail).joinToString(", ")
+}
+
+/**
+ * What the status row's left side shows — one thing at a time, highest first. iOS's
+ * `ComposerBar.renderStatus`. The completion chips come before all of these and are the view's:
+ * while they're up they take the whole row.
+ */
+internal sealed interface StatusLead {
+    /** A notification from elsewhere, or a notice about something you just did, for a few seconds. */
+    data class Toast(val toast: StatusToast) : StatusLead
+
     /**
-     * "Replying to alice: what she said", with ✕ to cancel. [name] is bold; [excerpt] may be empty
-     * (a reply to a line with no words), and then there's no colon.
+     * "↩ alice: excerpt", with ✕ to cancel (lurker-ios#184). [excerpt] may be empty (a reply to a
+     * line with no words), and then there's no colon.
      */
-    data class Reply(val name: String, val excerpt: String) : Strip {
+    data class Reply(val name: String, val excerpt: String) : StatusLead {
         /** What TalkBack reads for the words. */
         val accessibility: String get() = "Replying to $name" + if (excerpt.isEmpty()) "" else ": $excerpt"
     }
 
-    /** "**Away** since 2:32 PM · lunch", with Back. */
-    data class Away(val lead: String, val detail: String) : Strip {
-        val accessibility: String get() = lead + detail
+    /**
+     * Where you are, then who's typing there (lurker-ios#61): "#lurker ⌨ alice, bob". Out of the
+     * message list, so it's visible at any scroll position and never adds or removes a row.
+     */
+    data class Where(val location: Location?, val typists: List<String>) : StatusLead {
+        val accessibility: String? get() {
+            val spoken = listOfNotNull(location?.accessibility, typists.takeIf { it.isNotEmpty() }?.let { "Typing: " + it.joinToString(", ") })
+            return spoken.takeIf { it.isNotEmpty() }?.joinToString(", ")
+        }
     }
 }
 
@@ -243,6 +283,9 @@ internal object ComposerModel {
     /** How many channel chips a channel argument offers. */
     const val CHANNEL_LIMIT = 4
 
+    /** How many nick chips the status row offers — a horizontal row scrolls, so more than the four floating pills held. */
+    const val NICK_LIMIT = 10
+
     // MARK: - Completion
 
     /**
@@ -264,9 +307,9 @@ internal object ComposerModel {
     }
 
     /**
-     * The pills for [completion]: command chips from the table, channel chips, or nick chips ranked
-     * the web client's way — best first; the view reverses them so the best sits nearest the field.
-     * [channels] and [nicks] are asked only for the kind that needs them.
+     * The chips for [completion]: command chips from the table, channel chips, or nick chips ranked
+     * the web client's way — best first, which the status row draws leading-most. [channels] and
+     * [nicks] are asked only for the kind that needs them.
      */
     fun suggestions(
         completion: Completion?,
@@ -445,14 +488,79 @@ internal object ComposerModel {
     fun replyPlan(message: Message, key: BufferKey, state: ChatState, pending: PendingReply?): ReplyPlan? =
         replyPlan(message, key.target, canReply = state.canReply(networkId = key.networkId), pending = pending)
 
-    /** The strip: the pending reply if there is one, else the away strip if you're away, else none. */
-    fun strip(reply: PendingReply?, away: AwayStrip?): Strip = when {
-        reply != null -> Strip.Reply(
+    /** The strip above the slab: the away strip if you're away, else none. */
+    fun strip(away: AwayStrip?): Strip = if (away != null) Strip.Away(away.lead, away.detail) else Strip.None
+
+    /**
+     * The status row's left side: a toast showing, else the pending reply (it's what the next send
+     * does), else where you are and who's typing. iOS's `renderStatus`, minus the chips, which the
+     * view lays over the whole row.
+     */
+    fun statusLead(toast: StatusToast?, reply: PendingReply?, location: Location?, typists: List<String>): StatusLead = when {
+        toast != null -> StatusLead.Toast(toast)
+        reply != null -> StatusLead.Reply(
             name = if (reply.isSelf) "yourself" else reply.nick,
             excerpt = Replies.excerpt(reply.text),
         )
-        away != null -> Strip.Away(away.lead, away.detail)
-        else -> Strip.None
+        else -> StatusLead.Where(location, typists)
+    }
+
+    // MARK: - Where you are (the top bar's old title)
+
+    /**
+     * Where this conversation is and how its connection is doing. iOS's `updateTitle`, now that the
+     * top bar has no title: the light is layered outside-in through `StatusLight.of` — the device's
+     * path, our socket, then the network — except a DCC chat's, which is its own session and never
+     * the network's (lurker#270). A DM peer's presence is named only when it's news — "Online" is
+     * the expected case — and only once the link is good (lurker-ios#55), read through
+     * `rowPresence`, the buffer list's reading, so the row and the DM's row never disagree.
+     *
+     * "#lurker": the network is left off for room; just the network for a server buffer.
+     */
+    fun location(state: ChatState, key: BufferKey, kind: BufferKind): Location {
+        val networkId = key.networkId
+        val buffer = state.buffer(key)
+        val status = if (kind == BufferKind.Dcc) {
+            StatusLight.ofDccChat(reachable = state.reachable, connection = state.connection, live = state.dccChatSession(key))
+        } else {
+            StatusLight.of(reachable = state.reachable, connection = state.connection, network = networkId?.let { state.networks[it]?.state })
+        }
+        val name = when (kind) {
+            BufferKind.Channel, BufferKind.Dm -> buffer.target
+            BufferKind.Dcc -> "DCC/" + buffer.target
+            BufferKind.Server, BufferKind.System -> buffer.displayName(networkId?.let { state.networks[it]?.name })
+        }
+        val connection = when (status) {
+            StatusLight.Good -> null
+            StatusLight.Warn -> "(Connecting…)"
+            StatusLight.Bad -> "(Offline)"
+        }
+        val peer = if (kind == BufferKind.Dm && networkId != null) state.rowPresence(networkId, buffer.target) else null
+        val presence = when (peer) {
+            FriendPresence.Away -> "Away"
+            FriendPresence.Offline -> "Offline"
+            FriendPresence.Online, FriendPresence.Unknown, null -> null
+        }
+        return Location(name = name, connection = connection, detail = if (status == StatusLight.Good) presence else null)
+    }
+
+    /**
+     * Highlights waiting in other buffers, for the end of the status row (lurker#1099): the web's
+     * #636 chip, which rides its back button. The same total as the app badge, less this buffer's
+     * own, which are on screen. 0 in the buffer list's `off` unread display mode — "color is the
+     * only cue", and a number is exactly what it turns down, so the count goes too, as the web's
+     * chip does.
+     */
+    fun highlightCount(state: ChatState, key: BufferKey): Int {
+        if (state.settings.string("look.buffer_list.unread_display", default = "full") == "off") return 0
+        return state.totalHighlights - (state.buffers[key.id]?.highlights ?: 0)
+    }
+
+    /** The count as the row shows it: nothing at 0, ">999" past three digits. */
+    fun highlightCountLabel(count: Int): String? = when {
+        count <= 0 -> null
+        count > 999 -> ">999"
+        else -> count.toString()
     }
 
     // MARK: - The prompt (lurker-ios#135)

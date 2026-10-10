@@ -12,10 +12,13 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -33,12 +36,15 @@ import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -54,29 +60,34 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
 import androidx.compose.ui.input.key.isMetaPressed
 import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.role
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
@@ -84,8 +95,13 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.StateFlow
+import net.amiantos.lurker.ui.message.MessageText
+import net.amiantos.lurker.ui.message.MessageTextStyle
+import net.amiantos.lurker.ui.message.rememberMessageTextStyle
+import net.amiantos.lurker.ui.message.typingGlyph
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
+import net.amiantos.lurker.ui.theme.monoTextStyle
 import net.amiantos.lurker.ui.uploads.Attachments
 import net.amiantos.lurker.ui.uploads.UploadBatchPosition
 import net.amiantos.lurker.ui.uploads.UploadPhase
@@ -94,17 +110,35 @@ import net.amiantos.lurker.ui.uploads.UploadStatusView
 import net.amiantos.lurker.ui.uploads.receivesPastedImages
 import net.amiantos.lurkerkit.model.AwayState
 import net.amiantos.lurkerkit.model.AwayStrip
+import net.amiantos.lurkerkit.model.BufferKey
+import net.amiantos.lurkerkit.model.StatusNotification
+import net.amiantos.lurkerkit.model.StatusToast
 import java.time.Instant
 import java.util.Date
 import java.util.Locale
 
 /**
- * The message composer — lurker-ios's `ComposerBar`, in Material's terms: a field that grows with
- * the text up to five lines and then scrolls, a round send button that lights up in the accent
- * when there's something to send, and above them one strip that says either what you're replying
- * to or that you're away. iOS floats three glass pills over the conversation; here the bar sits on
- * the log's own ground at the bottom of the screen and the list's reservation includes it, which is
- * the same arrangement without a material Android doesn't have.
+ * The message composer — lurker-ios's `ComposerBar`, in Material's terms: one slab with a status row
+ * on top and the field beside a round send button below, after the web client's status bar and input
+ * as one piece. iOS draws the slab in glass over the conversation; here it sits on the log's own
+ * ground at the bottom of the screen and the list's reservation includes it, which is the same
+ * arrangement without a material Android doesn't have.
+ *
+ * **The status row** is exactly the one-line field's height and uses the message list's fixed-width
+ * face, as the field now does. Nothing moves when its content changes. Left side, one thing at a time:
+ *
+ * 1. Completion chips while a nick, command or channel is being typed (they take the whole row).
+ * 2. A notification from elsewhere (lurker#1098), or a notice about something you just did, for a few
+ *    seconds — never over the chips; it waits.
+ * 3. The pending reply (lurker-ios#184): "↩ alice: excerpt  ✕".
+ * 4. Where you are, with who's typing (lurker-ios#61) appended — out of the message list, so it's
+ *    visible at any scroll position.
+ *
+ * At the right end, a count of highlights waiting in other buffers (lurker#1099), in the roster's
+ * count colour; a tap goes back to the list. Hidden beside the list, where the rows themselves show it.
+ *
+ * Away keeps its own strip above the slab (lurker-ios#135): being away is worth being nagged about,
+ * and the row has no room for the time.
  *
  * The on-screen keyboard's return inserts a newline, so a multi-line message is something you can
  * actually type — unless "Enter to send" is on (lurker-android#64), when it reads "Send" and sends.
@@ -126,6 +160,10 @@ import java.util.Locale
  *
  * Colour is shown as it will be sent: [ComposerState.colorsFor] painted over the field by an
  * `OutputTransformation` ([rememberColorOutput]). The field's text never holds a control code.
+ *
+ * @param sideBySide the list is beside this screen: the highlight count is hidden.
+ * @param onHighlightCountTap the count was tapped — back to the list.
+ * @param onToastTap a notification showing in the row was tapped — go to its line.
  */
 @Composable
 internal fun ComposerBar(
@@ -137,15 +175,54 @@ internal fun ComposerBar(
     clockKey: Any?,
     modifier: Modifier = Modifier,
     attachments: Attachments? = null,
+    sideBySide: Boolean = false,
+    onHighlightCountTap: () -> Unit = {},
+    onToastTap: (StatusNotification) -> Unit = {},
 ) {
     val capitalizes by autocapitalizes.collectAsStateWithLifecycle()
     val sends by enterSends.collectAsStateWithLifecycle()
     val away = rememberAwayStrip(state.chrome.away, clockKey)
     val colorOutput = rememberColorOutput(state)
+    val lead = ComposerModel.statusLead(state.activeToast, state.reply, state.location, state.typists)
+    val highlightCount = if (sideBySide) 0 else state.otherHighlights
+
+    // Whether a notice fits the one-line row: measured against the row's width, less the inset and
+    // the count, in the row's own face. iOS's `fitsAsNotice`.
+    val measurer = rememberTextMeasurer()
+    val mono = monoTextStyle()
+    val density = LocalDensity.current
+    var rowWidthPx by remember { mutableIntStateOf(0) }
+    val haptics = LocalHapticFeedback.current
+    SideEffect {
+        state.noticeFits = { message ->
+            val count = ComposerModel.highlightCountLabel(highlightCount)
+            val countWidth = if (count == null) 0 else measurer.measure(count, mono, softWrap = false).size.width + with(density) { 8.dp.roundToPx() }
+            val room = rowWidthPx - with(density) { (FIELD_INSET_HORIZONTAL * 2 + NOTICE_GLYPH + 6.dp).roundToPx() } - countWidth
+            rowWidthPx > 0 && measurer.measure(message, mono, softWrap = false).size.width <= room
+        }
+        state.onToastShown = { toast, isNew ->
+            // A notice gets a tap of feedback — the only feedback its action has. The row's text
+            // changing in place is read out by TalkBack through the lead's live region.
+            if (isNew && toast is StatusToast.Notice) haptics.performHapticFeedback(HapticFeedbackType.Reject)
+        }
+    }
+
     ComposerBarContent(
         field = state.field,
         placeholder = ComposerModel.placeholder(state.chrome, state.key, state.kind),
-        strip = ComposerModel.strip(state.reply, away),
+        strip = ComposerModel.strip(away),
+        lead = lead,
+        suggestions = state.suggestions,
+        onPick = state::pick,
+        highlightCount = highlightCount,
+        onHighlightCountTap = onHighlightCountTap,
+        onToastTap = {
+            // A notification goes somewhere when tapped; a notice just clears. Either way the next
+            // one comes on after, so a tap that leaves the screen doesn't start it on the way out.
+            state.tapToast()?.let(onToastTap)
+            state.nextToast()
+        },
+        onRowWidth = { rowWidthPx = it },
         capitalizes = capitalizes,
         enterSends = sends,
         focusRequester = state.focusRequester,
@@ -207,6 +284,16 @@ internal fun ComposerBarContent(
     field: TextFieldState,
     placeholder: String,
     strip: Strip,
+    /** The status row's left side; the chips in [suggestions] cover it while they're up. */
+    lead: StatusLead,
+    suggestions: List<Suggestion>,
+    onPick: (Suggestion) -> Unit,
+    /** Highlights waiting in other buffers; 0 hides the count. */
+    highlightCount: Int,
+    onHighlightCountTap: () -> Unit,
+    onToastTap: () -> Unit,
+    /** The status row's width, in pixels, for a notice's fit. */
+    onRowWidth: (Int) -> Unit,
     capitalizes: Boolean,
     /** The on-screen keyboard's return sends rather than starting a new line. */
     enterSends: Boolean,
@@ -239,7 +326,7 @@ internal fun ComposerBarContent(
             .fillMaxWidth()
             .background(colors.bg)
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
-            // Match the message rows' horizontal inset, so the bar's edges line up with the column of
+            // Match the message rows' horizontal inset, so the slab's edges line up with the column of
             // text above it.
             .padding(horizontal = 16.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -247,39 +334,253 @@ internal fun ComposerBarContent(
         above()
         when (strip) {
             Strip.None -> Unit
-            is Strip.Reply -> ReplyStrip(strip, onCancelReply)
             is Strip.Away -> AwayStripRow(strip, onBack)
         }
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            // The button sits at the BOTTOM, beside the last line as the field grows upward.
-            verticalAlignment = Alignment.Bottom,
+        // The slab: one shape holding the status row on top and the field + send below. A fixed
+        // radius, not a capsule: it's always two rows tall, so a capsule's arcs would clip the text.
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(SLAB_RADIUS)),
         ) {
-            Field(
-                field, placeholder, capitalizes, enterSends, collapsed, focusRequester, onFocusChange,
-                remember(onSend, onTab, onNewline, onCancelReply) { FieldKeys(onSend, onTab, onNewline, onCancelReply) },
-                isComposing, strip is Strip.Reply, fieldModifier, inputTransformation, outputTransformation,
+            StatusRow(
+                lead = lead,
+                suggestions = suggestions,
+                onPick = onPick,
+                highlightCount = highlightCount,
+                onHighlightCountTap = onHighlightCountTap,
+                onToastTap = onToastTap,
+                onCancelReply = onCancelReply,
+                modifier = Modifier.fillMaxWidth().height(collapsed).onSizeChanged { onRowWidth(it.width) },
             )
-            // Derived, so the bar recomposes when the answer flips rather than on every keystroke.
-            val canSend by remember(field) { derivedStateOf { ComposerModel.sendable(field.text.toString()) != null } }
-            if (sendButton != null) sendButton(canSend, collapsed) else SendButton(enabled = canSend, size = collapsed, onClick = onSend)
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = FIELD_INSET_HORIZONTAL),
+                thickness = Dp.Hairline,
+                color = colors.border,
+            )
+            Row(
+                // The button sits at the BOTTOM, beside the last line as the field grows upward.
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                Field(
+                    field, placeholder, capitalizes, enterSends, collapsed, focusRequester, onFocusChange,
+                    remember(onSend, onTab, onNewline, onCancelReply) { FieldKeys(onSend, onTab, onNewline, onCancelReply) },
+                    isComposing, lead is StatusLead.Reply, fieldModifier, inputTransformation, outputTransformation,
+                )
+                // Derived, so the bar recomposes when the answer flips rather than on every keystroke.
+                val canSend by remember(field) { derivedStateOf { ComposerModel.sendable(field.text.toString()) != null } }
+                // Sized to sit inside the one-line field with an even margin.
+                val send = collapsed - SEND_INSET * 2
+                Box(Modifier.padding(SEND_INSET)) {
+                    if (sendButton != null) sendButton(canSend, send) else SendButton(enabled = canSend, size = send, onClick = onSend)
+                }
+            }
         }
     }
 }
 
 /**
- * The height of the collapsed field: exactly one line of body text plus its inset — the field's
- * floor *and* the send button's size, so the empty bar and the one-line bar are the same height.
- * Follows the font scale, as iOS's follows Dynamic Type. The jump-to-latest pill matches it.
+ * The height of the collapsed field: exactly one line of the fixed-width face plus its inset — the
+ * field's floor, the status row's height, and what the send button is sized from, so the empty bar
+ * and the one-line bar are the same height. Follows the font scale, as iOS's follows Dynamic Type.
+ * The jump-to-latest pill matches it.
  */
 @Composable
 internal fun collapsedHeight(): Dp {
-    val line = MaterialTheme.typography.bodyLarge.lineHeight
+    val line = monoTextStyle().lineHeight
     return with(LocalDensity.current) { line.toDp() } + FIELD_INSET_VERTICAL * 2
 }
 
 private val FIELD_INSET_VERTICAL = 10.dp
 private val FIELD_INSET_HORIZONTAL = 14.dp
+
+/** How far the send circle sits in from the slab's edge. */
+private val SEND_INSET = 5.dp
+
+/** The slab's corner radius: a rounded rectangle, since it's always two rows tall. */
+private val SLAB_RADIUS = 20.dp
+
+/** The notice glyph's size, a little under the text's. */
+private val NOTICE_GLYPH = 16.dp
+
+// MARK: - The status row
+
+/**
+ * The row across the top of the slab. Always there, at a fixed height, so nothing it shows or hides
+ * ever moves the conversation. The chips own the whole row while they're up: they're about the word
+ * under the caret, and they're gone the moment it's finished.
+ */
+@Composable
+private fun StatusRow(
+    lead: StatusLead,
+    suggestions: List<Suggestion>,
+    onPick: (Suggestion) -> Unit,
+    highlightCount: Int,
+    onHighlightCountTap: () -> Unit,
+    onToastTap: () -> Unit,
+    onCancelReply: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier) {
+        if (suggestions.isNotEmpty()) {
+            SuggestionsView(suggestions, onPick, Modifier.fillMaxWidth().fillMaxHeight())
+            return@Box
+        }
+        Row(Modifier.fillMaxWidth().fillMaxHeight().padding(start = FIELD_INSET_HORIZONTAL), verticalAlignment = Alignment.CenterVertically) {
+            StatusLeadText(lead, onToastTap, Modifier.weight(1f))
+            if (lead is StatusLead.Reply) {
+                // Drawn at the text's size, but taking touches across the row's full height (and wider
+                // than it draws): a target that short is easy to miss.
+                Box(
+                    Modifier
+                        .fillMaxHeight()
+                        .defaultMinSize(minWidth = 40.dp)
+                        .clickable(role = Role.Button, onClick = onCancelReply)
+                        .clearAndSetSemantics {
+                            contentDescription = "Cancel reply"
+                            role = Role.Button
+                            onClick { onCancelReply(); true }
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(LurkerIcons.Cancel, contentDescription = null, tint = LurkerTheme.colors.fgMuted, modifier = Modifier.size(18.dp))
+                }
+            }
+            val label = ComposerModel.highlightCountLabel(highlightCount)
+            if (label != null) HighlightCount(highlightCount, label, onHighlightCountTap)
+        }
+    }
+}
+
+/**
+ * The status row's left side, in the message list's face and the app's own palette: a toast (a tap on
+ * a notification goes to it, on a notice clears it), the pending reply, or where you are and who's
+ * typing. One line, cut at the end.
+ */
+@Composable
+private fun StatusLeadText(lead: StatusLead, onToastTap: () -> Unit, modifier: Modifier = Modifier) {
+    val colors = LurkerTheme.colors
+    val style = rememberMessageTextStyle()
+    val mono = monoTextStyle()
+    val muted = SpanStyle(color = colors.fgMuted)
+    when (lead) {
+        is StatusLead.Toast -> {
+            val toast = lead.toast
+            val text = toastText(toast, style)
+            // Said as well as shown, as the floating toast was: the row's text changes in place, which
+            // TalkBack doesn't announce on its own.
+            val semantics = Modifier.clearAndSetSemantics {
+                contentDescription = text.text
+                liveRegion = LiveRegionMode.Polite
+                if (toast is StatusToast.Notification) {
+                    role = Role.Button
+                    onClick(label = "Open the conversation") { onToastTap(); true }
+                }
+            }
+            Row(
+                modifier.fillMaxHeight().clickable(onClick = onToastTap).then(semantics),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                // A notice is in the error colour behind a glyph, so "Not connected" can't be read as
+                // someone's line.
+                if (toast is StatusToast.Notice) {
+                    Icon(LurkerIcons.ErrorOutline, contentDescription = null, tint = colors.bad, modifier = Modifier.size(NOTICE_GLYPH))
+                }
+                Text(text, style = mono, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        is StatusLead.Reply -> Text(
+            buildAnnotatedString {
+                withStyle(muted) { append("↩ ") }
+                withStyle(SpanStyle(color = colors.fg)) { append(lead.name) }
+                if (lead.excerpt.isNotEmpty()) withStyle(muted) { append(": " + lead.excerpt) }
+            },
+            style = mono,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = modifier.clearAndSetSemantics { contentDescription = lead.accessibility },
+        )
+        is StatusLead.Where -> {
+            // Where you are, then who's typing there: "#lurker ⌨ alice, bob". The keyboard glyph is the
+            // separator; a status reads in parentheses, "(Offline)", "(Away)".
+            val location = lead.location
+            val text = buildAnnotatedString {
+                if (location != null) {
+                    withStyle(muted) {
+                        append(location.name)
+                        val connection = location.connection
+                        if (connection != null) append(" $connection")
+                        val detail = location.detail
+                        if (!detail.isNullOrEmpty()) append(" ($detail)")
+                    }
+                }
+                if (lead.typists.isNotEmpty()) {
+                    if (length > 0) append(" ")
+                    append(MessageText.renderCompactTyping(lead.typists, style, inline = true) ?: AnnotatedString(""))
+                }
+            }
+            val spoken = lead.accessibility
+            Text(
+                text,
+                style = mono,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                inlineContent = if (lead.typists.isNotEmpty()) typingGlyph(colors.fgMuted) else emptyMap(),
+                modifier = modifier.clearAndSetSemantics { spoken?.let { contentDescription = it } },
+            )
+        }
+    }
+}
+
+/**
+ * Who and what — "bob: are you around?" — the way the line reads in the buffer; where it happened is
+ * the tap's job. A kick has no speaker worth naming, so it says where. A friend coming online has no
+ * line. A notice is just its words, in the error colour. iOS's `StatusToast.attributedText`.
+ */
+internal fun toastText(toast: StatusToast, style: MessageTextStyle): AnnotatedString {
+    val colors = style.colors
+    val muted = SpanStyle(color = colors.fgMuted)
+    return buildAnnotatedString {
+        when (toast) {
+            is StatusToast.Notice -> withStyle(SpanStyle(color = colors.bad)) { append(toast.message) }
+            is StatusToast.Notification -> {
+                val notification = toast.notification
+                if (notification.kind == StatusNotification.Kind.Kicked) {
+                    withStyle(muted) { append("Kicked from " + notification.key.target) }
+                } else {
+                    val nick = notification.nick ?: "?"
+                    withStyle(SpanStyle(color = MessageText.hashedColor(nick, style))) { append(nick) }
+                    if (notification.kind == StatusNotification.Kind.FriendOnline) withStyle(muted) { append(" came online") }
+                }
+                if (notification.text.isNotEmpty()) withStyle(SpanStyle(color = colors.fg)) { append(": " + notification.text) }
+            }
+        }
+    }
+}
+
+/**
+ * The status row's right end: highlights waiting in other buffers, a plain number in the roster's
+ * count colour, like a buffer row's. Tapping it goes back to the list.
+ */
+@Composable
+private fun HighlightCount(count: Int, label: String, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxHeight()
+            .clickable(role = Role.Button, onClick = onClick)
+            .clearAndSetSemantics {
+                contentDescription = "$count highlight" + (if (count == 1) "" else "s") + " in other buffers"
+                role = Role.Button
+                onClick(label = "Back to the buffer list") { onClick(); true }
+            }
+            // A few points past the text inset: the slab's corner curves in at the right end.
+            .padding(start = 8.dp, end = FIELD_INSET_HORIZONTAL + 2.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, style = monoTextStyle(), color = LurkerTheme.colors.warn, maxLines = 1)
+    }
+}
 
 /** What the field's keys do — see `ComposerKeys`. */
 private class FieldKeys(
@@ -290,7 +591,7 @@ private class FieldKeys(
 )
 
 @Composable
-private fun androidx.compose.foundation.layout.RowScope.Field(
+private fun RowScope.Field(
     field: TextFieldState,
     placeholder: String,
     capitalizes: Boolean,
@@ -306,7 +607,9 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
     outputTransformation: OutputTransformation?,
 ) {
     val colors = LurkerTheme.colors
-    val text = MaterialTheme.typography.bodyLarge
+    // The message list's fixed-width face, like the status row above it — the slab reads as one
+    // terminal-ish piece, the way the web's input and status bar do.
+    val text = monoTextStyle()
     val focused = remember { booleanArrayOf(false) }
     val keys = remember { ComposerKeys() }
     BasicTextField(
@@ -317,9 +620,6 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
             .weight(1f)
             .then(modifier)
             .heightIn(min = collapsed)
-            // A fixed radius, not a capsule: half the one-line height, so it's a capsule when short
-            // and a rounded rectangle when tall, rather than arcs that clip the text as it grows.
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(collapsed / 2))
             .focusRequester(focusRequester)
             .onFocusChanged { focus ->
                 if (focused[0] != focus.isFocused) {
@@ -409,7 +709,9 @@ private fun isHardwareKey(event: KeyEvent): Boolean = event.nativeKeyEvent.devic
 
 /**
  * Round, and lit in the accent when there's something to send — the "lights up when it goes live"
- * Messages' send button does — with a white arrow on it; clear and disabled when there isn't.
+ * Messages' send button does — with a white arrow on it; clear and disabled when there isn't. It
+ * can't be raised on its own — a circle inside the slab — so it's a fill: the slab's own over an
+ * empty field, the accent when there's something to send.
  */
 @Composable
 private fun SendButton(enabled: Boolean, size: Dp, onClick: () -> Unit) {
@@ -417,7 +719,7 @@ private fun SendButton(enabled: Boolean, size: Dp, onClick: () -> Unit) {
     Box(
         Modifier
             .size(size)
-            .background(if (enabled) colors.accent else MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape)
+            .background(if (enabled) colors.accent else MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape)
             .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
             .clearAndSetSemantics {
                 contentDescription = "Send"
@@ -430,7 +732,7 @@ private fun SendButton(enabled: Boolean, size: Dp, onClick: () -> Unit) {
             LurkerIcons.ArrowUpward,
             contentDescription = null,
             tint = if (enabled) Color.White else colors.fgMuted,
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.size(18.dp),
         )
     }
 }
@@ -504,7 +806,7 @@ private fun SendFace(canSend: Boolean, size: Dp, modifier: Modifier = Modifier) 
     Box(
         Modifier
             .size(size)
-            .background(if (canSend) colors.accent else MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape)
+            .background(if (canSend) colors.accent else MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape)
             .then(modifier),
         contentAlignment = Alignment.Center,
     ) {
@@ -512,108 +814,52 @@ private fun SendFace(canSend: Boolean, size: Dp, modifier: Modifier = Modifier) 
             if (canSend) LurkerIcons.ArrowUpward else LurkerIcons.Add,
             contentDescription = null,
             tint = if (canSend) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp),
+            modifier = Modifier.size(18.dp),
         )
     }
 }
 
-/** The strip's shape and ground — one slot, whichever of the two it says. */
-@Composable
-private fun StripRow(label: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit, button: @Composable () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(22.dp))
-            .padding(start = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        label()
-        button()
-    }
-}
-
 /**
- * "Replying to alice: what she said  ⊗" (lurker-ios#184). Where Messages, Discord and Telegram all
- * put it — attached to the thing it changes.
- */
-@Composable
-private fun ReplyStrip(strip: Strip.Reply, onCancel: () -> Unit) {
-    val colors = LurkerTheme.colors
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    StripRow(
-        label = {
-            Text(
-                buildAnnotatedString {
-                    withStyle(SpanStyle(color = muted)) { append("Replying to ") }
-                    withStyle(SpanStyle(color = colors.fg, fontWeight = FontWeight.Bold)) { append(strip.name) }
-                    if (strip.excerpt.isNotEmpty()) withStyle(SpanStyle(color = muted)) { append(": " + strip.excerpt) }
-                },
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(vertical = 7.dp)
-                    .clearAndSetSemantics { contentDescription = strip.accessibility },
-            )
-        },
-        button = {
-            // The only way to cancel by touch, so a full 48dp target, inside the strip (which it sizes).
-            Box(
-                Modifier
-                    .defaultMinSize(minWidth = 48.dp, minHeight = 44.dp)
-                    .clickable(role = Role.Button, onClick = onCancel)
-                    .clearAndSetSemantics {
-                        contentDescription = "Cancel reply"
-                        role = Role.Button
-                        onClick { onCancel(); true }
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(LurkerIcons.Cancel, contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
-            }
-        },
-    )
-}
-
-/**
- * "**Away** since 2:32 PM · lunch   Back" (lurker-ios#135). The indicator and the way out are one
- * control, so getting back doesn't depend on remembering `/back`.
+ * "**Away** since 2:32 PM · lunch   Back" (lurker-ios#135), in its own strip above the slab, the
+ * slab's shape. The indicator and the way out are one control, so getting back doesn't depend on
+ * remembering `/back`.
  */
 @Composable
 private fun AwayStripRow(strip: Strip.Away, onBack: () -> Unit) {
     val colors = LurkerTheme.colors
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    StripRow(
-        label = {
-            Text(
-                buildAnnotatedString {
-                    withStyle(SpanStyle(color = colors.fg, fontWeight = FontWeight.Bold)) { append(strip.lead) }
-                    withStyle(SpanStyle(color = muted)) { append(strip.detail) }
-                },
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .weight(1f)
-                    .padding(vertical = 7.dp)
-                    .clearAndSetSemantics { contentDescription = strip.accessibility },
-            )
-        },
-        button = {
-            Box(
-                Modifier
-                    .defaultMinSize(minWidth = 48.dp, minHeight = 44.dp)
-                    // TalkBack: "Back, double-tap to clear your away status" — iOS's hint.
-                    .clickable(role = Role.Button, onClickLabel = "clear your away status", onClick = onBack)
-                    // Clear of the strip's rounded end, which a bare title would crowd.
-                    .padding(start = 10.dp, end = 16.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("Back", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold, color = colors.accent)
-            }
-        },
-    )
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(SLAB_RADIUS))
+            .padding(start = FIELD_INSET_HORIZONTAL),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            buildAnnotatedString {
+                withStyle(SpanStyle(color = colors.fg)) { append(strip.lead) }
+                withStyle(SpanStyle(color = muted)) { append(strip.detail) }
+            },
+            style = monoTextStyle(),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .weight(1f)
+                .padding(vertical = 7.dp)
+                .clearAndSetSemantics { contentDescription = strip.accessibility },
+        )
+        Box(
+            Modifier
+                .defaultMinSize(minWidth = 48.dp, minHeight = 44.dp)
+                // TalkBack: "Back, double-tap to clear your away status" — iOS's hint.
+                .clickable(role = Role.Button, onClickLabel = "clear your away status", onClick = onBack)
+                // Clear of the strip's rounded end, which a bare title would crowd.
+                .padding(start = 10.dp, end = 16.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("Back", style = monoTextStyle(), color = colors.accent)
+        }
+    }
 }
 
 /**
@@ -649,7 +895,10 @@ private fun formatSince(locale: Locale, is24: Boolean, instant: Instant, since: 
 private fun ComposerPreview(
     dark: Boolean,
     text: String,
-    strip: Strip,
+    strip: Strip = Strip.None,
+    lead: StatusLead = StatusLead.Where(Location("#lurker", null, null), emptyList()),
+    suggestions: List<Suggestion> = emptyList(),
+    highlightCount: Int = 0,
     placeholder: String = "@amiantos",
     attaches: Boolean = false,
     readout: UploadReadout? = null,
@@ -660,6 +909,13 @@ private fun ComposerPreview(
                 field = remember { TextFieldState(text) },
                 placeholder = placeholder,
                 strip = strip,
+                lead = lead,
+                suggestions = suggestions,
+                onPick = {},
+                highlightCount = highlightCount,
+                onHighlightCountTap = {},
+                onToastTap = {},
+                onRowWidth = {},
                 capitalizes = true,
                 enterSends = false,
                 focusRequester = remember { FocusRequester() },
@@ -677,24 +933,60 @@ private fun ComposerPreview(
     }
 }
 
-private val previewReply = Strip.Reply(name = "alice", excerpt = "anyone tried the new build on a Pixel?")
+private val previewReply = StatusLead.Reply(name = "alice", excerpt = "anyone tried the new build on a Pixel?")
 private val previewAway = Strip.Away(lead = "Away", detail = " since 2:32 PM · lunch")
+private val previewTyping = StatusLead.Where(Location("#lurker", null, null), listOf("alice", "bob"))
+private val previewOffline = StatusLead.Where(Location("#lurker", "(Offline)", null), emptyList())
+private val previewToast = StatusLead.Toast(
+    StatusToast.Notification(
+        StatusNotification(
+            kind = StatusNotification.Kind.Highlight, key = BufferKey(networkId = 1, target = "#android"), nick = "bob",
+            text = "are you around?", messageId = 1, date = Instant.EPOCH,
+        ),
+    ),
+)
+private val previewNotice = StatusLead.Toast(StatusToast.Notice("Not connected — bookmark unchanged"))
+private val previewNicks = listOf("alice", "bob", "carol_", "dave", "erin").map(Suggestion::nick)
 
 @Preview(name = "Composer, empty — light", widthDp = 360)
 @Composable
-private fun EmptyLight() = ComposerPreview(dark = false, text = "", strip = Strip.None)
+private fun EmptyLight() = ComposerPreview(dark = false, text = "")
 
 @Preview(name = "Composer, empty — dark", widthDp = 360)
 @Composable
-private fun EmptyDark() = ComposerPreview(dark = true, text = "", strip = Strip.None)
+private fun EmptyDark() = ComposerPreview(dark = true, text = "")
 
 @Preview(name = "Composer, typing a reply — light", widthDp = 360)
 @Composable
-private fun ReplyLight() = ComposerPreview(dark = false, text = "alice: yes, on a 9 — works", strip = previewReply)
+private fun ReplyLight() = ComposerPreview(dark = false, text = "alice: yes, on a 9 — works", lead = previewReply, highlightCount = 3)
 
 @Preview(name = "Composer, typing a reply — dark", widthDp = 360)
 @Composable
-private fun ReplyDark() = ComposerPreview(dark = true, text = "alice: yes, on a 9 — works", strip = previewReply)
+private fun ReplyDark() = ComposerPreview(dark = true, text = "alice: yes, on a 9 — works", lead = previewReply, highlightCount = 3)
+
+@Preview(name = "Composer, someone typing — light", widthDp = 360)
+@Composable
+private fun TypingLight() = ComposerPreview(dark = false, text = "", lead = previewTyping)
+
+@Preview(name = "Composer, offline — dark", widthDp = 360)
+@Composable
+private fun OfflineDark() = ComposerPreview(dark = true, text = "", lead = previewOffline)
+
+@Preview(name = "Composer, a toast — light", widthDp = 360)
+@Composable
+private fun ToastLight() = ComposerPreview(dark = false, text = "", lead = previewToast, highlightCount = 1)
+
+@Preview(name = "Composer, a notice — dark", widthDp = 360)
+@Composable
+private fun NoticeDark() = ComposerPreview(dark = true, text = "", lead = previewNotice)
+
+@Preview(name = "Composer, nick chips — light", widthDp = 360)
+@Composable
+private fun ChipsLight() = ComposerPreview(dark = false, text = "hey al", suggestions = previewNicks)
+
+@Preview(name = "Composer, nick chips — dark", widthDp = 360)
+@Composable
+private fun ChipsDark() = ComposerPreview(dark = true, text = "hey al", suggestions = previewNicks)
 
 @Preview(name = "Composer, away — light", widthDp = 360)
 @Composable
@@ -709,7 +1001,6 @@ private fun AwayDark() = ComposerPreview(dark = true, text = "", strip = preview
 private fun TallLight() = ComposerPreview(
     dark = false,
     text = "one\ntwo\nthree\nfour\nfive\nsix — past the cap, so it scrolls",
-    strip = Strip.None,
 )
 
 @Preview(name = "Composer, five lines — dark", widthDp = 360)
@@ -717,23 +1008,22 @@ private fun TallLight() = ComposerPreview(
 private fun TallDark() = ComposerPreview(
     dark = true,
     text = "one\ntwo\nthree\nfour\nfive\nsix — past the cap, so it scrolls",
-    strip = Strip.None,
 )
 
 @Preview(name = "Composer, system buffer — light", widthDp = 360)
 @Composable
-private fun ConsoleLight() = ComposerPreview(dark = false, text = "", strip = Strip.None, placeholder = "Type a command…")
+private fun ConsoleLight() = ComposerPreview(dark = false, text = "", placeholder = "Type a command…", lead = StatusLead.Where(Location("Lurker", null, null), emptyList()))
 
 @Preview(name = "Composer, system buffer — dark", widthDp = 360)
 @Composable
-private fun ConsoleDark() = ComposerPreview(dark = true, text = "", strip = Strip.None, placeholder = "Type a command…")
+private fun ConsoleDark() = ComposerPreview(dark = true, text = "", placeholder = "Type a command…", lead = StatusLead.Where(Location("Lurker", null, null), emptyList()))
 
 private val previewReadout = UploadReadout(UploadPhase.Uploading(0.42), UploadBatchPosition(2, 4))
 
 @Preview(name = "Composer, uploading — light", widthDp = 360)
 @Composable
-private fun UploadingLight() = ComposerPreview(dark = false, text = "", strip = Strip.None, attaches = true, readout = previewReadout)
+private fun UploadingLight() = ComposerPreview(dark = false, text = "", attaches = true, readout = previewReadout)
 
 @Preview(name = "Composer, uploading — dark", widthDp = 360)
 @Composable
-private fun UploadingDark() = ComposerPreview(dark = true, text = "", strip = Strip.None, attaches = true, readout = previewReadout)
+private fun UploadingDark() = ComposerPreview(dark = true, text = "", attaches = true, readout = previewReadout)

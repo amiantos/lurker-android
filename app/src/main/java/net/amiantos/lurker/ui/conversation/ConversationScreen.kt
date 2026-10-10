@@ -33,7 +33,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -84,19 +86,23 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import net.amiantos.lurker.platform.AppEvent
+import net.amiantos.lurker.platform.LocalAppEvents
+import net.amiantos.lurker.platform.LocalToastCenter
+import net.amiantos.lurker.platform.ToastCenter
 import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.actions.MessageActionsHost
 import net.amiantos.lurker.ui.actions.rememberMessageActionsState
 import net.amiantos.lurker.ui.composer.ComposerBar
 import net.amiantos.lurker.ui.composer.ComposerModel
 import net.amiantos.lurker.ui.composer.SendScroll
-import net.amiantos.lurker.ui.composer.SuggestionsView
 import net.amiantos.lurker.ui.feeds.AppView
 import net.amiantos.lurker.ui.feeds.ConversationViewsActions
 import net.amiantos.lurker.ui.composer.rememberComposerState
 import net.amiantos.lurker.ui.media.MediaSource
 import net.amiantos.lurker.ui.media.PreviewContext
 import net.amiantos.lurker.ui.media.PreviewToggles
+import net.amiantos.lurker.ui.shell.NoticeHost
 import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.uploads.ComposerInsertTarget
 import net.amiantos.lurker.ui.uploads.LocalUploadServices
@@ -114,8 +120,6 @@ import net.amiantos.lurker.ui.shell.JumpLedger
 import net.amiantos.lurker.ui.shell.JumpRequest
 import net.amiantos.lurker.ui.shell.SafeUriHandler
 import net.amiantos.lurker.ui.shell.StateView
-import net.amiantos.lurker.ui.shell.StatusTitle
-import net.amiantos.lurker.ui.shell.StatusTitleText
 import net.amiantos.lurker.ui.shell.rememberConnectionBannerState
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
@@ -127,7 +131,8 @@ import net.amiantos.lurkerkit.model.LinkPreview
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageRow
 import net.amiantos.lurkerkit.model.Reactions
-import net.amiantos.lurkerkit.model.StatusLight
+import net.amiantos.lurkerkit.model.StatusNotification
+import net.amiantos.lurkerkit.model.StatusToast
 import net.amiantos.lurkerkit.rendering.NickHighlighter
 import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.store.ChatState
@@ -198,6 +203,9 @@ import java.time.ZoneOffset
  * @param onOpenMedia the media viewer `MainScaffold` hosts, over a message's pictures and positioned on
  *   one; null and a tap on a picture opens its address.
  * @param media where preview pictures come from — `MainScaffold`'s, shared with the viewer.
+ * @param covered a dialog is over the window — Settings, a sheet, the uploads browser, the media
+ *   viewer, from either pane. The status row can't be seen, so no toast goes into it (lurker#1098).
+ * @param takesToasts this screen is the destination, not one sliding out behind the list on a phone.
  */
 @Composable
 fun ConversationScreen(
@@ -220,6 +228,8 @@ fun ConversationScreen(
     onOpenView: ((AppView) -> Unit)? = null,
     onOpenMedia: ((List<LinkPreview>, Int) -> Unit)? = null,
     media: MediaSource,
+    covered: Boolean = false,
+    takesToasts: Boolean = true,
 ) {
     val kind = remember(key) { BufferKind.of(networkId = key.networkId, target = key.target) }
 
@@ -340,24 +350,13 @@ fun ConversationScreen(
     val banner = rememberConnectionBannerState(model)
     var connectionShown by remember { mutableStateOf(false) }
 
-    // The title moves on its own — a DM peer's presence turns over with nothing else changing — and it
-    // moves nothing else, so it's its own stream rather than a reason to rebuild every row.
-    val titleFlow = remember(model, key) {
-        model.statePublisher.conflate().map { ConversationModel.title(it, key, kind) }.distinctUntilChanged()
-    }
-    val initialTitle = remember(model, key) { ConversationModel.title(model.state, key, kind) }
-    val title by titleFlow.collectAsStateWithLifecycle(initialValue = initialTitle)
-
     val clock = rememberDayClock()
     val clockFlow = remember { snapshotFlow { clock.value } }
 
-    // The builds. Re-projected on every processed frame AND on a one-second tick while anybody is
-    // typing: a typing entry's lease expires by the clock, not by a frame — the last thing a peer
-    // sends is `active`, and what happens next is nothing — so without the tick the line would sit
-    // there until some unrelated frame redrew it. Distinct by `same`, so most ticks change nothing;
-    // then rebuilt for the screen's own options (the divider, a jump's exemption, a `/clear` reveal)
-    // and the zone (a time-zone change moves every day boundary).
-    val ticks = remember(key) { MutableStateFlow(0) }
+    // The builds. Re-projected on every processed frame, distinct by `same`; then rebuilt for the
+    // screen's own options (the divider, a jump's exemption, a `/clear` reveal) and the zone (a
+    // time-zone change moves every day boundary). Who's typing no longer passes through here: it's
+    // the composer's status row's own stream (lurker-ios#61), with its own once-a-second re-read.
     val projector = remember(key) { ConversationProjector(key, kind) }
     // The first build, on the main thread, once: so a screen that opens on loaded history draws it
     // on its first frame — and a restored scroll position has rows to restore onto — rather than
@@ -366,7 +365,7 @@ fun ConversationScreen(
         ConversationModel.built(projector.project(model.state), scroll.options, seq = 0, zone = clock.value.zone)
     }
     val builtFlow = remember(model, key) {
-        val inputs = combine(frames.filterNotNull(), ticks) { frame, _ -> Stamped(frame.seq, projector.project(frame.state)) }
+        val inputs = frames.filterNotNull().map { frame -> Stamped(frame.seq, projector.project(frame.state)) }
             .distinctUntilChanged { old, new -> ConversationInputs.same(old.inputs, new.inputs) }
         combine(inputs, options, clockFlow) { stamped, opts, day ->
             ConversationModel.built(stamped.inputs, opts, seq = stamped.seq, zone = day.zone)
@@ -533,15 +532,6 @@ fun ConversationScreen(
             builtFlow.collect { built -> accept(built) }
         }
     }
-    val someoneTyping = current.inputs.typists.isNotEmpty()
-    LaunchedEffect(someoneTyping) {
-        // One second is well inside the shortest lease (6s), and coarse enough to be free.
-        while (someoneTyping) {
-            delay(1_000)
-            ticks.value += 1
-        }
-    }
-
     // MARK: - Layouts
 
     // The reader taking hold of the list releases a converging jump — see `onUserDrag`.
@@ -714,6 +704,46 @@ fun ConversationScreen(
         onShowProfile = onShowProfile,
     )
 
+    // In-app notifications in the status row (lurker#1098). Whether the row can be seen: this screen
+    // is the destination, started, with nothing over it — neither a dialog from either pane nor the
+    // composer's own colour editor. iOS's `isUncovered`.
+    val events = LocalAppEvents.current
+    var started by remember { mutableStateOf(false) }
+    LifecycleStartEffect(Unit) {
+        started = true
+        onStopOrDispose { started = false }
+    }
+    val uncovered = takesToasts && !covered && !composer.editorOpen
+    val currentUncovered by rememberUpdatedState(uncovered)
+    SideEffect {
+        composer.canShowToasts = { currentUncovered && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) }
+        // A notice too long for the one-line row floats above the composer, where it can wrap.
+        composer.onNoticeOverflow = { message -> events?.send(AppEvent.Notice(message, floats = true)) }
+    }
+    // Toasts that waited while the row was covered go up once it's clear.
+    LaunchedEffect(uncovered, started) { if (uncovered && started) composer.toastSurfaceChanged() }
+    val toastCenter = LocalToastCenter.current
+    DisposableEffect(toastCenter, composer) {
+        val unregister = toastCenter?.register(
+            object : ToastCenter.Surface {
+                // By `id`, which folds case: `#Lurker` and `#lurker` are one conversation.
+                override fun showsBuffer(key: BufferKey): Boolean = key.id == composer.key.id && composer.canShowToasts()
+                override fun take(notification: StatusNotification): Boolean {
+                    // Not into a row a dialog is covering: it would expire there unseen.
+                    if (!composer.canShowToasts()) return false
+                    composer.showToast(StatusToast.Notification(notification))
+                    return true
+                }
+            },
+        )
+        onDispose { unregister?.invoke() }
+    }
+    // Where a notification goes when tapped: its line, or for a friend coming online, the conversation
+    // with them — through `MainScaffold.open`, like every other way in.
+    fun openNotification(notification: StatusNotification) {
+        events?.send(AppEvent.OpenBuffer(notification.key, jumpTo = notification.messageId.takeIf { it > 0 }))
+    }
+
     // Uploads (lurker-android#15): this composer is where outside text lands while it's on screen — an
     // upload's link, Add to Message, a share's text — and its paperclip and paste start a run.
     val uploads = LocalUploadServices.current
@@ -742,7 +772,6 @@ fun ConversationScreen(
 
     val placeholder = ConversationModel.placeholder(hasRows = rows.isNotEmpty(), inputs = inputs, forceLoading = forceLoading)
     ConversationContent(
-        title = title,
         showsBack = showsBack,
         onBack = onBack,
         // A channel's nick list. iOS reaches it by a swipe in from the right edge as well as the info
@@ -763,7 +792,16 @@ fun ConversationScreen(
         flash = flash,
         onJumpToUnread = { if (scroll.jumpToFirstUnread()) startJump() },
         onJumpToLatest = ::jumpToLatest,
-        bottomBar = { ComposerBar(composer, uiPreferences.composerAutocapitalizes, uiPreferences.composerEnterSends, clockKey = day, attachments = attachments) },
+        bottomBar = {
+            ComposerBar(
+                composer, uiPreferences.composerAutocapitalizes, uiPreferences.composerEnterSends, clockKey = day,
+                attachments = attachments,
+                sideBySide = sideBySide,
+                // The highlight count goes where the highlights are.
+                onHighlightCountTap = onBack,
+                onToastTap = ::openNotification,
+            )
+        },
         // Inside the screen's link-opener provider, so Open Link uses the same `SafeUriHandler` as a tap.
         sheets = {
             MessageActionsHost(
@@ -777,13 +815,17 @@ fun ConversationScreen(
             )
         },
         overlay = { bottom ->
-            // Centred over the field for reach (the jump pill owns the trailing corner), riding the
-            // composer up with the keyboard.
-            SuggestionsView(
-                composer.suggestions,
-                onPick = composer::pick,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = bottom + 8.dp),
-            )
+            // The app's notices, while a conversation is up: into the status row when one fits and
+            // has no button (iOS's `showNotice`), else a snackbar floated above the composer, where it
+            // can wrap. An invitation's Join stays a snackbar: the row has no room for a button.
+            if (events != null) {
+                NoticeHost(
+                    events,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = bottom),
+                    priority = NoticeHost.PRIORITY_CONVERSATION,
+                    intercept = { notice -> notice.action == null && !notice.floats && uncovered && composer.showNotice(notice.message) },
+                )
+            }
         },
     )
 }
@@ -966,7 +1008,6 @@ private fun rememberFlashStrength(nonce: Long?): State<Float>? {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ConversationContent(
-    title: StatusTitle,
     showsBack: Boolean,
     onBack: () -> Unit,
     banner: ConnectionBannerState,
@@ -983,7 +1024,7 @@ internal fun ConversationContent(
     onJumpToLatest: () -> Unit = {},
     /** The composer — the scaffold's bottom bar, so the list's reservation includes it. */
     bottomBar: @Composable () -> Unit = {},
-    /** What floats over the list's bottom edge, given the reservation's height: the suggestions. */
+    /** What floats over the list's bottom edge, given the reservation's height: the screen's notices. */
     overlay: @Composable BoxScope.(bottom: Dp) -> Unit = {},
     /** The message sheets (`MessageActionsHost`), drawn inside the screen's `LocalUriHandler` provider. */
     sheets: @Composable () -> Unit = {},
@@ -1006,8 +1047,10 @@ internal fun ConversationContent(
         // What the log sits on — the web's `look.color.bg`, not the system's ground.
         containerColor = colors.bg,
         topBar = {
+            // No title: where you are and how the connection is doing sit in the composer's status
+            // row instead, and the top of the screen goes back to the conversation (iOS's `updateTitle`).
             TopAppBar(
-                title = { StatusTitleText(title) },
+                title = {},
                 navigationIcon = {
                     if (showsBack) {
                         IconButton(onClick = onBack) { Icon(LurkerIcons.ArrowBack, contentDescription = "Back") }
@@ -1128,7 +1171,6 @@ private fun ConversationPreview(dark: Boolean, empty: Boolean, pills: Conversati
             today = LocalDate.of(2026, 7, 25),
         )
         ConversationContent(
-            title = StatusTitle(title = "#lurker", status = StatusLight.Good, detail = "Libera"),
             showsBack = true,
             onBack = {},
             banner = ConnectionBannerState.Hidden,

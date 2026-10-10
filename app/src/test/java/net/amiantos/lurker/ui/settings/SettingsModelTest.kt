@@ -9,6 +9,8 @@ import net.amiantos.lurkerkit.model.SettingOption
 import net.amiantos.lurkerkit.model.SettingType
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.model.StatusNotification
+import net.amiantos.lurkerkit.push.AppPushUnavailable
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -178,6 +180,131 @@ class SettingsModelTest {
         )
         assertEquals("Used when Event filter is set to Smart.", SettingsModel.footer(SettingsSection.SmartFilter(emptyList())))
         assertNull(SettingsModel.footer(SettingsSection.Chat(emptyList())))
+    }
+
+    // MARK: - Notifications (lurker#1098)
+
+    private val soundChoice = SettingOption(
+        "notifications.highlight.sound.choice", "", "", SettingType.Enum, SettingValue.String("ping"),
+        choices = listOf("ping", "chime", "pop", "beep", "knock", "plink", "gong"),
+    )
+
+    /** Every kind's switch, and the highlight kind's sound keys. */
+    private fun notificationRegistry(): Map<String, SettingOption> {
+        val kinds = SettingsModel.notificationKinds.map { it.first.rawValue }
+        return kinds.associate { "notifications.$it.enabled" to bool("notifications.$it.enabled", default = true) } +
+            mapOf(
+                "notifications.highlight.sound.enabled" to bool("notifications.highlight.sound.enabled"),
+                "notifications.highlight.sound.choice" to soundChoice,
+                "notifications.highlight.sound.volume" to int("notifications.highlight.sound.volume", 60, min = 0, max = 100),
+                // A kind with only half its sound keys gets no sound row.
+                "notifications.dm.sound.enabled" to bool("notifications.dm.sound.enabled"),
+            )
+    }
+
+    @Test
+    fun notificationsSitAfterAppearanceWithASwitchPerKindAndASoundWhereBothKeysExist() {
+        val sections = SettingsModel.sections(inputs(fullRegistry() + notificationRegistry()))
+        assertEquals(
+            listOf("Networks", "Chat", "Events", "SmartFilter", "Appearance", "Notifications", "Device", "Account", "About"),
+            sections.map { it::class.simpleName },
+        )
+        val rows = sections.filterIsInstance<SettingsSection.Notifications>().single().rows
+        assertEquals(
+            listOf(
+                "notifications.highlight.enabled", "sound:highlight", "notifications.dm.enabled",
+                "notifications.always_notify.enabled", "notifications.kicked.enabled", "notifications.friend_online.enabled",
+            ),
+            rows.map { row ->
+                when (row) {
+                    is NotificationRow.Toggle -> row.row.option.key
+                    is NotificationRow.Sound -> "sound:" + row.kind.rawValue
+                }
+            },
+        )
+        assertEquals(
+            listOf("Highlights", "Highlight sound", "Direct messages", "Always-notify channels", "Kicks", "Friends coming online"),
+            rows.map { row -> if (row is NotificationRow.Toggle) row.row.label else (row as NotificationRow.Sound).label },
+        )
+        assertTrue(SettingsModel.hasNotifications(sections))
+        assertFalse(SettingsModel.hasNotifications(SettingsModel.sections(inputs())))
+    }
+
+    @Test
+    fun theNotificationsFooterCarriesThePushNotice() {
+        val section = SettingsSection.Notifications(emptyList())
+        assertEquals("Notifications", SettingsModel.header(section))
+        assertEquals("Shown in the app while it's open, and pushed when it isn't.", SettingsModel.footer(section))
+        assertEquals(
+            "Shown in the app while it's open. Your server's admin hasn't turned on push for the apps.",
+            SettingsModel.footer(section, AppPushUnavailable.NotTurnedOn),
+        )
+        assertEquals(
+            "Shown in the app while it's open. This server's push relay isn't supported by this app.",
+            SettingsModel.footer(section, AppPushUnavailable.RelayUnsupported),
+        )
+    }
+
+    @Test
+    fun theSoundRowReadsWhatWillPlayAndOffersOffPlusTheBundledSounds() {
+        val settings = Settings(registry = notificationRegistry(), values = emptyMap())
+        val off = SettingsModel.soundRow("Highlight sound", StatusNotification.Kind.Highlight, settings, SettingsEdits())
+        assertEquals("notifications.highlight.sound.choice", off.key)
+        val menu = off.control as SettingControl.Menu
+        // Off by default for highlights, so the row says so — not the registry's "ping".
+        assertEquals(SettingsModel.SOUND_OFF, menu.current)
+        assertEquals("Off", menu.title)
+        // Off first, then the sounds this build bundles, capitalized; a choice it doesn't ("gong") is left out.
+        assertEquals(listOf("", "ping", "chime", "pop", "beep", "knock", "plink"), menu.choices.map { it.value })
+        assertEquals(listOf("Off", "Ping", "Chime", "Pop", "Beep", "Knock", "Plink"), menu.choices.map { it.label })
+        assertTrue(off.enabled)
+
+        val on = settings.copy(values = mapOf("notifications.highlight.sound.enabled" to SettingValue.Bool(true), "notifications.highlight.sound.choice" to SettingValue.String("knock")))
+        assertEquals("knock", (SettingsModel.soundRow("Highlight sound", StatusNotification.Kind.Highlight, on, SettingsEdits()).control as SettingControl.Menu).current)
+        // A pick's pending write shows at once.
+        val pending = SettingsEdits(pending = mapOf("notifications.highlight.sound.enabled" to SettingValue.Bool(true), "notifications.highlight.sound.choice" to SettingValue.String("pop")))
+        assertEquals("pop", (SettingsModel.soundRow("Highlight sound", StatusNotification.Kind.Highlight, settings, pending).control as SettingControl.Menu).current)
+        // Greyed while the kind itself is off.
+        val kindOff = settings.copy(values = mapOf("notifications.highlight.enabled" to SettingValue.Bool(false)))
+        assertFalse(SettingsModel.soundRow("Highlight sound", StatusNotification.Kind.Highlight, kindOff, SettingsEdits()).enabled)
+        // A refusal pinned under the choice key shows on this row.
+        val refused = SettingsEdits(error = WriteError("notifications.highlight.sound.choice", "no"))
+        assertEquals("no", SettingsModel.soundRow("Highlight sound", StatusNotification.Kind.Highlight, settings, refused).error)
+    }
+
+    @Test
+    fun aSoundPickWritesOnAndTheChoiceTogetherAndRestoresASilencedVolume() {
+        val settings = Settings(registry = notificationRegistry(), values = emptyMap())
+        assertEquals(
+            mapOf("notifications.highlight.sound.enabled" to SettingValue.Bool(true), "notifications.highlight.sound.choice" to SettingValue.String("knock")),
+            SettingsModel.soundWrite(StatusNotification.Kind.Highlight, "knock", settings),
+        )
+        assertEquals(
+            mapOf("notifications.highlight.sound.enabled" to SettingValue.Bool(false)),
+            SettingsModel.soundWrite(StatusNotification.Kind.Highlight, SettingsModel.SOUND_OFF, settings),
+        )
+        val silenced = settings.copy(values = mapOf("notifications.highlight.sound.volume" to SettingValue.Int(0)))
+        assertEquals(
+            mapOf(
+                "notifications.highlight.sound.enabled" to SettingValue.Bool(true),
+                "notifications.highlight.sound.choice" to SettingValue.String("pop"),
+                "notifications.highlight.sound.volume" to SettingValue.Int(60),
+            ),
+            SettingsModel.soundWrite(StatusNotification.Kind.Highlight, "pop", silenced),
+        )
+    }
+
+    @Test
+    fun aWriteOfSeveralKeysSettlesEveryKeyItCarried() {
+        val values = mapOf("a" to SettingValue.Bool(true), "b" to SettingValue.String("x"))
+        val began = values.entries.fold(SettingsEdits()) { acc, (k, v) -> acc.began(k, v) }.began("c", SettingValue.Bool(false))
+        val done = began.finished(values, errorKey = "b", failure = null)
+        assertEquals(mapOf("c" to SettingValue.Bool(false)), done.pending)
+        assertNull(done.error)
+        assertEquals(WriteError("b", "nope"), began.finished(values, errorKey = "b", failure = "nope").error)
+        // A key overtaken by a newer value since is left to its own write.
+        val overtaken = began.began("a", SettingValue.Bool(false)).finished(values, errorKey = "b", failure = null)
+        assertEquals(mapOf("a" to SettingValue.Bool(false), "c" to SettingValue.Bool(false)), overtaken.pending)
     }
 
     // MARK: - Controls

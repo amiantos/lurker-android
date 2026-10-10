@@ -13,6 +13,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import net.amiantos.lurker.platform.AppEvents
+import net.amiantos.lurker.platform.ToastCenter
 import net.amiantos.lurker.ui.dcc.DccOffers
 import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.signin.SignInScreen
@@ -39,6 +40,7 @@ fun AppRoot(
     model: ChatViewModel,
     uiPreferences: UiPreferences,
     events: AppEvents,
+    toastCenter: ToastCenter,
     dccOffers: DccOffers,
     uploads: UploadServices,
     signInNotice: StateFlow<String?>,
@@ -68,6 +70,7 @@ fun AppRoot(
                     model = model,
                     uiPreferences = uiPreferences,
                     events = events,
+                    toastCenter = toastCenter,
                     dccOffers = dccOffers,
                     uploads = uploads,
                     onSignOut = model::logout,

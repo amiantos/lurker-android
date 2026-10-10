@@ -263,9 +263,10 @@ object MessageText {
      * reads in its place, the colon doing in speech what the glyph does in print. A non-breaking space
      * follows it, so the row can't wrap with the glyph alone on its first line. It hangs by the
      * glyph's width on top of the usual character, so a wrapped list continues under the first
-     * *name*. Null for an empty list.
+     * *name*. Null for an empty list. [inline], for the composer's status row (lurker-ios#61 moved
+     * the line there), leaves the hanging indent off: a one-line row has nothing to wrap.
      */
-    fun renderCompactTyping(nicks: List<String>, style: MessageTextStyle): AnnotatedString? {
+    fun renderCompactTyping(nicks: List<String>, style: MessageTextStyle, inline: Boolean = false): AnnotatedString? {
         if (nicks.isEmpty()) return null
         val visible = nicks.take(3)
         val hidden = nicks.size - visible.size
@@ -282,7 +283,8 @@ object MessageText {
         return buildAnnotatedString {
             appendInlineContent(TYPING_GLYPH, "Typing:")
             append(names.toAnnotatedString(paragraph = null, linkStyles = TextLinkStyles(), onToggleSpoiler = null))
-            addStyle(ParagraphStyle(textIndent = TextIndent(firstLine = 0.sp, restLine = indent.sp)), 0, length)
+            // Inline (the composer's one-line status row) there's no wrapping to hang.
+            if (!inline) addStyle(ParagraphStyle(textIndent = TextIndent(firstLine = 0.sp, restLine = indent.sp)), 0, length)
         }
     }
 

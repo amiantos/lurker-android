@@ -50,6 +50,27 @@ class SettingsWriterTest {
     }
 
     @Test
+    fun severalKeysGoInOneWriteAndARefusalPinsUnderTheNamedRow() = runTest {
+        val server = FakeServer()
+        val writer = writer(server)
+        val values = mapOf("a.sound.enabled" to SettingValue.Bool(true), "a.sound.choice" to SettingValue.String("knock"))
+        writer.setAll(values, errorKey = "a.sound.choice")
+        assertEquals(listOf(values), server.sent)
+        assertEquals(values, writer.edits.pending)
+        server.replies.single().complete("no such sound")
+        runCurrent()
+        assertEquals(WriteError("a.sound.choice", "no such sound"), writer.edits.error)
+        assertTrue(writer.edits.pending.isEmpty())
+        // Success clears every key the write carried, and nothing a later write set since.
+        writer.setAll(values, errorKey = "a.sound.choice")
+        writer.set("b", SettingValue.Bool(true))
+        server.replies[1].complete(null)
+        runCurrent()
+        assertEquals(mapOf("b" to SettingValue.Bool(true)), writer.edits.pending)
+        assertNull(writer.edits.error)
+    }
+
+    @Test
     fun aRefusalPinsTheServersReason() = runTest {
         val server = FakeServer()
         val writer = writer(server)

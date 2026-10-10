@@ -3,6 +3,8 @@
 
 package net.amiantos.lurker.ui.settings
 
+import net.amiantos.lurker.platform.NotificationSounds
+import net.amiantos.lurkerkit.model.StatusNotification
 import net.amiantos.lurkerkit.push.AppPushUnavailable
 import net.amiantos.lurker.ui.networks.FormErrorRow
 import kotlinx.coroutines.launch
@@ -168,6 +170,15 @@ internal fun SettingsDialog(
                 // synchronously, so the switch is already telling the truth.
                 onAutocapitalize = uiPreferences::setComposerAutocapitalizes,
                 onEnterSends = uiPreferences::setComposerEnterSends,
+                // Picking a sound plays it, as the web's preview button does, and turns it on in the
+                // same write (`SettingsModel.soundWrite`).
+                onPickSound = { kind, choice ->
+                    if (choice != SettingsModel.SOUND_OFF) NotificationSounds.play(choice)
+                    writer.setAll(
+                        SettingsModel.soundWrite(kind, choice, inputs.settings),
+                        errorKey = "notifications.${kind.rawValue}.sound.choice",
+                    )
+                },
                 onSignOut = { confirmingSignOut = true },
             ),
         )
@@ -226,10 +237,12 @@ internal class SettingsActions(
     val onStep: (key: String, value: SettingValue) -> Unit,
     val onAutocapitalize: (Boolean) -> Unit,
     val onEnterSends: (Boolean) -> Unit,
+    /** A kind's sound pull-down: Off (`SettingsModel.SOUND_OFF`) or a sound's name. */
+    val onPickSound: (kind: StatusNotification.Kind, choice: String) -> Unit,
     val onSignOut: () -> Unit,
 ) {
     companion object {
-        val None = SettingsActions({}, {}, { _, _ -> }, { _, _ -> }, {}, {}, {})
+        val None = SettingsActions({}, {}, { _, _ -> }, { _, _ -> }, {}, {}, { _, _ -> }, {})
     }
 }
 
@@ -254,10 +267,12 @@ private fun SettingsContent(
     about: AboutLines,
     actions: SettingsActions,
 ) {
+    // The push notice is the Notifications section's footer when there is one; else the device rows'.
+    val hasNotifications = SettingsModel.hasNotifications(sections)
     DialogPage(title = "Settings", exit = PageExit.Close, onExit = actions.onClose) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
             sections.forEachIndexed { index, section ->
-                section(index, section, settings, edits, device, about, actions)
+                section(index, section, settings, edits, device, about, actions, hasNotifications)
             }
             item(key = "end") { Spacer(Modifier.height(24.dp)) }
         }
@@ -273,6 +288,7 @@ private fun LazyListScope.section(
     device: DeviceToggles,
     about: AboutLines,
     actions: SettingsActions,
+    hasNotifications: Boolean,
 ) {
     val id = section::class.simpleName ?: "section$index"
     val header = SettingsModel.header(section)
@@ -289,6 +305,22 @@ private fun LazyListScope.section(
         is SettingsSection.Events -> settingRows(id, section.rows, settings, edits, actions)
         is SettingsSection.SmartFilter -> settingRows(id, section.rows, settings, edits, actions)
         is SettingsSection.Appearance -> settingRows(id, section.rows, settings, edits, actions)
+        is SettingsSection.Notifications -> for (row in section.rows) {
+            when (row) {
+                is NotificationRow.Toggle -> item(key = "$id.${row.row.option.key}") {
+                    SettingRowView(SettingsModel.rowState(row.row, settings, edits), actions)
+                }
+                is NotificationRow.Sound -> item(key = "$id.${row.kind.rawValue}.sound") {
+                    val state = SettingsModel.soundRow(row.label, row.kind, settings, edits)
+                    Column(Modifier.fillMaxWidth()) {
+                        MenuRow(state.label, state.control as SettingControl.Menu, state.enabled) { choice ->
+                            actions.onPickSound(row.kind, choice.value)
+                        }
+                        FormErrorRow(state.error)
+                    }
+                }
+            }
+        }
         is SettingsSection.Unavailable -> item(key = id) { UnavailableRow(loaded = section.loaded) }
         SettingsSection.Device -> item(key = id) {
             // U9: notification preferences, if the slice adds any, are device rows too — iOS has none
@@ -304,7 +336,7 @@ private fun LazyListScope.section(
                     checked = device.enterSends,
                     onCheckedChange = actions.onEnterSends,
                 )
-                device.noAppPush?.let { FormSectionFooter(noAppPushNote(it)) }
+                if (!hasNotifications) device.noAppPush?.let { FormSectionFooter(SettingsModel.pushUnavailableText(it)) }
             }
         }
         SettingsSection.Account -> item(key = id) {
@@ -312,7 +344,7 @@ private fun LazyListScope.section(
         }
         SettingsSection.About -> item(key = id) { AboutRows(about) }
     }
-    val footer = SettingsModel.footer(section)
+    val footer = SettingsModel.footer(section, device.noAppPush)
     if (footer != null) item(key = "$id.footer") { FormSectionFooter(footer) }
 }
 
@@ -565,6 +597,13 @@ private fun previewSettings(): Settings {
         bool("chat.smart_filter_join", true),
         int("chat.smart_filter_delay", 15, min = 1, max = 120),
         bool("look.nick.show_mode_prefix", false),
+        bool("notifications.highlight.enabled", true),
+        bool("notifications.highlight.sound.enabled", false),
+        SettingOption(
+            "notifications.highlight.sound.choice", "", "", SettingType.Enum, SettingValue.String("ping"),
+            choices = listOf("ping", "chime", "pop", "beep", "knock", "plink"),
+        ),
+        bool("notifications.dm.enabled", true),
     )
     return Settings(registry = options.associateBy { it.key }, values = mapOf("chat.keep_position_on_send" to SettingValue.Bool(true)))
 }
@@ -615,8 +654,3 @@ private fun UnavailablePreviewLight() = SettingsPreview(dark = false, settings =
 @Composable
 private fun UnavailablePreviewDark() = SettingsPreview(dark = true, settings = Settings())
 
-/** Shown under the device rows when the server can't push to the app, by reason. */
-internal fun noAppPushNote(reason: AppPushUnavailable): String = when (reason) {
-    AppPushUnavailable.NotTurnedOn -> "Your server's admin hasn't turned on push for the apps."
-    AppPushUnavailable.RelayUnsupported -> "This server's push relay isn't supported by this app."
-}

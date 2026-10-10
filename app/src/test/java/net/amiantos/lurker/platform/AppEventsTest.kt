@@ -86,9 +86,19 @@ class AppEventsTest {
         val dialog = Any()
         events.claimNotices(scaffold)
         events.claimNotices(dialog)
-        assertEquals(dialog, events.noticeHosts.value.last())
+        assertEquals(dialog, events.noticeHosts.value.last().host)
         events.releaseNotices(dialog)
-        assertEquals(scaffold, events.noticeHosts.value.last())
+        assertEquals(scaffold, events.noticeHosts.value.last().host)
+        // Standing outranks order: a conversation's host claimed before the scaffold's still shows over
+        // it, and a dialog's over both (lurker#1098).
+        val conversation = Any()
+        events.claimNotices(conversation, priority = 1)
+        events.claimNotices(scaffold)
+        assertEquals(conversation, events.noticeHosts.value.last().host)
+        events.claimNotices(dialog, priority = 2)
+        assertEquals(dialog, events.noticeHosts.value.last().host)
+        events.releaseNotices(dialog)
+        assertEquals(conversation, events.noticeHosts.value.last().host)
     }
 
     @Test

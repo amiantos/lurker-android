@@ -72,6 +72,7 @@ class MainActivity : ComponentActivity() {
                     model = app.model,
                     uiPreferences = app.uiPreferences,
                     events = app.events,
+                    toastCenter = app.toastCenter,
                     dccOffers = app.dccOffers,
                     uploads = app.uploads,
                     signInNotice = app.browserSignIn.notice,

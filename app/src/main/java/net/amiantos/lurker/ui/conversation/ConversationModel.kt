@@ -5,7 +5,6 @@ package net.amiantos.lurker.ui.conversation
 
 import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.shell.StateSymbol
-import net.amiantos.lurker.ui.shell.StatusTitle
 import net.amiantos.lurkerkit.model.AwayState
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
@@ -26,7 +25,6 @@ import net.amiantos.lurkerkit.model.RelayBotSet
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.model.SpeakerMap
-import net.amiantos.lurkerkit.model.StatusLight
 import net.amiantos.lurkerkit.model.TagSupport
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
@@ -50,9 +48,8 @@ import net.amiantos.lurkerkit.model.PrefixMode
  *  - [networks] whole, not just this buffer's: the system buffer labels its lines with *other*
  *    networks' names, a name arrives later than its network does, and your own away state (the
  *    presence markers) hangs off `Network`.
- *  - [typists] as the RENDERED list, not the raw entries: a peer re-sends `active` every ~3s with a
- *    fresh lease, and comparing entries would rebuild every row three times a second to draw a line
- *    that hasn't changed.
+ *  - who's typing is NOT here: the typing line lives in the composer's status row now (lurker-ios#61),
+ *    on its own stream, so a peer's `active` every ~3s never rebuilds a row.
  *  - [settings]: consolidation and the event tier reshape the rows, and arrive on their own from
  *    another device.
  *  - [modePrefixes] as the DERIVED glyph map, not `members`: a `Member` carries `away`, which flips
@@ -76,7 +73,6 @@ internal class ConversationInputs(
     val ignores: IgnoreSet,
     val relayBots: RelayBotSet,
     val speakers: SpeakerMap?,
-    val typists: List<String>,
     val rosterSettled: Boolean,
     val reactionsRevision: Int,
     /** Not compared — [reactionsRevision] stands for it. */
@@ -108,7 +104,6 @@ internal class ConversationInputs(
                 old.ignores === new.ignores &&
                 old.relayBots === new.relayBots &&
                 old.speakers == new.speakers &&
-                old.typists == new.typists &&
                 old.rosterSettled == new.rosterSettled &&
                 old.reactionsRevision == new.reactionsRevision &&
                 old.support == new.support &&
@@ -132,7 +127,7 @@ internal class ConversationProjector(private val key: BufferKey, private val kin
     private var modePrefixes: Map<String, MemberPrefix.Mark> = emptyMap()
     private var highlighterNicks: List<String> = emptyList()
 
-    fun project(state: ChatState, now: Instant = Instant.now()): ConversationInputs {
+    fun project(state: ChatState): ConversationInputs {
         val members = state.members[key.id]
         val ownNick = key.networkId?.let { state.networks[it]?.nick }
         val showsPrefix = state.settings.bool("look.nick.show_mode_prefix", default = false)
@@ -160,7 +155,6 @@ internal class ConversationProjector(private val key: BufferKey, private val kin
             ignores = state.ignores,
             relayBots = state.relayBots,
             speakers = state.speakers[key.id],
-            typists = state.typists(key, now),
             rosterSettled = state.rosterSettled,
             reactionsRevision = state.reactionsRevision(key),
             reactions = state.reactions,
@@ -173,8 +167,9 @@ internal class ConversationProjector(private val key: BufferKey, private val kin
 
 
 /**
- * The conversation's decisions, pure: which rows it draws, what its title says, what it shows when
- * there's nothing to draw. lurker-ios's `ChatViewController.apply` and the static helpers beside it.
+ * The conversation's decisions, pure: which rows it draws, and what it shows when there's nothing to
+ * draw. Where you are and how the connection is doing moved to the composer's status row
+ * (`ComposerModel.location`). lurker-ios's `ChatViewController.apply` and the static helpers beside it.
  */
 internal object ConversationModel {
 
@@ -272,7 +267,8 @@ internal object ConversationModel {
             // A jump onto a row the `/clear` marker hides peels it back — screen state, see
             // `ConversationScroll.revealIfJumpTargetHidden`.
             showsClearedHistory = options.showsClearedHistory,
-            typists = inputs.typists,
+            // The typing line lives in the composer's status row now (lurker-ios#61), never in the list.
+            typists = emptyList(),
             settings = inputs.settings,
             speakers = inputs.speakers ?: SpeakerMap(),
             ownNick = inputs.ownNick,
@@ -280,38 +276,6 @@ internal object ConversationModel {
             now = now,
             zone = zone,
         )
-    }
-
-    /**
-     * The title, and the status in the subtitle under it. iOS's `updateTitle`.
-     *
-     * The light is layered outside-in through `StatusLight.of` — the device's path, our socket, then
-     * the network — except a DCC chat's, which is its own session and never the network's (lurker#270).
-     * A DM's subtitle reports the peer once the link is good (lurker-ios#55), read through
-     * `rowPresence`, the buffer list's reading, so the title and the DM's row never disagree.
-     */
-    fun title(state: ChatState, key: BufferKey, kind: BufferKind): StatusTitle {
-        val networkName = key.networkId?.let { state.networks[it]?.name }
-        val buffer = state.buffer(key)
-        val status = if (kind == BufferKind.Dcc) {
-            StatusLight.ofDccChat(reachable = state.reachable, connection = state.connection, live = state.dccChatSession(key))
-        } else {
-            StatusLight.of(
-                reachable = state.reachable,
-                connection = state.connection,
-                network = key.networkId?.let { state.networks[it]?.state },
-            )
-        }
-        // What the subtitle names beside the status: the network a conversation is on. Nothing for a
-        // server buffer, whose title already is the network, or the system buffer, which has none.
-        val detail = when (kind) {
-            BufferKind.Channel, BufferKind.Dm -> networkName
-            BufferKind.Dcc -> "DCC chat"
-            BufferKind.Server, BufferKind.System -> null
-        }
-        val networkId = key.networkId
-        val peer = if (kind == BufferKind.Dm && networkId != null) state.rowPresence(networkId, buffer.target) else null
-        return StatusTitle(title = buffer.displayName(networkName), status = status, detail = detail, peer = peer)
     }
 
     /**

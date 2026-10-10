@@ -15,6 +15,8 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 
 /** The scheme's [LurkerColors]. Static: it changes only when the whole theme does. */
 val LocalLurkerColors = staticCompositionLocalOf<LurkerColors> {
@@ -48,6 +50,14 @@ fun LurkerTheme(
         )
     }
 }
+
+/**
+ * The message list's fixed-width face at its one size — what the buffer list's rows, the composer's
+ * slab and the colour editor are set in too, so the chat reads as one terminal-ish piece, the way
+ * the web's log, status bar and input do. `bodyMedium` is the size U0 set all of its text in.
+ */
+@Composable
+internal fun monoTextStyle(): TextStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
 
 /** `LurkerTheme.colors`, as `MaterialTheme.colorScheme` reads. */
 object LurkerTheme {

@@ -52,6 +52,7 @@ import net.amiantos.lurker.ui.networks.FullScreenDialog
 import net.amiantos.lurker.ui.networks.PageExit
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
+import net.amiantos.lurker.ui.theme.monoTextStyle
 import net.amiantos.lurker.ui.uploads.Attachments
 import net.amiantos.lurker.ui.uploads.receivesPastedImages
 
@@ -111,7 +112,9 @@ internal fun ColorEditor(
                     state = state.field,
                     inputTransformation = state.colorInput,
                     outputTransformation = colorOutput,
-                    textStyle = MaterialTheme.typography.titleLarge.copy(color = LurkerTheme.colors.fg),
+                    // The message list's fixed-width face, as in the composer this edits for; what's
+                    // written here is read against the list's own ground (the dialog's `background`).
+                    textStyle = monoTextStyle().copy(color = LurkerTheme.colors.fg),
                     cursorBrush = SolidColor(LurkerTheme.colors.accent),
                     keyboardOptions = KeyboardOptions(
                         capitalization = if (capitalizes) KeyboardCapitalization.Sentences else KeyboardCapitalization.None,

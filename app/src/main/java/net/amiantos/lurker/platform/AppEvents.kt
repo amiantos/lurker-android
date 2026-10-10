@@ -32,9 +32,11 @@ sealed interface AppEvent {
 
     /**
      * A one-line notice over whatever is on screen — a join that didn't happen says why. With
-     * [action], a button on it: an invitation's Join (lurker#261).
+     * [action], a button on it: an invitation's Join (lurker#261). A conversation on screen takes a
+     * plain notice into its composer's status row (lurker#1098); [floats] keeps one out of it — a
+     * notice the row already found too long for itself — so it shows as a snackbar, where it can wrap.
      */
-    class Notice(val message: String, val action: NoticeAction? = null) : AppEvent
+    class Notice(val message: String, val action: NoticeAction? = null, val floats: Boolean = false) : AppEvent
 
     /**
      * The store rekeyed a buffer (a nick change in a DM, a channel rename). Whatever the navigator
@@ -45,6 +47,9 @@ sealed interface AppEvent {
 
 /** A notice's button: what it says, and what tapping it does. */
 class NoticeAction(val label: String, val run: () -> Unit)
+
+/** A host that can show notices, and where it stands — see [AppEvents.noticeHosts]. */
+class NoticeHostClaim(val host: Any, val priority: Int)
 
 /**
  * The hand-off itself, in two parts — plus a third, the composer's refusal nudge ([refusals]), which
@@ -76,10 +81,15 @@ class AppEvents {
     /** Notices waiting to be shown, oldest first. */
     val notices: StateFlow<List<AppEvent.Notice>> = pending.asStateFlow()
 
-    private val hosts = MutableStateFlow<List<Any>>(emptyList())
+    private val hosts = MutableStateFlow<List<NoticeHostClaim>>(emptyList())
 
-    /** The hosts that can show a notice, in the order they claimed; the last one shows. */
-    val noticeHosts: StateFlow<List<Any>> = hosts.asStateFlow()
+    /**
+     * The hosts that can show a notice, lowest priority first and within a priority in the order they
+     * claimed; the last one shows. Priority, because composition order isn't the stacking order: the
+     * scaffold's host is composed after the panes' screens but sits under a conversation's own, and
+     * a dialog's window is over everything whatever composed it.
+     */
+    val noticeHosts: StateFlow<List<NoticeHostClaim>> = hosts.asStateFlow()
 
     /** The current attachment ([attach]'s token), or null while no screen is up. */
     private var attachment: Any? = null
@@ -131,12 +141,12 @@ class AppEvents {
         pending.update { list -> if (list.firstOrNull() === notice) list.drop(1) else list }
     }
 
-    fun claimNotices(host: Any) {
-        hosts.update { it - host + host }
+    fun claimNotices(host: Any, priority: Int = 0) {
+        hosts.update { claims -> (claims.filter { it.host !== host } + NoticeHostClaim(host, priority)).sortedBy { it.priority } }
     }
 
     fun releaseNotices(host: Any) {
-        hosts.update { it - host }
+        hosts.update { claims -> claims.filter { it.host !== host } }
     }
 
     /**

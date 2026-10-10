@@ -3,7 +3,12 @@
 
 package net.amiantos.lurker.ui.list
 
+import androidx.compose.runtime.DisposableEffect
+import androidx.lifecycle.compose.LifecycleStartEffect
 import kotlinx.coroutines.flow.conflate
+import net.amiantos.lurker.platform.LocalToastCenter
+import net.amiantos.lurker.platform.ToastCenter
+import net.amiantos.lurker.ui.composer.StatusToastPresenter
 import net.amiantos.lurker.ui.networks.NetworkSheets
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -88,6 +93,8 @@ import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.FavoriteEntry
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.PresenceState
+import net.amiantos.lurkerkit.model.StatusNotification
+import net.amiantos.lurkerkit.model.StatusToast
 import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
@@ -120,6 +127,9 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
  * @param onOpenSettings opens Settings, which `MainScaffold` hosts (with Sign Out inside it).
  * @param sheets the networks dialogs, hosted by `MainScaffold`: "+" opens Join Channel and Add
  *   Network, and Settings → Networks opens the networks list over Settings.
+ * @param covered a dialog is over the window, from either pane: a toast on this list couldn't be seen.
+ * @param takesToasts this list is where an in-app notification goes (lurker#1098): the destination,
+ *   with no conversation beside it — one there shows it in its status row instead.
  * @param onOpenView opens Search, Activity or Bookmarks — the feeds `MainScaffold` hosts. Offered here
  *   only on its own screen (`ViewsLayout`): side by side the conversation column carries them.
  */
@@ -135,6 +145,8 @@ fun BufferListScreen(
     onOpenSettings: () -> Unit,
     sheets: NetworkSheets,
     onOpenView: (AppView) -> Unit = {},
+    covered: Boolean = false,
+    takesToasts: Boolean = true,
 ) {
     // Stage one: map every frame to what the list draws, and drop the frames that change none of
     // it. Stage two (below) builds the sections from what's left.
@@ -278,6 +290,42 @@ fun BufferListScreen(
         onOpenView = onOpenView,
     )
 
+    // In-app notifications while no conversation is on screen to carry them in its status row
+    // (lurker#1098): a highlight, a DM, a friend coming online. Tapping one goes to the line. Passing
+    // news: not carried over the screen arriving, nor still up, for a buffer just visited, when you
+    // come back — the presenter is cleared whenever the list stops taking them.
+    val scope = rememberCoroutineScope()
+    val toasts = remember { StatusToastPresenter(scope) }
+    var activeToast by remember { mutableStateOf<StatusToast?>(null) }
+    var started by remember { mutableStateOf(false) }
+    LifecycleStartEffect(Unit) {
+        started = true
+        onStopOrDispose { started = false }
+    }
+    val showsToasts = takesToasts && !covered && started
+    val currentShowsToasts by rememberUpdatedState(showsToasts)
+    SideEffect {
+        toasts.isVisible = { currentShowsToasts }
+        toasts.onChange = { activeToast = toasts.active }
+    }
+    LaunchedEffect(showsToasts) { if (!showsToasts) toasts.clear() }
+    val toastCenter = LocalToastCenter.current
+    DisposableEffect(toastCenter, toasts) {
+        val unregister = toastCenter?.register(
+            object : ToastCenter.Surface {
+                override fun take(notification: StatusNotification): Boolean {
+                    if (!currentShowsToasts) return false
+                    toasts.show(StatusToast.Notification(notification))
+                    return true
+                }
+            },
+        )
+        onDispose {
+            unregister?.invoke()
+            toasts.clear()
+        }
+    }
+
     BufferListContent(
         title = BufferListModel.statusTitle(inputs),
         sections = sections,
@@ -293,6 +341,16 @@ fun BufferListScreen(
         marksOpenBuffer = sideBySide,
         draggingSection = drag?.sectionId,
         actions = actions,
+        toast = activeToast,
+        onToastTap = {
+            // Where it goes when tapped: its line, or for a friend coming online, the conversation with
+            // them — through `MainScaffold.open`, like every other way in. The next one comes on after,
+            // so a tap that leaves the screen doesn't start it on the way out.
+            (toasts.takeActive() as? StatusToast.Notification)?.notification?.let { notification ->
+                events?.send(AppEvent.OpenBuffer(notification.key, jumpTo = notification.messageId.takeIf { it > 0 }))
+            }
+            toasts.presentNext()
+        },
     )
 }
 
@@ -348,6 +406,9 @@ internal fun BufferListContent(
     marksOpenBuffer: Boolean,
     draggingSection: SectionId?,
     actions: BufferListActions,
+    /** The in-app notification showing over the rows, if one is (lurker#1098). */
+    toast: StatusToast? = null,
+    onToastTap: () -> Unit = {},
 ) {
     Scaffold(
         containerColor = LurkerTheme.colors.rosterGround,
@@ -415,6 +476,15 @@ internal fun BufferListContent(
             ConnectionBanner(
                 state = banner,
                 modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp, start = 16.dp, end = 16.dp),
+            )
+            // Along the bottom, over the rows the same way the banner is — and after the list, so the
+            // tap is the capsule's and not the row's under it.
+            NotificationToast(
+                toast = toast,
+                onTap = onToastTap,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 16.dp, end = 16.dp, bottom = padding.calculateBottomPadding() + 16.dp),
             )
         }
     }

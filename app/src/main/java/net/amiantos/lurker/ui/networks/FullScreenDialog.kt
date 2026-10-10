@@ -84,7 +84,7 @@ internal fun FullScreenDialog(onDismissRequest: () -> Unit, content: @Composable
             // The app's notices, over this dialog while it's on top: a snackbar in the activity's
             // window would be drawn under this one's, where nobody reads it (iOS toasts on the sheet).
             LocalAppEvents.current?.let { events ->
-                NoticeHost(events, Modifier.align(Alignment.BottomCenter).safeDrawingPadding().imePadding())
+                NoticeHost(events, Modifier.align(Alignment.BottomCenter).safeDrawingPadding().imePadding(), priority = NoticeHost.PRIORITY_DIALOG)
             }
         }
     }
