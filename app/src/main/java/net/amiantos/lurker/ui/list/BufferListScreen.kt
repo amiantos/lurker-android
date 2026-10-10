@@ -3,7 +3,10 @@
 
 package net.amiantos.lurker.ui.list
 
+import androidx.compose.runtime.DisposableEffect
 import kotlinx.coroutines.flow.conflate
+import net.amiantos.lurker.platform.LocalToastCenter
+import net.amiantos.lurker.ui.composer.StatusToastPresenter
 import net.amiantos.lurker.ui.networks.NetworkSheets
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -76,6 +79,10 @@ import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.shell.StatusTitle
 import net.amiantos.lurker.ui.shell.StatusTitleText
+import net.amiantos.lurker.ui.shell.TopEdgeFade
+import net.amiantos.lurker.ui.shell.openNotification
+import net.amiantos.lurker.ui.shell.rememberToastSurface
+import net.amiantos.lurker.ui.shell.transparentTopBarColors
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.Buffer
@@ -88,6 +95,7 @@ import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.FavoriteEntry
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.PresenceState
+import net.amiantos.lurkerkit.model.StatusToast
 import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
@@ -120,6 +128,9 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
  * @param onOpenSettings opens Settings, which `MainScaffold` hosts (with Sign Out inside it).
  * @param sheets the networks dialogs, hosted by `MainScaffold`: "+" opens Join Channel and Add
  *   Network, and Settings → Networks opens the networks list over Settings.
+ * @param covered a dialog is over the window, from either pane: a toast on this list couldn't be seen.
+ * @param takesToasts this list is where an in-app notification goes (lurker#1098): the destination,
+ *   with no conversation beside it — one there shows it in its status row instead.
  * @param onOpenView opens Search, Activity or Bookmarks — the feeds `MainScaffold` hosts. Offered here
  *   only on its own screen (`ViewsLayout`): side by side the conversation column carries them.
  */
@@ -135,6 +146,8 @@ fun BufferListScreen(
     onOpenSettings: () -> Unit,
     sheets: NetworkSheets,
     onOpenView: (AppView) -> Unit = {},
+    covered: Boolean = false,
+    takesToasts: Boolean = true,
 ) {
     // Stage one: map every frame to what the list draws, and drop the frames that change none of
     // it. Stage two (below) builds the sections from what's left.
@@ -278,6 +291,30 @@ fun BufferListScreen(
         onOpenView = onOpenView,
     )
 
+    // In-app notifications while no conversation is on screen to carry them in its status row
+    // (lurker#1098): a highlight, a DM, a friend coming online. Tapping one goes to the line. Passing
+    // news: not carried over the screen arriving, nor still up, for a buffer just visited, when you
+    // come back — the presenter is cleared whenever the list stops taking them.
+    val scope = rememberCoroutineScope()
+    val toasts = remember { StatusToastPresenter(scope) }
+    var activeToast by remember { mutableStateOf<StatusToast?>(null) }
+    val toastCenter = LocalToastCenter.current
+    val showsToasts = takesToasts && !covered
+    val currentShowsToasts by rememberUpdatedState(showsToasts)
+    val started = rememberToastSurface(
+        visible = { toasts.isVisible() },
+        show = { toasts.show(StatusToast.Notification(it)) },
+    )
+    val currentStarted by rememberUpdatedState(started)
+    SideEffect {
+        toasts.isVisible = { currentShowsToasts && currentStarted }
+        toasts.onChange = { activeToast = toasts.active }
+        // The sound comes with the capsule going up, not with the notification's arrival.
+        toasts.onShow = { toast, _ -> if (toast is StatusToast.Notification) toastCenter?.shown(toast.notification) }
+    }
+    LaunchedEffect(showsToasts, started) { if (!(showsToasts && started)) toasts.clear() }
+    DisposableEffect(toasts) { onDispose { toasts.clear() } }
+
     BufferListContent(
         title = BufferListModel.statusTitle(inputs),
         sections = sections,
@@ -293,6 +330,14 @@ fun BufferListScreen(
         marksOpenBuffer = sideBySide,
         draggingSection = drag?.sectionId,
         actions = actions,
+        toast = activeToast,
+        onToastTap = {
+            // Where it goes when tapped: its line, or for a friend coming online, the conversation with
+            // them — through `MainScaffold.open`, like every other way in. Nothing comes on after: the
+            // navigation is queued, not done, and a toast presented now would flash in a list that's
+            // about to leave (the capsule only ever carries notifications, which always go somewhere).
+            (toasts.takeActive() as? StatusToast.Notification)?.notification?.let { openNotification(model, events, it) }
+        },
     )
 }
 
@@ -348,6 +393,9 @@ internal fun BufferListContent(
     marksOpenBuffer: Boolean,
     draggingSection: SectionId?,
     actions: BufferListActions,
+    /** The in-app notification showing over the rows, if one is (lurker#1098). */
+    toast: StatusToast? = null,
+    onToastTap: () -> Unit = {},
 ) {
     Scaffold(
         containerColor = LurkerTheme.colors.rosterGround,
@@ -355,6 +403,7 @@ internal fun BufferListContent(
             TopAppBar(
                 // Inline: the bar's own row is enough to say what the screen is.
                 title = { StatusTitleText(title) },
+                colors = transparentTopBarColors(),
                 actions = {
                     // Android's search action, where iOS puts a field in the bottom toolbar — on its own
                     // screen only: side by side the conversation column carries search (`ViewsLayout`).
@@ -370,14 +419,13 @@ internal fun BufferListContent(
         },
     ) { padding ->
         val direction = LocalLayoutDirection.current
+        // The rows run under the transparent top bar (`FloatingChrome`): the list is padded for it
+        // inside, so they scroll up under the fade, rather than stopping at it.
+        val top = padding.calculateTopPadding()
         Box(
             Modifier
                 .fillMaxSize()
-                .padding(
-                    top = padding.calculateTopPadding(),
-                    start = padding.calculateStartPadding(direction),
-                    end = padding.calculateEndPadding(direction),
-                ),
+                .padding(start = padding.calculateStartPadding(direction), end = padding.calculateEndPadding(direction)),
         ) {
             if (placeholder == BufferListPlaceholder.None) {
                 RosterList(
@@ -386,7 +434,7 @@ internal fun BufferListContent(
                     marksOpenBuffer = marksOpenBuffer,
                     draggingSection = draggingSection,
                     actions = actions,
-                    contentPadding = PaddingValues(bottom = padding.calculateBottomPadding() + RosterMetrics.groupGap),
+                    contentPadding = PaddingValues(top = top, bottom = padding.calculateBottomPadding() + RosterMetrics.groupGap),
                 )
             } else {
                 // One `StateView` for every state, so a change between them (loading settling to "No
@@ -409,12 +457,22 @@ internal fun BufferListContent(
                         subtitle = "Join a channel or start a DM to see it here.",
                     )
                 }
-                StateView(state, onAction = actions.onAddNetwork)
+                Box(Modifier.fillMaxSize().padding(top = top)) { StateView(state, onAction = actions.onAddNetwork) }
             }
+            TopEdgeFade(top, Modifier.align(Alignment.TopCenter))
             // Over the rows, not above them: it floats, and the list scrolls under it.
             ConnectionBanner(
                 state = banner,
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp, start = 16.dp, end = 16.dp),
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = top + 8.dp, start = 16.dp, end = 16.dp),
+            )
+            // Along the bottom, over the rows the same way the banner is — and after the list, so the
+            // tap is the capsule's and not the row's under it.
+            NotificationToast(
+                toast = toast,
+                onTap = onToastTap,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(start = 16.dp, end = 16.dp, bottom = padding.calculateBottomPadding() + 16.dp),
             )
         }
     }

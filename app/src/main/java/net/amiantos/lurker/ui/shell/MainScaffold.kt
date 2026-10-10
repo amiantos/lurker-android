@@ -25,6 +25,8 @@ import net.amiantos.lurker.ui.networks.rememberNetworkSheets
 import net.amiantos.lurker.ui.networks.NetworkSheetsHost
 import net.amiantos.lurker.platform.findActivity
 import net.amiantos.lurker.platform.LocalAppEvents
+import net.amiantos.lurker.platform.LocalToastCenter
+import net.amiantos.lurker.platform.ToastCenter
 import android.os.SystemClock
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -56,6 +58,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.window.core.layout.WindowSizeClass
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -99,6 +103,7 @@ fun MainScaffold(
     model: ChatViewModel,
     uiPreferences: UiPreferences,
     events: AppEvents,
+    toastCenter: ToastCenter,
     dccOffers: DccOffers,
     uploads: UploadServices,
     onSignOut: () -> Unit,
@@ -504,7 +509,25 @@ fun MainScaffold(
         }
     }
 
-    CompositionLocalProvider(LocalAppEvents provides events, LocalUploadServices provides uploads) {
+    // Whether a dialog is over the window, from either pane: Settings, the networks dialogs, a buffer's
+    // info or members, a feed, the uploads browser, the media viewer, an alert. The in-app toasts
+    // (lurker#1098) stay out of a status row or a list a dialog is covering — they'd expire there
+    // unseen, sound and all. ⚠ Side by side, a dialog from EITHER column covers both: each column
+    // opens its own, and the conversation can't see the list's. iOS's `isUncovered`.
+    //
+    // Every full-screen dialog claims a dialog-priority notice host while it's up, so those are read
+    // off the hosts rather than enumerated here; the windowless overlay (the media viewer) and the
+    // alerts, which host no notices, are named.
+    val noticeHosts by events.noticeHosts.collectAsStateWithLifecycle()
+    val share by uploads.shares.share.collectAsStateWithLifecycle()
+    val dccPrompt by dccOffers.prompt.collectAsStateWithLifecycle()
+    val uploadReport by uploads.runner.report.collectAsStateWithLifecycle()
+    val serverErrorFlow = remember(model) { model.statePublisher.map { it.error != null }.distinctUntilChanged() }
+    val serverError by serverErrorFlow.collectAsStateWithLifecycle(initialValue = model.state.error != null)
+    val covered = noticeHosts.any { it.priority >= NoticeHost.PRIORITY_DIALOG } || mediaViewer.current != null ||
+        share != null || dccPrompt != null || uploadReport != null || serverError
+
+    CompositionLocalProvider(LocalAppEvents provides events, LocalUploadServices provides uploads, LocalToastCenter provides toastCenter) {
     Box(Modifier.fillMaxSize()) {
         NavigableListDetailPaneScaffold(
             navigator = navigator,
@@ -521,6 +544,12 @@ fun MainScaffold(
                         onOpenSettings = { showingSettings = true },
                         sheets = sheets,
                         onOpenView = { view -> openView(view) },
+                        covered = covered,
+                        // In-app notifications go to the list only while it's the destination with no
+                        // conversation beside it — one there shows them in its status row instead —
+                        // and only for the live session: a scaffold fading out after a sign-out must
+                        // not take the next session's.
+                        takesToasts = sessionLive && !sideBySide && openRoute == null,
                     )
                 }
             },
@@ -565,6 +594,11 @@ fun MainScaffold(
                             onOpenView = { view -> openView(view, from = bufferKey) },
                             onOpenMedia = mediaViewer::show,
                             media = media,
+                            covered = covered,
+                            // The destination — side by side that's always one, the system buffer at
+                            // rest included — not a pane sliding out behind the list on a phone, and
+                            // not a session that's over (see the list's).
+                            takesToasts = sessionLive && (openRoute != null || sideBySide),
                         )
                     }
                 }

@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
@@ -34,6 +35,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -53,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -84,20 +87,28 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import net.amiantos.lurker.platform.AppEvent
+import net.amiantos.lurker.platform.LocalAppEvents
+import net.amiantos.lurker.platform.LocalToastCenter
 import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.actions.MessageActionsHost
 import net.amiantos.lurker.ui.actions.rememberMessageActionsState
 import net.amiantos.lurker.ui.composer.ComposerBar
 import net.amiantos.lurker.ui.composer.ComposerModel
 import net.amiantos.lurker.ui.composer.SendScroll
-import net.amiantos.lurker.ui.composer.SuggestionsView
+import net.amiantos.lurker.ui.composer.collapsedHeight
 import net.amiantos.lurker.ui.feeds.AppView
 import net.amiantos.lurker.ui.feeds.ConversationViewsActions
 import net.amiantos.lurker.ui.composer.rememberComposerState
 import net.amiantos.lurker.ui.media.MediaSource
 import net.amiantos.lurker.ui.media.PreviewContext
 import net.amiantos.lurker.ui.media.PreviewToggles
+import net.amiantos.lurker.ui.shell.NoticeHost
 import net.amiantos.lurker.ui.shell.StateModel
+import net.amiantos.lurker.ui.shell.TopEdgeFade
+import net.amiantos.lurker.ui.shell.openNotification
+import net.amiantos.lurker.ui.shell.rememberToastSurface
+import net.amiantos.lurker.ui.shell.transparentTopBarColors
 import net.amiantos.lurker.ui.uploads.ComposerInsertTarget
 import net.amiantos.lurker.ui.uploads.LocalUploadServices
 import net.amiantos.lurker.ui.uploads.UploadTargets
@@ -114,8 +125,6 @@ import net.amiantos.lurker.ui.shell.JumpLedger
 import net.amiantos.lurker.ui.shell.JumpRequest
 import net.amiantos.lurker.ui.shell.SafeUriHandler
 import net.amiantos.lurker.ui.shell.StateView
-import net.amiantos.lurker.ui.shell.StatusTitle
-import net.amiantos.lurker.ui.shell.StatusTitleText
 import net.amiantos.lurker.ui.shell.rememberConnectionBannerState
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
@@ -127,7 +136,7 @@ import net.amiantos.lurkerkit.model.LinkPreview
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageRow
 import net.amiantos.lurkerkit.model.Reactions
-import net.amiantos.lurkerkit.model.StatusLight
+import net.amiantos.lurkerkit.model.StatusToast
 import net.amiantos.lurkerkit.rendering.NickHighlighter
 import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.store.ChatState
@@ -198,6 +207,9 @@ import java.time.ZoneOffset
  * @param onOpenMedia the media viewer `MainScaffold` hosts, over a message's pictures and positioned on
  *   one; null and a tap on a picture opens its address.
  * @param media where preview pictures come from — `MainScaffold`'s, shared with the viewer.
+ * @param covered a dialog is over the window — Settings, a sheet, the uploads browser, the media
+ *   viewer, from either pane. The status row can't be seen, so no toast goes into it (lurker#1098).
+ * @param takesToasts this screen is the destination, not one sliding out behind the list on a phone.
  */
 @Composable
 fun ConversationScreen(
@@ -220,6 +232,8 @@ fun ConversationScreen(
     onOpenView: ((AppView) -> Unit)? = null,
     onOpenMedia: ((List<LinkPreview>, Int) -> Unit)? = null,
     media: MediaSource,
+    covered: Boolean = false,
+    takesToasts: Boolean = true,
 ) {
     val kind = remember(key) { BufferKind.of(networkId = key.networkId, target = key.target) }
 
@@ -340,24 +354,13 @@ fun ConversationScreen(
     val banner = rememberConnectionBannerState(model)
     var connectionShown by remember { mutableStateOf(false) }
 
-    // The title moves on its own — a DM peer's presence turns over with nothing else changing — and it
-    // moves nothing else, so it's its own stream rather than a reason to rebuild every row.
-    val titleFlow = remember(model, key) {
-        model.statePublisher.conflate().map { ConversationModel.title(it, key, kind) }.distinctUntilChanged()
-    }
-    val initialTitle = remember(model, key) { ConversationModel.title(model.state, key, kind) }
-    val title by titleFlow.collectAsStateWithLifecycle(initialValue = initialTitle)
-
     val clock = rememberDayClock()
     val clockFlow = remember { snapshotFlow { clock.value } }
 
-    // The builds. Re-projected on every processed frame AND on a one-second tick while anybody is
-    // typing: a typing entry's lease expires by the clock, not by a frame — the last thing a peer
-    // sends is `active`, and what happens next is nothing — so without the tick the line would sit
-    // there until some unrelated frame redrew it. Distinct by `same`, so most ticks change nothing;
-    // then rebuilt for the screen's own options (the divider, a jump's exemption, a `/clear` reveal)
-    // and the zone (a time-zone change moves every day boundary).
-    val ticks = remember(key) { MutableStateFlow(0) }
+    // The builds. Re-projected on every processed frame, distinct by `same`; then rebuilt for the
+    // screen's own options (the divider, a jump's exemption, a `/clear` reveal) and the zone (a
+    // time-zone change moves every day boundary). Who's typing no longer passes through here: it's
+    // the composer's status row's own stream (lurker-ios#61), with its own once-a-second re-read.
     val projector = remember(key) { ConversationProjector(key, kind) }
     // The first build, on the main thread, once: so a screen that opens on loaded history draws it
     // on its first frame — and a restored scroll position has rows to restore onto — rather than
@@ -366,7 +369,7 @@ fun ConversationScreen(
         ConversationModel.built(projector.project(model.state), scroll.options, seq = 0, zone = clock.value.zone)
     }
     val builtFlow = remember(model, key) {
-        val inputs = combine(frames.filterNotNull(), ticks) { frame, _ -> Stamped(frame.seq, projector.project(frame.state)) }
+        val inputs = frames.filterNotNull().map { frame -> Stamped(frame.seq, projector.project(frame.state)) }
             .distinctUntilChanged { old, new -> ConversationInputs.same(old.inputs, new.inputs) }
         combine(inputs, options, clockFlow) { stamped, opts, day ->
             ConversationModel.built(stamped.inputs, opts, seq = stamped.seq, zone = day.zone)
@@ -533,15 +536,6 @@ fun ConversationScreen(
             builtFlow.collect { built -> accept(built) }
         }
     }
-    val someoneTyping = current.inputs.typists.isNotEmpty()
-    LaunchedEffect(someoneTyping) {
-        // One second is well inside the shortest lease (6s), and coarse enough to be free.
-        while (someoneTyping) {
-            delay(1_000)
-            ticks.value += 1
-        }
-    }
-
     // MARK: - Layouts
 
     // The reader taking hold of the list releases a converging jump — see `onUserDrag`.
@@ -714,6 +708,30 @@ fun ConversationScreen(
         onShowProfile = onShowProfile,
     )
 
+    // In-app notifications in the status row (lurker#1098). Whether the row can be seen: this screen
+    // is the destination, started, with nothing over it — neither a dialog from either pane, nor a
+    // message's sheet, nor the composer's own colour editor. iOS's `isUncovered`.
+    val events = LocalAppEvents.current
+    val toastCenter = LocalToastCenter.current
+    val uncovered = takesToasts && !covered && !composer.editorOpen && actions.sheet == null
+    val currentUncovered by rememberUpdatedState(uncovered)
+    val started = rememberToastSurface(
+        visible = { composer.canShowToasts() },
+        // By `id`, which folds case: `#Lurker` and `#lurker` are one conversation.
+        showsBuffer = { it.id == composer.key.id && composer.canShowToasts() },
+        show = { composer.showToast(StatusToast.Notification(it)) },
+    )
+    val currentStarted by rememberUpdatedState(started)
+    SideEffect {
+        composer.canShowToasts = { currentUncovered && currentStarted }
+        // A notice too long for the one-line row floats above the composer, where it can wrap.
+        composer.onNoticeOverflow = { message -> events?.send(AppEvent.Notice(message, floats = true)) }
+        // The sound comes with the toast going up, not with its arrival.
+        composer.onNotificationShown = { notification -> toastCenter?.shown(notification) }
+    }
+    // Toasts that waited while the row was covered go up once it's clear.
+    LaunchedEffect(uncovered, started) { if (uncovered && started) composer.toastSurfaceChanged() }
+
     // Uploads (lurker-android#15): this composer is where outside text lands while it's on screen — an
     // upload's link, Add to Message, a share's text — and its paperclip and paste start a run.
     val uploads = LocalUploadServices.current
@@ -742,7 +760,6 @@ fun ConversationScreen(
 
     val placeholder = ConversationModel.placeholder(hasRows = rows.isNotEmpty(), inputs = inputs, forceLoading = forceLoading)
     ConversationContent(
-        title = title,
         showsBack = showsBack,
         onBack = onBack,
         // A channel's nick list. iOS reaches it by a swipe in from the right edge as well as the info
@@ -763,7 +780,16 @@ fun ConversationScreen(
         flash = flash,
         onJumpToUnread = { if (scroll.jumpToFirstUnread()) startJump() },
         onJumpToLatest = ::jumpToLatest,
-        bottomBar = { ComposerBar(composer, uiPreferences.composerAutocapitalizes, uiPreferences.composerEnterSends, clockKey = day, attachments = attachments) },
+        composer = {
+            ComposerBar(
+                composer, uiPreferences.composerAutocapitalizes, uiPreferences.composerEnterSends, clockKey = day,
+                attachments = attachments,
+                sideBySide = sideBySide,
+                // The highlight count goes where the highlights are.
+                onHighlightCountTap = onBack,
+                onToastTap = { notification -> openNotification(model, events, notification) },
+            )
+        },
         // Inside the screen's link-opener provider, so Open Link uses the same `SafeUriHandler` as a tap.
         sheets = {
             MessageActionsHost(
@@ -777,13 +803,18 @@ fun ConversationScreen(
             )
         },
         overlay = { bottom ->
-            // Centred over the field for reach (the jump pill owns the trailing corner), riding the
-            // composer up with the keyboard.
-            SuggestionsView(
-                composer.suggestions,
-                onPick = composer::pick,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(start = 16.dp, end = 16.dp, bottom = bottom + 8.dp),
-            )
+            // The app's notices, while a conversation is up: into the status row when one fits and
+            // has no button (iOS's `showNotice`), else a snackbar floated above the composer, where it
+            // can wrap. An invitation's Join stays a snackbar: the row has no room for a button. Not
+            // while this screen is leaving, or its session is over: the scaffold's host has them then.
+            if (events != null && takesToasts) {
+                NoticeHost(
+                    events,
+                    modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = bottom),
+                    priority = NoticeHost.PRIORITY_CONVERSATION,
+                    intercept = { notice -> notice.action == null && !notice.floats && uncovered && composer.showNotice(notice.message) },
+                )
+            }
         },
     )
 }
@@ -966,7 +997,6 @@ private fun rememberFlashStrength(nonce: Long?): State<Float>? {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ConversationContent(
-    title: StatusTitle,
     showsBack: Boolean,
     onBack: () -> Unit,
     banner: ConnectionBannerState,
@@ -981,9 +1011,9 @@ internal fun ConversationContent(
     onConnectionBannerShown: (Boolean) -> Unit = {},
     onJumpToUnread: () -> Unit = {},
     onJumpToLatest: () -> Unit = {},
-    /** The composer — the scaffold's bottom bar, so the list's reservation includes it. */
-    bottomBar: @Composable () -> Unit = {},
-    /** What floats over the list's bottom edge, given the reservation's height: the suggestions. */
+    /** The composer, laid over the list's bottom edge; the rows scroll under it (`FloatingChrome`). */
+    composer: @Composable () -> Unit = {},
+    /** What floats over the list's bottom edge, given the composer's height: the screen's notices. */
     overlay: @Composable BoxScope.(bottom: Dp) -> Unit = {},
     /** The message sheets (`MessageActionsHost`), drawn inside the screen's `LocalUriHandler` provider. */
     sheets: @Composable () -> Unit = {},
@@ -1006,8 +1036,11 @@ internal fun ConversationContent(
         // What the log sits on — the web's `look.color.bg`, not the system's ground.
         containerColor = colors.bg,
         topBar = {
+            // No title: where you are and how the connection is doing sit in the composer's status
+            // row instead, and the top of the screen goes back to the conversation (iOS's `updateTitle`).
             TopAppBar(
-                title = { StatusTitleText(title) },
+                title = {},
+                colors = transparentTopBarColors(),
                 navigationIcon = {
                     if (showsBack) {
                         IconButton(onClick = onBack) { Icon(LurkerIcons.ArrowBack, contentDescription = "Back") }
@@ -1030,7 +1063,6 @@ internal fun ConversationContent(
                 },
             )
         },
-        bottomBar = bottomBar,
     ) { padding ->
         val direction = LocalLayoutDirection.current
         // Links open in the browser through the platform's handler — which throws when nothing on the
@@ -1038,30 +1070,37 @@ internal fun ConversationContent(
         // is better than a crash.
         val platform = LocalUriHandler.current
         val uriHandler = remember(platform) { SafeUriHandler(platform) }
-        val bottom = padding.calculateBottomPadding()
+        // The composer is drawn over the list, not beside it, so the list reserves its measured height
+        // (keyboard and navigation bar included — the composer pads itself for both) rather than the
+        // scaffold's. Seeded with the slab's resting height, so the first frame doesn't put the newest
+        // row under it.
+        val density = LocalDensity.current
+        val restingComposer = collapsedHeight() * 2 + 13.dp + with(density) { WindowInsets.safeDrawing.getBottom(this).toDp() }
+        var composerHeight by remember { mutableStateOf(restingComposer) }
+        val bottom = composerHeight
+        val top = padding.calculateTopPadding()
         CompositionLocalProvider(LocalUriHandler provides uriHandler) {
             Box(
                 Modifier
                     .fillMaxSize()
-                    .padding(
-                        top = padding.calculateTopPadding(),
-                        start = padding.calculateStartPadding(direction),
-                        end = padding.calculateEndPadding(direction),
-                    ),
+                    .padding(start = padding.calculateStartPadding(direction), end = padding.calculateEndPadding(direction)),
             ) {
                 // Never with no rows (`None`); drawn as the empty list it is. One `StateView` for both
                 // states, so "Loading messages…" settling to "No messages yet" is a change TalkBack
                 // reads out rather than one node swapped for another.
                 if (rows.isEmpty() && placeholder != BufferPlaceholder.None) {
-                    StateView(if (placeholder == BufferPlaceholder.Loading) ConversationModel.LOADING else empty)
+                    Box(Modifier.fillMaxSize().padding(top = top, bottom = bottom)) {
+                        StateView(if (placeholder == BufferPlaceholder.Loading) ConversationModel.LOADING else empty)
+                    }
                 } else if (rows.isNotEmpty()) {
                     LazyColumn(
                         state = listState,
                         // Newest at the bottom, and the list starts there: item 0 is the last row.
                         reverseLayout = true,
-                        // The composer's height (and the keyboard's, under it): the newest row sits just
-                        // above the bar, and the rows scroll on under it.
-                        contentPadding = PaddingValues(bottom = bottom),
+                        // The composer's height (and the keyboard's, under it) below and the bar's above:
+                        // the newest row sits just above the slab, the oldest just under the bar, and the
+                        // rows scroll on under both.
+                        contentPadding = PaddingValues(top = top, bottom = bottom),
                         modifier = Modifier.fillMaxSize(),
                     ) {
                         items(
@@ -1087,18 +1126,24 @@ internal fun ConversationContent(
                         }
                     }
                 }
+                // The ground behind the transparent top bar, fading out under it.
+                TopEdgeFade(top, Modifier.align(Alignment.TopCenter))
+                // The composer, over the list's bottom edge; its height is the list's reservation.
+                Box(Modifier.align(Alignment.BottomCenter).onSizeChanged { composerHeight = with(density) { it.height.toDp() } }) {
+                    composer()
+                }
                 // Over the rows, not above them: they float, and the list scrolls under them. Each sits
                 // on the edge it takes you to — the unread banner up top (in the connection banner's
                 // slot, which wins it), the jump pill in the bottom-trailing corner.
                 ConnectionBanner(
                     state = banner,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp, start = 16.dp, end = 16.dp),
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = top + 8.dp, start = 16.dp, end = 16.dp),
                     onShownChange = onConnectionBannerShown,
                 )
                 UnreadBanner(
                     visible = pills.showsUnread,
                     onClick = onJumpToUnread,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp, start = 16.dp, end = 16.dp),
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = top + 8.dp, start = 16.dp, end = 16.dp),
                 )
                 JumpToLatestButton(
                     visible = pills.showsLatest,
@@ -1128,7 +1173,6 @@ private fun ConversationPreview(dark: Boolean, empty: Boolean, pills: Conversati
             today = LocalDate.of(2026, 7, 25),
         )
         ConversationContent(
-            title = StatusTitle(title = "#lurker", status = StatusLight.Good, detail = "Libera"),
             showsBack = true,
             onBack = {},
             banner = ConnectionBannerState.Hidden,

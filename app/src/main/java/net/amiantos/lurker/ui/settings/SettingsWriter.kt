@@ -22,8 +22,9 @@ import net.amiantos.lurkerkit.model.Settings
 /**
  * The settings screen's writes, and the [SettingsEdits] they leave on screen while they're out.
  *
- * One `PATCH` per change, each carrying one key: `ChatViewModel.updateSettings` returns the server's
- * reason on refusal, and a write of several keys would pin that reason under no row in particular.
+ * One `PATCH` per change, usually carrying one key: `ChatViewModel.updateSettings` returns the server's
+ * reason on refusal, and a write of several keys pins that reason under the one row that made it
+ * ([setAll]'s `errorKey`).
  *
  * ⚠⚠ **One write at a time, in the order the user made them.** A successful `updateSettings` applies
  * the reply's stored value for the key it wrote (`Settings.applyStored`), so two writes of the SAME
@@ -56,11 +57,17 @@ internal class SettingsWriter(
     private var seen: Settings? = null
 
     /** A toggle or a pull-down: shown at once, sent at once. */
-    fun set(key: String, value: SettingValue) {
+    fun set(key: String, value: SettingValue) = setAll(mapOf(key to value), errorKey = key)
+
+    /**
+     * Several keys in one request — a sound pick turns the sound on and names it in the same write —
+     * any rejection shown under the row for [errorKey]. One request, so the two can't land apart.
+     */
+    fun setAll(values: Map<String, SettingValue>, errorKey: String) {
         // A run on the same key that hasn't settled is overtaken, not sent after this.
-        settling.remove(key)?.first?.cancel()
-        edits = edits.began(key, value)
-        send(key, value)
+        for (key in values.keys) settling.remove(key)?.first?.cancel()
+        edits = values.entries.fold(edits) { acc, (key, value) -> acc.began(key, value) }
+        send(values, errorKey)
     }
 
     /**
@@ -76,7 +83,7 @@ internal class SettingsWriter(
         val job = scope.launch {
             delay(SettingsModel.STEPPER_DEBOUNCE_MILLIS)
             settling.remove(key)
-            send(key, value)
+            send(mapOf(key to value), errorKey = key)
         }
         settling[key] = job to value
     }
@@ -105,7 +112,7 @@ internal class SettingsWriter(
         settling.clear()
         for ((key, run) in runs) {
             run.first.cancel()
-            send(key, run.second)
+            send(mapOf(key to run.second), errorKey = key)
         }
     }
 
@@ -113,12 +120,12 @@ internal class SettingsWriter(
      * Started undispatched, so this write joins the queue before this returns — in the order the
      * changes were made, and without depending on a dispatch that may never come (a flush at close).
      */
-    private fun send(key: String, value: SettingValue) {
+    private fun send(values: Map<String, SettingValue>, errorKey: String) {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             withContext(NonCancellable) {
                 inFlight.withLock {
-                    val failure = write(mapOf(key to value))
-                    edits = edits.finished(key, value, failure)
+                    val failure = write(values)
+                    edits = edits.finished(values, errorKey, failure)
                 }
             }
         }

@@ -16,9 +16,11 @@ import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.PendingReply
+import net.amiantos.lurkerkit.model.PresenceState
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.model.SpeakerMap
+import net.amiantos.lurkerkit.model.StatusToast
 import net.amiantos.lurkerkit.model.TagSupport
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
@@ -246,15 +248,86 @@ class ComposerModelTest {
     }
 
     @Test
-    fun `the reply wins the strip, and says yourself for your own line`() {
+    fun `the strip above the slab is the away strip, or nothing`() {
         val away = AwayStrip(lead = "Away", detail = " since 2:32 PM")
+        assertEquals(Strip.Away("Away", " since 2:32 PM"), ComposerModel.strip(away))
+        assertEquals(Strip.None, ComposerModel.strip(null))
+    }
+
+    // MARK: - The status row (lurker#1098, lurker#1099)
+
+    @Test
+    fun `the row shows a toast, else the reply, else where you are — and says yourself for your own line`() {
         val reply = PendingReply(messageId = 1, nick = "amiantos", type = EventType.Message, text = "\u0002bold\u0002\nnext", isSelf = true)
-        val strip = ComposerModel.strip(reply, away)
-        assertEquals(Strip.Reply(name = "yourself", excerpt = "bold next"), strip)
-        assertEquals("Replying to yourself: bold next", (strip as Strip.Reply).accessibility)
-        assertEquals(Strip.Away("Away", " since 2:32 PM"), ComposerModel.strip(null, away))
-        assertEquals(Strip.None, ComposerModel.strip(null, null))
-        assertEquals("Replying to bob", Strip.Reply("bob", "").accessibility)
+        val here = Location("#lurker", connection = null, detail = null)
+        val toast = StatusToast.Notice("Not connected")
+        assertEquals(StatusLead.Toast(toast), ComposerModel.statusLead(toast, reply, here, listOf("bob")))
+        val lead = ComposerModel.statusLead(null, reply, here, listOf("bob"))
+        assertEquals(StatusLead.Reply(name = "yourself", excerpt = "bold next"), lead)
+        assertEquals("Replying to yourself: bold next", (lead as StatusLead.Reply).accessibility)
+        assertEquals("Replying to bob", StatusLead.Reply("bob", "").accessibility)
+        val where = ComposerModel.statusLead(null, null, here, listOf("bob", "carol"))
+        assertEquals(StatusLead.Where(here, listOf("bob", "carol")), where)
+        assertEquals("#lurker, Typing: bob, carol", (where as StatusLead.Where).accessibility)
+        assertNull(StatusLead.Where(null, emptyList()).accessibility)
+        assertEquals("#lurker, (Offline), Away", Location("#lurker", "(Offline)", "Away").accessibility)
+    }
+
+    private val libera = Network(id = 1, name = "Libera", state = ConnectionState.Connected, nick = "me")
+
+    private fun located(
+        networks: Map<Int, Network> = mapOf(1 to libera),
+        connection: SocketStatus = SocketStatus.Connected,
+        buffers: List<Buffer> = emptyList(),
+        peerPresence: Map<Int, Map<String, PresenceState>> = emptyMap(),
+        settings: Settings = Settings(),
+    ) = ChatState(
+        connection = connection,
+        snapshotSinceOpen = true,
+        backlogComplete = true,
+        networks = networks,
+        buffers = buffers.associateBy { it.key.id },
+        peerPresence = peerPresence,
+        settings = settings,
+    )
+
+    @Test
+    fun `where you are names the channel without its network, and says when the link is down`() {
+        assertEquals(Location("#lurker", null, null), ComposerModel.location(located(), channel, BufferKind.Channel))
+        val down = mapOf(1 to libera.copy(state = ConnectionState.Disconnected))
+        assertEquals(Location("#lurker", "(Offline)", null), ComposerModel.location(located(networks = down), channel, BufferKind.Channel))
+        val connecting = mapOf(1 to libera.copy(state = ConnectionState.Connecting))
+        assertEquals("(Connecting…)", ComposerModel.location(located(networks = connecting), channel, BufferKind.Channel).connection)
+    }
+
+    @Test
+    fun `a DM names its peer's presence only when it's news, a server log is its network, the system buffer is Lurker`() {
+        val dm = BufferKey(1, "alice")
+        val away = located(peerPresence = mapOf(1 to mapOf("alice" to PresenceState.Away)))
+        assertEquals(Location("alice", null, "Away"), ComposerModel.location(away, dm, BufferKind.Dm))
+        val online = located(peerPresence = mapOf(1 to mapOf("alice" to PresenceState.Online)))
+        assertEquals(Location("alice", null, null), ComposerModel.location(online, dm, BufferKind.Dm))
+        // Presence waits out a reconnect: offline, the link is the news.
+        val down = located(networks = mapOf(1 to libera.copy(state = ConnectionState.Disconnected)), peerPresence = mapOf(1 to mapOf("alice" to PresenceState.Away)))
+        assertEquals(Location("alice", "(Offline)", null), ComposerModel.location(down, dm, BufferKind.Dm))
+        val log = BufferKey(1, Buffer.serverTarget(1))
+        assertEquals("Libera", ComposerModel.location(located(), log, BufferKind.Server).name)
+        assertEquals("Lurker", ComposerModel.location(located(), Buffer.system.key, BufferKind.System).name)
+        assertEquals("DCC/=bob", ComposerModel.location(located(), BufferKey(1, "=bob"), BufferKind.Dcc).name)
+    }
+
+    @Test
+    fun `the highlight count is every other buffer's, and hides in the off display mode`() {
+        val here = Buffer(networkId = 1, target = "#lurker", kind = BufferKind.Channel, highlights = 2)
+        val there = Buffer(networkId = 1, target = "#other", kind = BufferKind.Channel, highlights = 3)
+        val state = located(buffers = listOf(here, there))
+        assertEquals(3, ComposerModel.highlightCount(state, channel))
+        assertEquals(5, ComposerModel.highlightCount(state, BufferKey(1, "#third")))
+        val off = Settings(registry = emptyMap(), values = mapOf("look.buffer_list.unread_display" to SettingValue.String("off")))
+        assertEquals(0, ComposerModel.highlightCount(located(buffers = listOf(here, there), settings = off), channel))
+        assertNull(ComposerModel.highlightCountLabel(0))
+        assertEquals("7", ComposerModel.highlightCountLabel(7))
+        assertEquals(">999", ComposerModel.highlightCountLabel(1000))
     }
 
     // MARK: - The prompt
@@ -264,8 +337,8 @@ class ComposerModelTest {
     @Test
     fun `the prompt is your nick, with your rank in a channel`() {
         val chrome = ComposerChrome(nick = "amiantos", ownModes = listOf("v", "o"), dccSession = null, away = null)
-        assertEquals("@amiantos", ComposerModel.placeholder(chrome, channel, BufferKind.Channel))
-        assertEquals("amiantos", ComposerModel.placeholder(chrome.copy(ownModes = emptyList()), channel, BufferKind.Channel))
+        assertEquals("> @amiantos", ComposerModel.placeholder(chrome, channel, BufferKind.Channel))
+        assertEquals("> amiantos", ComposerModel.placeholder(chrome.copy(ownModes = emptyList()), channel, BufferKind.Channel))
         assertEquals("Message", ComposerModel.placeholder(ComposerChrome.Empty, channel, BufferKind.Channel))
     }
 

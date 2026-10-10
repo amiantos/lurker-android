@@ -454,9 +454,9 @@ private fun ReplyQuoteLine(
     )
 }
 
-/** The typing line's keyboard glyph, sized like the text beside it and muted like it. */
+/** The typing line's keyboard glyph, sized like the text beside it and muted like it. The composer's status row draws it too. */
 @Composable
-private fun typingGlyph(tint: Color): Map<String, InlineTextContent> =
+internal fun typingGlyph(tint: Color): Map<String, InlineTextContent> =
     remember(tint) {
         mapOf(
             MessageText.TYPING_GLYPH to InlineTextContent(

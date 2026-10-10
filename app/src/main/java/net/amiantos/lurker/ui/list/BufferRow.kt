@@ -33,7 +33,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -44,6 +43,7 @@ import net.amiantos.lurker.ui.shell.StatusDot
 import net.amiantos.lurker.ui.theme.LurkerColors
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
+import net.amiantos.lurker.ui.theme.monoTextStyle
 import kotlin.math.roundToInt
 
 /*
@@ -124,7 +124,7 @@ internal object RosterMetrics {
  * case, colour and the tree.
  */
 @Composable
-internal fun rosterTextStyle(): TextStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
+internal fun rosterTextStyle(): TextStyle = monoTextStyle()
 
 /** The colour a count (and an unread name) wears. */
 private fun LurkerColors.signal(signal: UnreadSignal?): Color? =

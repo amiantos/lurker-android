@@ -9,6 +9,8 @@ import net.amiantos.lurkerkit.model.SettingOption
 import net.amiantos.lurkerkit.model.SettingType
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.model.StatusNotification
+import net.amiantos.lurkerkit.push.AppPushUnavailable
 import net.amiantos.lurkerkit.store.ChatState
 
 /**
@@ -47,11 +49,25 @@ sealed interface SettingsSection {
     data class SmartFilter(val rows: List<SettingRow>) : SettingsSection
     data class Appearance(val rows: List<SettingRow>) : SettingsSection
 
+    /** The in-app notification kinds (lurker#1098): each one's switch, then its sound. */
+    data class Notifications(val rows: List<NotificationRow>) : SettingsSection
+
     /** Bootstrap hasn't landed (or this server offers none of the keys), so there's nothing to build controls from. */
     data class Unavailable(val loaded: Boolean) : SettingsSection
     data object Device : SettingsSection
     data object Account : SettingsSection
     data object About : SettingsSection
+}
+
+/**
+ * A Notifications row: a kind's switch, or its sound — one pull-down over two keys, "Off" or the
+ * sound to play, rather than a switch and a list of names whose second row means nothing while the
+ * first is off. iOS's `NotificationRow`.
+ */
+sealed interface NotificationRow {
+    data class Toggle(val row: SettingRow) : NotificationRow
+
+    data class Sound(val label: String, val kind: StatusNotification.Kind) : NotificationRow
 }
 
 /**
@@ -95,9 +111,12 @@ data class SettingsEdits(
      * value it already held: the store doesn't move, so the settings change that would otherwise
      * retire the old rejection never comes.
      */
-    fun finished(key: String, value: SettingValue, failure: String?): SettingsEdits = SettingsEdits(
-        pending = if (pending[key] == value) pending - key else pending,
-        error = failure?.let { WriteError(key, it) },
+    fun finished(key: String, value: SettingValue, failure: String?): SettingsEdits = finished(mapOf(key to value), key, failure)
+
+    /** [finished] for a write of several keys, any refusal pinned under the row for [errorKey]. */
+    fun finished(values: Map<String, SettingValue>, errorKey: String, failure: String?): SettingsEdits = SettingsEdits(
+        pending = pending.filterNot { (key, value) -> values[key] == value },
+        error = failure?.let { WriteError(errorKey, it) },
     )
 
     /**
@@ -255,6 +274,20 @@ object SettingsModel {
     )
 
     /**
+     * The in-app notification kinds (lurker#1098), in the web's order: each one's switch, then its
+     * sound. The switch is the web's master toggle for the kind, so it governs push as well as the
+     * toast — the section footer says so. The sound's volume isn't offered: the app plays alert sounds
+     * at the phone's own notification volume (`NotificationSounds`).
+     */
+    val notificationKinds: List<Triple<StatusNotification.Kind, String, String>> = listOf(
+        Triple(StatusNotification.Kind.Highlight, "Highlights", "Highlight sound"),
+        Triple(StatusNotification.Kind.Dm, "Direct messages", "DM sound"),
+        Triple(StatusNotification.Kind.AlwaysNotify, "Always-notify channels", "Always-notify sound"),
+        Triple(StatusNotification.Kind.Kicked, "Kicks", "Kick sound"),
+        Triple(StatusNotification.Kind.FriendOnline, "Friends coming online", "Friend sound"),
+    )
+
+    /**
      * Keys that only mean anything when the instance has link previews enabled (`LURKER_LINK_PREVIEWS`).
      * Held here rather than read off the registry because the server doesn't send the flag on the wire.
      */
@@ -291,15 +324,26 @@ object SettingsModel {
         val events = resolve(eventSettings)
         val smart = resolve(smartFilterSettings)
         val appearance = resolve(appearanceSettings)
+        // A kind's sound row only where the server knows both of its sound keys.
+        val notifications = notificationKinds.flatMap { (kind, label, sound) ->
+            val prefix = "notifications.${kind.rawValue}"
+            val toggle = resolve(listOf("$prefix.enabled" to label)).firstOrNull() ?: return@flatMap emptyList()
+            val hasSound = registry["$prefix.sound.enabled"] != null && registry["$prefix.sound.choice"] != null
+            listOf<NotificationRow>(NotificationRow.Toggle(toggle)) + (if (hasSound) listOf(NotificationRow.Sound(sound, kind)) else emptyList())
+        }
         return buildList {
             add(SettingsSection.Networks)
             add(SettingsSection.Chat(chat))
             if (events.isNotEmpty()) add(SettingsSection.Events(events))
             if (smart.isNotEmpty()) add(SettingsSection.SmartFilter(smart))
             if (appearance.isNotEmpty()) add(SettingsSection.Appearance(appearance))
+            if (notifications.isNotEmpty()) add(SettingsSection.Notifications(notifications))
             addAll(tail)
         }
     }
+
+    /** Whether the screen has a Notifications section — where the push notice goes when it does. */
+    fun hasNotifications(sections: List<SettingsSection>): Boolean = sections.any { it is SettingsSection.Notifications }
 
     /** A section's header, or null for the ones that stand without one. */
     fun header(section: SettingsSection): String? = when (section) {
@@ -307,6 +351,7 @@ object SettingsModel {
         is SettingsSection.Events -> "Events"
         is SettingsSection.SmartFilter -> "Smart Filter"
         is SettingsSection.Appearance -> "Appearance"
+        is SettingsSection.Notifications -> "Notifications"
         SettingsSection.Device -> "This Device"
         SettingsSection.Networks, SettingsSection.Account, SettingsSection.About -> null
     }
@@ -325,7 +370,7 @@ object SettingsModel {
      * desktop's filter. A section that is live, editable, and inert on the device you're holding has
      * to explain itself.
      */
-    fun footer(section: SettingsSection): String? = when (section) {
+    fun footer(section: SettingsSection, noAppPush: AppPushUnavailable? = null): String? = when (section) {
         // The rows have no help text of their own (see above), so "Enter to send" explains itself
         // here: what it changes is easy to guess, but that a hardware keyboard ignores it is not.
         SettingsSection.Device ->
@@ -333,7 +378,60 @@ object SettingsModel {
                 "Enter to send: Return on the on-screen keyboard sends the message. A hardware " +
                 "keyboard's Enter always sends; Shift-Enter starts a new line."
         is SettingsSection.SmartFilter -> "Used when Event filter is set to Smart."
+        // **Notifications** — the switches govern push too, and the push notice is this footer when
+        // the server can't push to the app at all.
+        is SettingsSection.Notifications ->
+            if (noAppPush != null) "Shown in the app while it's open. " + pushUnavailableText(noAppPush)
+            else "Shown in the app while it's open, and pushed when it isn't."
         else -> null
+    }
+
+    /** Why this server's notifications can't reach the app when it's closed. */
+    fun pushUnavailableText(reason: AppPushUnavailable): String = when (reason) {
+        AppPushUnavailable.NotTurnedOn -> "Your server's admin hasn't turned on push for the apps."
+        AppPushUnavailable.RelayUnsupported -> "This server's push relay isn't supported by this app."
+    }
+
+    /** The sound pull-down's "Off" — not a registry choice, so it can't collide with one. */
+    const val SOUND_OFF = ""
+
+    /**
+     * A kind's sound row: "Off", or which one plays — read through `StatusNotification.sound`, so the
+     * row says exactly what an alert will do. Greyed while the kind itself is off. A pending write's
+     * values count, so the row follows a pick before its reply lands.
+     */
+    fun soundRow(label: String, kind: StatusNotification.Kind, settings: Settings, edits: SettingsEdits): SettingRowState {
+        val prefix = "notifications.${kind.rawValue}"
+        val choiceKey = "$prefix.sound.choice"
+        val shown = settings.apply(edits.pending)
+        val current = StatusNotification.sound(kind, shown) ?: SOUND_OFF
+        val choices = (shown.registry[choiceKey]?.choices ?: emptyList()).filter { it in StatusNotification.sounds }
+        return SettingRowState(
+            key = choiceKey,
+            label = label,
+            control = SettingControl.Menu(
+                current = current,
+                choices = listOf(MenuChoice(SOUND_OFF, "Off")) + choices.map { MenuChoice(it, it.replaceFirstChar(Char::uppercaseChar)) },
+            ),
+            enabled = shown.isActive(choiceKey) && shown.bool("$prefix.enabled", default = true),
+            error = edits.error?.takeIf { it.key == choiceKey }?.message,
+        )
+    }
+
+    /**
+     * What a pick from a sound row writes, in one request: Off turns the sound off; a sound turns it on
+     * and picks it, and a volume set to 0 on the web — which silences it and has no control here —
+     * goes back to the registry's default. The pick plays too, as the web's preview button does
+     * (the caller's, with `NotificationSounds`).
+     */
+    fun soundWrite(kind: StatusNotification.Kind, choice: String, settings: Settings): Map<String, SettingValue> {
+        val prefix = "notifications.${kind.rawValue}.sound"
+        if (choice == SOUND_OFF) return mapOf("$prefix.enabled" to SettingValue.Bool(false))
+        val values = mutableMapOf<String, SettingValue>("$prefix.enabled" to SettingValue.Bool(true), "$prefix.choice" to SettingValue.String(choice))
+        if (settings.int("$prefix.volume", default = 60) <= 0) {
+            settings.registry["$prefix.volume"]?.default?.let { values["$prefix.volume"] = it }
+        }
+        return values
     }
 
     /** The no-registry notice's title. `loaded` tells "this server has none of these" from "we couldn't ask". */

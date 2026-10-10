@@ -17,6 +17,8 @@ import net.amiantos.lurker.auth.BrowserSignIn
 import net.amiantos.lurker.auth.KeystoreSecureStorage
 import net.amiantos.lurker.platform.AppEvent
 import net.amiantos.lurker.platform.AppEvents
+import net.amiantos.lurker.platform.NotificationSounds
+import net.amiantos.lurker.platform.ToastCenter
 import net.amiantos.lurker.platform.ExpiryText
 import net.amiantos.lurker.platform.NoticeAction
 import net.amiantos.lurker.platform.ReachabilityMonitor
@@ -71,6 +73,12 @@ class LurkerApp : Application() {
 
     /** The kit's asks of the screen, queued for `MainScaffold` — see [AppEvents]. */
     val events = AppEvents()
+
+    /**
+     * In-app notifications (lurker#1098): a highlight, DM or always-notify line while the app is open
+     * — push's foreground half — offered to whichever screen is on top, with its sound. See [ToastCenter].
+     */
+    val toastCenter = ToastCenter(settings = { model.state.settings }, play = NotificationSounds::play)
 
     /**
      * The DCC chat offer standing for an answer (lurker-android#38) — a StateFlow here rather than an
@@ -163,6 +171,7 @@ class LurkerApp : Application() {
         )
 
         PushNotifier.createChannels(this)
+        NotificationSounds.preload(this)
         pushKeys = RelayPushKeys(KeystoreSecureStorage(this, prefsName = PUSH_KEYS_FILE, keyAlias = PUSH_KEYS_ALIAS))
         // New keys for each session: the last account's pushes, still in flight, then can't open.
         model.onPushStateReset = pushKeys::forget
@@ -257,6 +266,11 @@ class LurkerApp : Application() {
         // holds the open until then (`PendingOpens`), since landing on an absent buffer in a settled
         // roster pops straight back.
         model.onBufferOpened = { key -> events.send(AppEvent.OpenBuffer(key)) }
+
+        // A highlight, DM or always-notify line while the app is open — push's foreground half
+        // (lurker#1098). Whether it's worth showing is the center's call: not for the buffer on
+        // screen, not while backgrounded.
+        model.onNotify = { notification -> toastCenter.post(notification) }
 
         // An invitation offers a Join on a snackbar (lurker#261) — the web's toast, which a snackbar
         // can carry and an iOS toast can't (iOS asks in an alert). One at a time: the system buffer

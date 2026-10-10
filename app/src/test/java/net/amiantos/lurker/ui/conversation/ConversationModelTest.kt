@@ -28,7 +28,6 @@ import net.amiantos.lurkerkit.model.Reactions
 import net.amiantos.lurkerkit.model.RunPosition
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Settings
-import net.amiantos.lurkerkit.model.StatusLight
 import net.amiantos.lurkerkit.model.TagSupport
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
@@ -42,7 +41,7 @@ import net.amiantos.lurkerkit.model.MemberPrefix
 
 /**
  * The conversation's decisions: hydrating, noticing a buffer leave, the rows it builds, and what its
- * title and empty state say. Ports of lurker-ios's `ChatViewController` rules — `hydrateIfNeeded` and
+ * empty state say. Ports of lurker-ios's `ChatViewController` rules — `hydrateIfNeeded` and
  * `handleBufferDisappeared` in particular carry a comment per bug that shipped.
  */
 class ConversationModelTest {
@@ -226,38 +225,6 @@ class ConversationModelTest {
             inputs(state(messages = messages, buffers = listOf(row(hydrated = true).copy(hasMoreOlder = false)))),
         )
         assertEquals(MessageRow.StartOfHistory, exhausted.first())
-    }
-
-    // MARK: - Title
-
-    @Test
-    fun `a channel's title names it, with its network and status`() {
-        val title = ConversationModel.title(state(), channel, BufferKind.Channel)
-        assertEquals("#lurker", title.title)
-        assertEquals(StatusLight.Good, title.status)
-        assertEquals("Libera · Online", title.subtitle)
-    }
-
-    @Test
-    fun `a DM's subtitle is the peer, a server log is its network, the system buffer is Lurker`() {
-        val dm = BufferKey(1, "alice")
-        val dmTitle = ConversationModel.title(
-            state(buffers = listOf(row(dm)), peerPresence = mapOf(1 to mapOf("alice" to PresenceState.Away))),
-            dm,
-            BufferKind.Dm,
-        )
-        assertEquals("Libera · Away", dmTitle.subtitle)
-        val log = BufferKey(1, Buffer.serverTarget(1))
-        assertEquals("Libera", ConversationModel.title(state(), log, BufferKind.Server).title)
-        val system = ConversationModel.title(state(), Buffer.system.key, BufferKind.System)
-        assertEquals("Lurker", system.title)
-        assertEquals("Connected", system.subtitle)
-    }
-
-    @Test
-    fun `a dropped network turns the light red whatever the socket says`() {
-        val down = mapOf(1 to libera.copy(state = ConnectionState.Disconnected))
-        assertEquals(StatusLight.Bad, ConversationModel.title(state(networks = down), channel, BufferKind.Channel).status)
     }
 
     // MARK: - Empty and loading

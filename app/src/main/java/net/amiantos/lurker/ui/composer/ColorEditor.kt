@@ -21,7 +21,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -29,7 +28,6 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -52,6 +50,7 @@ import net.amiantos.lurker.ui.networks.FullScreenDialog
 import net.amiantos.lurker.ui.networks.PageExit
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
+import net.amiantos.lurker.ui.theme.monoTextStyle
 import net.amiantos.lurker.ui.uploads.Attachments
 import net.amiantos.lurker.ui.uploads.receivesPastedImages
 
@@ -74,8 +73,8 @@ import net.amiantos.lurker.ui.uploads.receivesPastedImages
  * holds text only.
  *
  * The field is the bar's in all but size: the same capitalisation, and a pasted image uploads. Not its
- * keys — Enter here is a line break, as on iOS: this is where a longer message gets written, and its
- * Send is in the bar above.
+ * keys — Enter here is a line break, as on iOS: this is where a longer message gets written, and it's
+ * sent from the bar once you close this.
  */
 @Composable
 internal fun ColorEditor(
@@ -87,31 +86,18 @@ internal fun ColorEditor(
 ) {
     var layer by rememberSaveable { mutableStateOf(ComposerColors.Layer.Text) }
     val focus = remember { FocusRequester() }
-    val canSend by remember(state) { derivedStateOf { ComposerModel.sendable(state.field.text.toString()) != null } }
     FullScreenDialog(onDismissRequest = onClose) {
-        DialogPage(
-            title = "Edit Color",
-            exit = PageExit.Close,
-            onExit = onClose,
-            confirmTitle = "Done",
-            onConfirm = onClose,
-            actions = {
-                IconButton(
-                    onClick = {
-                        // Closed first: a send can take the user somewhere (`/query`, `/join`).
-                        onClose()
-                        state.send()
-                    },
-                    enabled = canSend,
-                ) { Icon(LurkerIcons.ArrowUpward, contentDescription = "Send") }
-            },
-        ) { padding ->
+        // Only the ✕: closing keeps everything, so a Done would be a second way to do the same thing,
+        // and sending is the bar's job once you're back in it.
+        DialogPage(title = "Edit Color", exit = PageExit.Close, onExit = onClose) { padding ->
             Column(Modifier.fillMaxSize().padding(padding)) {
                 BasicTextField(
                     state = state.field,
                     inputTransformation = state.colorInput,
                     outputTransformation = colorOutput,
-                    textStyle = MaterialTheme.typography.titleLarge.copy(color = LurkerTheme.colors.fg),
+                    // The message list's fixed-width face, as in the composer this edits for; what's
+                    // written here is read against the list's own ground (the dialog's `background`).
+                    textStyle = monoTextStyle().copy(color = LurkerTheme.colors.fg),
                     cursorBrush = SolidColor(LurkerTheme.colors.accent),
                     keyboardOptions = KeyboardOptions(
                         capitalization = if (capitalizes) KeyboardCapitalization.Sentences else KeyboardCapitalization.None,

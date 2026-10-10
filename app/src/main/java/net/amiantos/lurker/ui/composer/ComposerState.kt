@@ -13,6 +13,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -46,6 +47,8 @@ import net.amiantos.lurkerkit.model.OutgoingTyping
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.SpeakerMap
+import net.amiantos.lurkerkit.model.StatusNotification
+import net.amiantos.lurkerkit.model.StatusToast
 import net.amiantos.lurkerkit.model.TabCompletion
 import net.amiantos.lurkerkit.session.ChatViewModel
 import java.time.Instant
@@ -111,7 +114,7 @@ internal class ComposerState(
 
     internal var keyboard: SoftwareKeyboardController? = null
 
-    /** A passing notice — the app's snackbar (`AppEvent.Notice`). */
+    /** A passing notice (`AppEvent.Notice`) — the status row's, when it fits, else the app's snackbar. */
     internal var notice: (String) -> Unit = {}
 
     // MARK: - What the bar draws
@@ -259,9 +262,112 @@ internal class ComposerState(
     var reply: PendingReply? by mutableStateOf(initialDraft?.reply)
         private set
 
-    /** The pills over the field, best first. */
-    var suggestions: List<Suggestion> by mutableStateOf(emptyList())
+    // MARK: - The status row (lurker#1098, lurker#1099)
+
+    /** Who's typing here (lurker-ios#61), as the row shows them — the screen's own stream feeds it. */
+    var typists: List<String> by mutableStateOf(model.state.typists(key))
+        internal set
+
+    /** Where you are and how the connection is doing — the row's resting words. */
+    var location: Location? by mutableStateOf(ComposerModel.location(model.state, key, kind))
+        internal set
+
+    /** Highlights waiting in other buffers (lurker#1099); 0 hides the count. */
+    var otherHighlights: Int by mutableIntStateOf(ComposerModel.highlightCount(model.state, key))
+        internal set
+
+    /** The toast showing in the row now, mirrored from [toasts] so the bar can observe it. */
+    var activeToast: StatusToast? by mutableStateOf(null)
         private set
+
+    /**
+     * Whether the row can be seen — on screen with nothing over it. Asked before each toast: one
+     * shown under a dialog, or after the screen has gone, would expire unseen while its announcement
+     * spoke over somewhere else. The screen's answer.
+     */
+    internal var canShowToasts: () -> Boolean = { true }
+
+    /**
+     * Whether a notice fits the one-line row without being cut off — the bar's answer, measured
+     * against the row's width. A notice that would truncate floats instead, where it can wrap.
+     */
+    internal var noticeFits: (String) -> Boolean = { true }
+
+    /**
+     * A notice that no longer fits the row by the time its turn comes (a narrower column, a larger
+     * text size), handed back to be shown somewhere it can wrap.
+     */
+    internal var onNoticeOverflow: (String) -> Unit = {}
+
+    /** A toast went up (`isNew`), or the one up was updated in place — the bar's haptic and announcement. */
+    internal var onToastShown: (toast: StatusToast, isNew: Boolean) -> Unit = { _, _ -> }
+
+    /** A notification went up, or was updated in place — its sound (`ToastCenter.shown`). The screen's. */
+    internal var onNotificationShown: (StatusNotification) -> Unit = {}
+
+    /**
+     * The toast showing now, and the ones waiting their turn. Never over the completion chips —
+     * they're what you're tapping — so the queue waits for them to close.
+     */
+    private val toasts = StatusToastPresenter(scope).apply {
+        isReady = { suggestions.isEmpty() }
+        isVisible = { canShowToasts() }
+        shouldPresent = { toast ->
+            if (toast is StatusToast.Notice && !noticeFits(toast.message)) {
+                onNoticeOverflow(toast.message)
+                false
+            } else {
+                true
+            }
+        }
+        onChange = { activeToast = active }
+        onShow = { toast, isNew ->
+            onToastShown(toast, isNew)
+            if (toast is StatusToast.Notification) onNotificationShown(toast.notification)
+        }
+    }
+
+    /** Show a toast in the row for a few seconds, in turn (`StatusToastQueue`). */
+    fun showToast(toast: StatusToast) = toasts.show(toast)
+
+    /**
+     * Say something that didn't work, in the row — this screen's one place for passing news. False
+     * when it doesn't fit the one-line row; the caller floats it where it can wrap.
+     */
+    fun showNotice(message: String): Boolean {
+        if (!noticeFits(message)) return false
+        toasts.show(StatusToast.Notice(message))
+        return true
+    }
+
+    /**
+     * The toast showing was tapped: down it comes, and a notification is returned to go to. The
+     * caller acts on it, then calls [nextToast] — after, so a tap that leaves the screen doesn't
+     * start the next toast on the way out.
+     */
+    fun tapToast(): StatusNotification? = (toasts.takeActive() as? StatusToast.Notification)?.notification
+
+    fun nextToast() = toasts.presentNext()
+
+    /** The row was covered or uncovered, or came on screen: toasts that waited for it may go up now. */
+    internal fun toastSurfaceChanged() = toasts.presentNext()
+
+    private var suggestionsState: List<Suggestion> by mutableStateOf(emptyList())
+
+    /**
+     * The chips in the status row, best first. The chips own the whole row while they're up: a toast
+     * showing goes back to the front of the queue, to be shown in full once they close, rather than
+     * running out its time underneath them — and toasts that arrived mid-completion wait for them.
+     */
+    var suggestions: List<Suggestion>
+        get() = suggestionsState
+        private set(value) {
+            val wereUp = suggestionsState.isNotEmpty()
+            suggestionsState = value
+            val up = value.isNotEmpty()
+            if (up == wereUp) return
+            if (up) toasts.requeueActive() else toasts.presentNext()
+        }
 
     /** Who you speak as, and whether you're away — from state, not typing. */
     var chrome: ComposerChrome by mutableStateOf(ComposerChrome.of(ComposerChrome.Inputs.of(model.state, key, kind)))
@@ -391,10 +497,10 @@ internal class ComposerState(
         )
 
     /**
-     * Who a nick query offers here: the pills' four (the kit's default), or every match for Tab to cycle
-     * through, as the web's does. One call, so the two can't disagree about who's here.
+     * Who a nick query offers here: the status row's ten, or every match for Tab to cycle through, as
+     * the web's does. One call, so the two can't disagree about who's here.
      */
-    private fun nickCandidates(query: String, limit: Int = 4): List<String> {
+    private fun nickCandidates(query: String, limit: Int = ComposerModel.NICK_LIMIT): List<String> {
         val state = model.state
         return NickCompletion.candidates(
             speakers = state.speakers[key.id] ?: SpeakerMap(),
@@ -837,7 +943,7 @@ internal class ComposerState(
      */
     fun back() {
         if (model.setBack(key.networkId)) return
-        notice("Not connected — try again when you're back online")
+        notice("Not connected — you're still away")
     }
 }
 
@@ -908,8 +1014,8 @@ internal fun rememberComposerState(
             .distinctUntilChanged()
             .collect { state.chrome = it }
     }
-    // The pills' sources, all off the store: the nicklist, the rules, the network's channels, your nick
-    // and who has spoken lately. A pill for someone who just left, or who was just ignored, mustn't stay
+    // The chips' sources, all off the store: the nicklist, the rules, the network's channels, your nick
+    // and who has spoken lately. A chip for someone who just left, or who was just ignored, mustn't stay
     // tappable — nor someone who just joined stay missing.
     LaunchedEffect(state) {
         model.statePublisher
@@ -917,6 +1023,33 @@ internal fun rememberComposerState(
             .map { CandidateSources.of(it, key) }
             .distinctUntilChanged(CandidateSources::same)
             .collect { state.refreshSuggestions() }
+    }
+    // Who's typing (lurker-ios#61). Typing turns over with nothing else changing, and now touches only
+    // the status row — so its own stream, kept out of the rows' gate, whose every pass is a rebuild of
+    // the list. Compared as the rendered list: a peer re-sends `active` every ~3s with a fresh lease,
+    // which changes nothing on screen.
+    LaunchedEffect(state) {
+        model.statePublisher.conflate().map { it.typists(key) }.distinctUntilChanged().collect { state.typists = it }
+    }
+    // A typing entry's lease expires by the clock, not by a frame — the last thing a peer sends is
+    // `active`, and what happens next is nothing — so while anybody is typing the list is re-read once
+    // a second. One second is well inside the shortest lease (6s), and coarse enough to be free.
+    val someoneTyping = state.typists.isNotEmpty()
+    LaunchedEffect(state, someoneTyping) {
+        while (someoneTyping) {
+            delay(1_000)
+            state.typists = model.state.typists(key)
+        }
+    }
+    // Where you are, and how the connection is doing: a DM peer's presence turns over with nothing else
+    // changing, and moves nothing else.
+    LaunchedEffect(state) {
+        model.statePublisher.conflate().map { ComposerModel.location(it, key, kind) }.distinctUntilChanged().collect { state.location = it }
+    }
+    // The row's count is about every OTHER buffer, which is exactly what the rows' gate filters out —
+    // so it gets its own stream, on the one number it shows (lurker#1099).
+    LaunchedEffect(state) {
+        model.statePublisher.conflate().map { ComposerModel.highlightCount(it, key) }.distinctUntilChanged().collect { state.otherHighlights = it }
     }
     // A held refused line comes back when the field frees up by hand — the text deleted — as well as on
     // the composer's own moves (each of which asks itself).

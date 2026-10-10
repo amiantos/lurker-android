@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.theme
 
+import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
@@ -15,6 +16,8 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 
 /** The scheme's [LurkerColors]. Static: it changes only when the whole theme does. */
 val LocalLurkerColors = staticCompositionLocalOf<LurkerColors> {
@@ -30,10 +33,15 @@ val LocalLurkerColors = staticCompositionLocalOf<LurkerColors> {
  *
  * Typography is Material's defaults in the system font. The project's rule is one font size for
  * message text; a scale beyond Material's own is not invented here.
+ *
+ * Dark by default where the system has no say: Android 10 added the system-wide dark theme setting,
+ * so on anything older (Android 9, Fire OS 7) the configuration reads "not night" because nobody could
+ * ask for night, not because anyone chose light. There the app is dark, Lurker's own ground, unless
+ * the configuration does say night (battery saver, a car dock).
  */
 @Composable
 fun LurkerTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = isSystemInDarkTheme() || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q,
     content: @Composable () -> Unit,
 ) {
     val colors = if (darkTheme) LurkerColors.Dark else LurkerColors.Light
@@ -48,6 +56,14 @@ fun LurkerTheme(
         )
     }
 }
+
+/**
+ * The message list's fixed-width face at its one size — what the buffer list's rows, the composer's
+ * slab and the colour editor are set in too, so the chat reads as one terminal-ish piece, the way
+ * the web's log, status bar and input do. `bodyMedium` is the size U0 set all of its text in.
+ */
+@Composable
+internal fun monoTextStyle(): TextStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace)
 
 /** `LurkerTheme.colors`, as `MaterialTheme.colorScheme` reads. */
 object LurkerTheme {

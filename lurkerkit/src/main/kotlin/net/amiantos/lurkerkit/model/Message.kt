@@ -150,6 +150,17 @@ data class Message private constructor(
      */
     val unknownCommand: String?,
     /**
+     * The server's "alert the user about this" verdict (wsHub `decorateMessage`): the
+     * highlight/DM/always-notify union with the ignore and mute veto already folded in. The
+     * three signals below say which kind it is, and so which `notifications.<kind>` toggle
+     * governs it.
+     */
+    val notify: Boolean,
+    val dm: Boolean,
+    val notifyAlways: Boolean,
+    /** A kick of us — only the server knows the nick we wore when it landed. */
+    val selfKicked: Boolean,
+    /**
      * The reply's quote as it should SHOW — set by `showingReply`, the one producer, from
      * `Replies.shown`: null on a reply means "original message unavailable" (gone, never held, or
      * from someone ignored since). Meaningless on a line that isn't a reply.
@@ -204,6 +215,10 @@ data class Message private constructor(
         replyTo: ReplyContext? = null,
         replyToSelf: Boolean = false,
         unknownCommand: String? = null,
+        notify: Boolean = false,
+        dm: Boolean = false,
+        notifyAlways: Boolean = false,
+        selfKicked: Boolean = false,
     ) : this(
         id = id,
         type = type,
@@ -230,6 +245,10 @@ data class Message private constructor(
         replyTo = replyTo,
         replyToSelf = replyToSelf,
         unknownCommand = unknownCommand,
+        notify = notify,
+        dm = dm,
+        notifyAlways = notifyAlways,
+        selfKicked = selfKicked,
         replyQuote = null,
         unstrippedText = null,
         relayBot = null,
