@@ -695,7 +695,16 @@ private fun RowScope.Field(
                 // At the text's own origin, in its own style, so it's indistinguishable from a caret on
                 // an empty line. Gone the moment there's text.
                 if (field.text.isEmpty()) {
-                    Text(placeholder, style = text, color = colors.fgMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(
+                        placeholder,
+                        style = text,
+                        color = colors.fgMuted,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        // The prompt mark is punctuation to look at, not to hear: "at amiantos", not
+                        // "greater than at amiantos".
+                        modifier = Modifier.clearAndSetSemantics { contentDescription = placeholder.removePrefix(ComposerModel.PROMPT) },
+                    )
                 }
                 inner()
             }
