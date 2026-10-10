@@ -23,33 +23,60 @@ class ComposerColorsTest {
 
     private fun pairs(colors: ComposerColors) = (0 until colors.length).map(colors::at)
 
+    /** One insertion of [length] units at [at], as Compose reports it. */
+    private fun typedAt(at: Int, length: Int) = listOf(ComposerColors.Change(at, at, at, at + length))
+
     @Test
     fun typingCarriesTheColourOfTheUnitBefore() {
-        val colors = colored("hi", 0, 2, red).followed("hi", "hi there", pen = null)
+        val colors = colored("hi", 0, 2, red).edited(typedAt(2, 6), 8, pen = null)
         assertEquals(List(8) { red }, pairs(colors))
     }
 
     @Test
     fun aPenColoursWhatItIsTypedInto() {
-        val colors = ComposerColors.plain(1).followed("a", "abc", pen = ComposerColors.Pen(blue, at = 1))
+        val colors = ComposerColors.plain(1).edited(typedAt(1, 2), 3, pen = ComposerColors.Pen(blue, at = 1))
         assertEquals(listOf(NONE, blue, blue), pairs(colors))
+    }
+
+    /**
+     * `a` typed in front of `ab`: a diff of the texts would say the second `a` is the new one, and put
+     * the pen's colour on the wrong letter. The field's own report says where it went.
+     */
+    @Test
+    fun typingIsPlacedWhereTheFieldSaysNotWhereADiffGuesses() {
+        val colors = colored("ab", 0, 1, red).edited(typedAt(0, 1), 3, pen = ComposerColors.Pen(blue, at = 0))
+        assertEquals(listOf(blue, red, NONE), pairs(colors))
+    }
+
+    /** Several changes in one edit (an IME's batch): each lands where it was made. */
+    @Test
+    fun aBatchOfChangesLandsInPlace() {
+        val changes = listOf(ComposerColors.Change(0, 1, 0, 2), ComposerColors.Change(3, 4, 4, 4))
+        val colors = colored("abcd", 1, 3, red).edited(changes, 4, pen = null)
+        assertEquals(listOf(NONE, NONE, red, red), pairs(colors))
     }
 
     /** An edit somewhere else isn't typing where the colour was picked, and doesn't take it. */
     @Test
-    fun aPenColoursOnlyAnEditAtItsCaret() {
-        val pen = ComposerColors.Pen(blue, at = 2)
-        val appended = ComposerColors.plain(4).followed("ab c", "ab c link", pen)
-        assertEquals(List(9) { NONE }, pairs(appended))
-        val prepended = colored("hello", 0, 5, red).followed("hello", "bob: hello", ComposerColors.Pen(blue, at = 3))
-        assertEquals(List(5) { NONE } + List(5) { red }, pairs(prepended))
+    fun aPenColoursOnlyTypingAtItsCaret() {
+        val colors = ComposerColors.plain(4).edited(typedAt(4, 5), 9, pen = ComposerColors.Pen(blue, at = 2))
+        assertEquals(List(9) { NONE }, pairs(colors))
     }
 
     @Test
-    fun aPenIsSpentByItsEditAndCarriedByOthers() {
+    fun aPenIsSpentByTypingAndCarriedByOtherEdits() {
         val pen = ComposerColors.Pen(blue, at = 2)
-        assertEquals(null, pen.after("ab", "abc"))
-        // Three units in front of its caret carry it three along.
+        assertEquals(null, pen.afterTyping(typedAt(2, 1)))
+        assertEquals(pen.copy(at = 5), pen.afterTyping(typedAt(0, 3)))
+        assertEquals(pen, pen.afterTyping(typedAt(4, 4)))
+        assertEquals(null, pen.afterTyping(listOf(ComposerColors.Change(1, 3, 1, 1))))
+    }
+
+    /** The composer's own insert at the pen's caret — an upload's link — isn't typing: the pick waits after it. */
+    @Test
+    fun theComposersOwnEditCarriesThePenPast() {
+        val pen = ComposerColors.Pen(blue, at = 2)
+        assertEquals(pen.copy(at = 6), pen.after("ab", "ab url"))
         assertEquals(pen.copy(at = 5), pen.after("ab", "xyzab"))
         assertEquals(pen, pen.after("abcd", "abcdlink"))
         assertEquals(null, pen.after("abcd", "ad"))
@@ -58,20 +85,20 @@ class ComposerColorsTest {
     /** Autocorrect's replace: the word takes the colour of what it replaces. */
     @Test
     fun aReplacementTakesTheColourOfWhatItReplaces() {
-        val colors = colored("teh cat", 0, 3, red).followed("teh cat", "the cat", pen = null)
+        val colors = colored("teh cat", 0, 3, red).followed("teh cat", "the cat")
         assertEquals(List(3) { red } + List(4) { NONE }, pairs(colors))
     }
 
     /** A Reply's `bob: ` doesn't take the colour of the words it's put in front of. */
     @Test
     fun anInsertAtTheStartIsPlain() {
-        val colors = colored("hello", 0, 5, red).followed("hello", "bob: hello", pen = null)
+        val colors = colored("hello", 0, 5, red).followed("hello", "bob: hello")
         assertEquals(List(5) { NONE } + List(5) { red }, pairs(colors))
     }
 
     @Test
     fun aDeletionTakesItsColourWithIt() {
-        val colors = colored("abcd", 1, 3, red).followed("abcd", "ad", pen = null)
+        val colors = colored("abcd", 1, 3, red).followed("abcd", "ad")
         assertEquals(listOf(NONE, NONE), pairs(colors))
     }
 

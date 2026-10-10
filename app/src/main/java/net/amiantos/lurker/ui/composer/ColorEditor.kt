@@ -109,6 +109,7 @@ internal fun ColorEditor(
             Column(Modifier.fillMaxSize().padding(padding)) {
                 BasicTextField(
                     state = state.field,
+                    inputTransformation = state.colorInput,
                     outputTransformation = colorOutput,
                     textStyle = MaterialTheme.typography.titleLarge.copy(color = LurkerTheme.colors.fg),
                     cursorBrush = SolidColor(LurkerTheme.colors.accent),

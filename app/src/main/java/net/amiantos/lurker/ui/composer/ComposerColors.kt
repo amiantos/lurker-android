@@ -28,34 +28,60 @@ internal class ComposerColors private constructor(private val cells: IntArray) {
     val isColored: Boolean get() = cells.any { it != NONE }
 
     /**
-     * Fitted to an edit that turned [old] into [new]: the replaced stretch goes, and what replaces it
-     * takes [pen] when the edit is at the pen's caret — a colour picked there and not yet typed with —
-     * else the colour of what it replaces, else of the unit before it. At the very start it's plain, so
-     * a Reply's `bob: ` doesn't take the colour of the words it's put in front of.
+     * Fitted to the user's own edit, from the field's report of exactly what changed ([changes], in
+     * order and apart, as Compose's `ChangeList` gives them): each replaced stretch goes, and what
+     * replaces it takes [pen] when it's typed at the pen's caret — a colour picked there and not yet
+     * typed with — else [inherited].
      *
-     * ⚠ Only at the pen's caret. An upload's link appended at the end, a Reply's address, an
-     * autocorrect of the word before — none is the user typing where they picked, and none takes it.
-     *
-     * The edit is the smallest one that explains the two texts ([TextEdit]), which is exactly the
-     * keystroke, the completion or the link when one thing changed — and, when the field's observer
-     * folds two edits into one, the same span the two together made.
+     * ⚠ From the ranges, never a diff of the two texts: typing `a` in front of `ab` is, to a diff, an
+     * `a` inserted AFTER the first one, and the colour would land on the wrong letter.
      */
-    fun followed(old: String, new: String, pen: Pen?): ComposerColors {
+    fun edited(changes: List<Change>, newLength: Int, pen: Pen?): ComposerColors {
+        val next = IntArray(newLength)
+        var from = 0
+        for (change in changes) {
+            val to = change.start - (change.originalStart - from)
+            cells.copyInto(next, to, from, change.originalStart)
+            val fill = pen?.takeIf { it.at == change.originalStart }?.pair ?: inherited(change.originalStart, change.originalEnd)
+            next.fill(fill, change.start, change.end)
+            from = change.originalEnd
+        }
+        val tail = length - from
+        cells.copyInto(next, newLength - tail, from, length)
+        return ComposerColors(next)
+    }
+
+    /**
+     * Fitted to an edit the composer made itself — a completion, a Reply's address, an upload's link,
+     * a send's clear — which Compose reports to nobody: the smallest edit that explains [old] becoming
+     * [new] ([TextEdit]), its text taking [inherited]. No pen: none of these is the user typing where
+     * they picked a colour.
+     */
+    fun followed(old: String, new: String): ComposerColors {
         if (old == new) return this
         val edit = TextEdit.difference(old, new)
         val start = edit.range.start
         val end = edit.range.end
-        val fill = pen?.takeIf { it.at == start }?.pair ?: when {
-            end > start -> at(start)
-            start > 0 -> at(start - 1)
-            else -> NONE
-        }
         val next = IntArray(length - (end - start) + edit.replacement.length)
         cells.copyInto(next, 0, 0, start)
-        next.fill(fill, start, start + edit.replacement.length)
+        next.fill(inherited(start, end), start, start + edit.replacement.length)
         cells.copyInto(next, start + edit.replacement.length, end, length)
         return ComposerColors(next)
     }
+
+    /**
+     * What text put over units [start] until [end] is written in: the colour of what it replaces,
+     * else of the unit before it — and plain at the very start, so a Reply's `bob: ` doesn't take the
+     * colour of the words it's put in front of.
+     */
+    private fun inherited(start: Int, end: Int): Int = when {
+        end > start -> at(start)
+        start > 0 -> at(start - 1)
+        else -> NONE
+    }
+
+    /** One stretch of a user edit: units [originalStart] until [originalEnd] became [start] until [end]. */
+    data class Change(val originalStart: Int, val originalEnd: Int, val start: Int, val end: Int)
 
     /** [layer] of units [start] until [end] set to [slot] — null takes it off. */
     fun painted(slot: Int?, layer: Layer, start: Int, end: Int): ComposerColors {
@@ -100,8 +126,26 @@ internal class ComposerColors private constructor(private val cells: IntArray) {
      */
     data class Pen(val pair: Int, val at: Int) {
         /**
-         * What's left of it after an edit turned [old] into [new]: spent by an edit at its caret, carried
-         * along by one before it, kept by one after it, and gone if one swallowed its caret.
+         * What's left of it after the user's edit [changes]: spent by typing at its caret, carried along
+         * by an edit before it, kept by one after it, and gone if one swallowed its caret.
+         */
+        fun afterTyping(changes: List<Change>): Pen? {
+            var shift = 0
+            for (change in changes) {
+                when {
+                    change.originalStart == at -> return null
+                    change.originalStart > at -> break
+                    change.originalEnd <= at -> shift += (change.end - change.start) - (change.originalEnd - change.originalStart)
+                    else -> return null
+                }
+            }
+            return copy(at = at + shift)
+        }
+
+        /**
+         * What's left of it after the composer's own edit turned [old] into [new]: carried along by an
+         * edit before its caret — an insert AT its caret too, which isn't typing (an upload's link, a
+         * Reply's address), so the pick waits after it — kept by one after it, gone if one swallowed it.
          */
         fun after(old: String, new: String): Pen? {
             if (old == new) return this
@@ -109,7 +153,6 @@ internal class ComposerColors private constructor(private val cells: IntArray) {
             val start = edit.range.start
             val end = edit.range.end
             return when {
-                start == at -> null
                 start > at -> this
                 end <= at -> copy(at = at + edit.replacement.length - (end - start))
                 else -> null

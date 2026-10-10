@@ -3,6 +3,8 @@
 
 package net.amiantos.lurker.ui.composer
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.Composable
@@ -14,6 +16,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -89,6 +92,8 @@ internal class ComposerState(
     val field: TextFieldState = openField(model, key),
     /** Whether the colour editor is up — the screen's, saved, so a rotation doesn't close it. */
     editorOpenState: MutableState<Boolean> = mutableStateOf(false),
+    /** The [pen] — the screen's, saved with the field it was picked in ([penSaver]). */
+    penState: MutableState<ComposerColors.Pen?> = mutableStateOf(null),
 ) {
     // MARK: - What the screen hands in (set every composition — see `rememberComposerState`)
 
@@ -134,10 +139,42 @@ internal class ComposerState(
 
     /**
      * The field's colour and the text it was last fitted to — one value, so the two are never read
-     * apart. Fitted in [fieldChanged]; until then [colorsFor] fits it on the fly, which is what lets
-     * the field paint a keystroke's colour in the same frame it's typed.
+     * apart. Fitted in [fieldChanged], from [typed] when the user made the edit; until then [colorsFor]
+     * answers for the text on screen, which is what lets the field paint a keystroke's colour in the
+     * frame it's typed.
      */
     private class Painted(val text: String, val colors: ComposerColors)
+
+    /** A user edit's fitting, made from the field's own report of it ([colorInput]), and the pen after it. */
+    private class Typed(val painted: Painted, val pen: ComposerColors.Pen?)
+
+    private var typed: Typed? by mutableStateOf(null)
+
+    /**
+     * Fits the colour to each edit the user makes, from Compose's report of exactly what changed —
+     * the one source that can tell `a` typed before `ab` from `a` typed after the first `a`, which a
+     * diff of the two texts can't. Changes no text. Both fields that show this one (the bar's and the
+     * colour editor's) carry it.
+     *
+     * ⚠ `TextFieldBuffer.changes` is still marked experimental (foundation 1.10). It's the only report
+     * of where an edit landed, and the alternative — guessing from the texts — is the bug it fixes.
+     */
+    @OptIn(ExperimentalFoundationApi::class)
+    val colorInput = InputTransformation {
+        val old = originalText.toString()
+        val new = asCharSequence().toString()
+        if (old == new) return@InputTransformation
+        val changes = (0 until this.changes.changeCount).map { index ->
+            val original = this.changes.getOriginalRange(index)
+            val range = this.changes.getRange(index)
+            ComposerColors.Change(original.min, original.max, range.min, range.max)
+        }
+        // Against what's on screen now: another keystroke may already be waiting to be committed.
+        // Its pen too — spent already, maybe, which a fallback to the stored one would bring back.
+        val previous = typed?.takeIf { it.painted.text == old }
+        val pen = if (previous != null) previous.pen else this@ComposerState.pen
+        typed = Typed(Painted(new, colorsFor(old).edited(changes, new.length, pen)), pen?.afterTyping(changes))
+    }
 
     private var painted: Painted by mutableStateOf(
         Painted(
@@ -151,7 +188,7 @@ internal class ComposerState(
      * UIKit's typing attributes are on iOS. Spent by the edit it colours, and dropped by a caret move,
      * so it lasts exactly as long as the caret it was picked at.
      */
-    var pen: ComposerColors.Pen? by mutableStateOf(null)
+    var pen: ComposerColors.Pen? by penState
         private set
 
     /** Where the caret was at the last [fieldChanged] — a move without an edit drops the [pen]. */
@@ -163,7 +200,9 @@ internal class ComposerState(
     /** The colour on [text] — the field's, fitted to it when the field has moved on since it was last. */
     fun colorsFor(text: String): ComposerColors {
         val now = painted
-        return if (now.text == text) now.colors else now.colors.followed(now.text, text, pen)
+        if (now.text == text) return now.colors
+        typed?.painted?.takeIf { it.text == text }?.let { return it.colors }
+        return now.colors.followed(now.text, text)
     }
 
     /**
@@ -284,9 +323,17 @@ internal class ComposerState(
     internal fun fieldChanged(now: Snapshot) {
         // The colour first, so everything after reads it fitted to this text.
         if (now.text != painted.text) {
-            val old = painted.text
-            painted = Painted(now.text, colorsFor(now.text))
-            pen = pen?.after(old, now.text)
+            val user = typed?.takeIf { it.painted.text == now.text }
+            if (user != null) {
+                painted = user.painted
+                pen = user.pen
+            } else {
+                // The composer's own edit (or an undo, which Compose reports to nobody either).
+                val old = painted.text
+                painted = Painted(now.text, colorsFor(now.text))
+                pen = pen?.after(old, now.text)
+            }
+            typed = null
         } else if (now.selection != lastSelection) {
             pen = null
         }
@@ -794,6 +841,12 @@ internal class ComposerState(
     }
 }
 
+/** A pen as the saved state holds it: its pair and its caret. */
+private val penSaver: Saver<ComposerColors.Pen?, Any> = Saver(
+    save = { pen -> pen?.let { arrayListOf(it.pair, it.at) } },
+    restore = { saved -> (saved as List<*>).let { ComposerColors.Pen(it[0] as Int, it[1] as Int) } },
+)
+
 /** A field opened on [key]'s draft: this device's unflushed edit, else the server's. */
 internal fun openField(model: ChatViewModel, key: BufferKey) =
     TextFieldState(initialText = ComposerColors.read(model.draft(key)?.body ?: "").first)
@@ -820,7 +873,8 @@ internal fun rememberComposerState(
     // server log, whose drafts don't sync, and with the caret thrown to the end everywhere else.
     val field = rememberSaveable(saver = TextFieldState.Saver) { openField(model, key) }
     val editorOpen = rememberSaveable { mutableStateOf(false) }
-    val state = remember(model, key) { ComposerState(model, key, kind, scope, field, editorOpen) }
+    val pen = rememberSaveable(stateSaver = penSaver) { mutableStateOf<ComposerColors.Pen?>(null) }
+    val state = remember(model, key) { ComposerState(model, key, kind, scope, field, editorOpen, pen) }
     val activity = LocalContext.current.findActivity()
     val keyboard = LocalSoftwareKeyboardController.current
     val events = LocalAppEvents.current

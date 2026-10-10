@@ -26,6 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.KeyboardActionHandler
 import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.foundation.text.input.TextFieldLineLimits
@@ -161,6 +162,7 @@ internal fun ComposerBar(
         modifier = modifier,
         above = { UploadStatusView(attachments?.readout, onCancel = { attachments?.cancel() }) },
         fieldModifier = Modifier.receivesPastedImages(attachments),
+        inputTransformation = state.colorInput,
         outputTransformation = colorOutput,
         sendButton = if (attachments != null) {
             { canSend, size -> SendMenuButton(canSend, size, attachments, state::send, onEditColor = { state.editorOpen = true }) }
@@ -224,7 +226,8 @@ internal fun ComposerBarContent(
     above: @Composable () -> Unit = {},
     /** The field's extra behaviour: taking a pasted image as an upload. */
     fieldModifier: Modifier = Modifier,
-    /** Paints the field's colour (lurker#1117). */
+    /** Fits the field's colour to the user's edits, and paints it (lurker#1117). */
+    inputTransformation: InputTransformation? = null,
     outputTransformation: OutputTransformation? = null,
     /** The send button with its menu, where there is one; else a plain [SendButton]. */
     sendButton: (@Composable (canSend: Boolean, size: Dp) -> Unit)? = null,
@@ -255,7 +258,7 @@ internal fun ComposerBarContent(
             Field(
                 field, placeholder, capitalizes, enterSends, collapsed, focusRequester, onFocusChange,
                 remember(onSend, onTab, onNewline, onCancelReply) { FieldKeys(onSend, onTab, onNewline, onCancelReply) },
-                isComposing, strip is Strip.Reply, fieldModifier, outputTransformation,
+                isComposing, strip is Strip.Reply, fieldModifier, inputTransformation, outputTransformation,
             )
             // Derived, so the bar recomposes when the answer flips rather than on every keystroke.
             val canSend by remember(field) { derivedStateOf { ComposerModel.sendable(field.text.toString()) != null } }
@@ -299,6 +302,7 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
     isComposing: () -> Boolean,
     replyPending: Boolean,
     modifier: Modifier,
+    inputTransformation: InputTransformation?,
     outputTransformation: OutputTransformation?,
 ) {
     val colors = LurkerTheme.colors
@@ -307,6 +311,7 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
     val keys = remember { ComposerKeys() }
     BasicTextField(
         state = field,
+        inputTransformation = inputTransformation,
         outputTransformation = outputTransformation,
         modifier = Modifier
             .weight(1f)
