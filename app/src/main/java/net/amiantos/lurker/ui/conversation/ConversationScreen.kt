@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
@@ -54,6 +55,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
@@ -94,6 +96,7 @@ import net.amiantos.lurker.ui.actions.rememberMessageActionsState
 import net.amiantos.lurker.ui.composer.ComposerBar
 import net.amiantos.lurker.ui.composer.ComposerModel
 import net.amiantos.lurker.ui.composer.SendScroll
+import net.amiantos.lurker.ui.composer.collapsedHeight
 import net.amiantos.lurker.ui.feeds.AppView
 import net.amiantos.lurker.ui.feeds.ConversationViewsActions
 import net.amiantos.lurker.ui.composer.rememberComposerState
@@ -102,8 +105,10 @@ import net.amiantos.lurker.ui.media.PreviewContext
 import net.amiantos.lurker.ui.media.PreviewToggles
 import net.amiantos.lurker.ui.shell.NoticeHost
 import net.amiantos.lurker.ui.shell.StateModel
+import net.amiantos.lurker.ui.shell.TopEdgeFade
 import net.amiantos.lurker.ui.shell.openNotification
 import net.amiantos.lurker.ui.shell.rememberToastSurface
+import net.amiantos.lurker.ui.shell.transparentTopBarColors
 import net.amiantos.lurker.ui.uploads.ComposerInsertTarget
 import net.amiantos.lurker.ui.uploads.LocalUploadServices
 import net.amiantos.lurker.ui.uploads.UploadTargets
@@ -775,7 +780,7 @@ fun ConversationScreen(
         flash = flash,
         onJumpToUnread = { if (scroll.jumpToFirstUnread()) startJump() },
         onJumpToLatest = ::jumpToLatest,
-        bottomBar = {
+        composer = {
             ComposerBar(
                 composer, uiPreferences.composerAutocapitalizes, uiPreferences.composerEnterSends, clockKey = day,
                 attachments = attachments,
@@ -1006,9 +1011,9 @@ internal fun ConversationContent(
     onConnectionBannerShown: (Boolean) -> Unit = {},
     onJumpToUnread: () -> Unit = {},
     onJumpToLatest: () -> Unit = {},
-    /** The composer — the scaffold's bottom bar, so the list's reservation includes it. */
-    bottomBar: @Composable () -> Unit = {},
-    /** What floats over the list's bottom edge, given the reservation's height: the screen's notices. */
+    /** The composer, laid over the list's bottom edge; the rows scroll under it (`FloatingChrome`). */
+    composer: @Composable () -> Unit = {},
+    /** What floats over the list's bottom edge, given the composer's height: the screen's notices. */
     overlay: @Composable BoxScope.(bottom: Dp) -> Unit = {},
     /** The message sheets (`MessageActionsHost`), drawn inside the screen's `LocalUriHandler` provider. */
     sheets: @Composable () -> Unit = {},
@@ -1035,6 +1040,7 @@ internal fun ConversationContent(
             // row instead, and the top of the screen goes back to the conversation (iOS's `updateTitle`).
             TopAppBar(
                 title = {},
+                colors = transparentTopBarColors(),
                 navigationIcon = {
                     if (showsBack) {
                         IconButton(onClick = onBack) { Icon(LurkerIcons.ArrowBack, contentDescription = "Back") }
@@ -1057,7 +1063,6 @@ internal fun ConversationContent(
                 },
             )
         },
-        bottomBar = bottomBar,
     ) { padding ->
         val direction = LocalLayoutDirection.current
         // Links open in the browser through the platform's handler — which throws when nothing on the
@@ -1065,30 +1070,37 @@ internal fun ConversationContent(
         // is better than a crash.
         val platform = LocalUriHandler.current
         val uriHandler = remember(platform) { SafeUriHandler(platform) }
-        val bottom = padding.calculateBottomPadding()
+        // The composer is drawn over the list, not beside it, so the list reserves its measured height
+        // (keyboard and navigation bar included — the composer pads itself for both) rather than the
+        // scaffold's. Seeded with the slab's resting height, so the first frame doesn't put the newest
+        // row under it.
+        val density = LocalDensity.current
+        val restingComposer = collapsedHeight() * 2 + 13.dp + with(density) { WindowInsets.safeDrawing.getBottom(this).toDp() }
+        var composerHeight by remember { mutableStateOf(restingComposer) }
+        val bottom = composerHeight
+        val top = padding.calculateTopPadding()
         CompositionLocalProvider(LocalUriHandler provides uriHandler) {
             Box(
                 Modifier
                     .fillMaxSize()
-                    .padding(
-                        top = padding.calculateTopPadding(),
-                        start = padding.calculateStartPadding(direction),
-                        end = padding.calculateEndPadding(direction),
-                    ),
+                    .padding(start = padding.calculateStartPadding(direction), end = padding.calculateEndPadding(direction)),
             ) {
                 // Never with no rows (`None`); drawn as the empty list it is. One `StateView` for both
                 // states, so "Loading messages…" settling to "No messages yet" is a change TalkBack
                 // reads out rather than one node swapped for another.
                 if (rows.isEmpty() && placeholder != BufferPlaceholder.None) {
-                    StateView(if (placeholder == BufferPlaceholder.Loading) ConversationModel.LOADING else empty)
+                    Box(Modifier.fillMaxSize().padding(top = top, bottom = bottom)) {
+                        StateView(if (placeholder == BufferPlaceholder.Loading) ConversationModel.LOADING else empty)
+                    }
                 } else if (rows.isNotEmpty()) {
                     LazyColumn(
                         state = listState,
                         // Newest at the bottom, and the list starts there: item 0 is the last row.
                         reverseLayout = true,
-                        // The composer's height (and the keyboard's, under it): the newest row sits just
-                        // above the bar, and the rows scroll on under it.
-                        contentPadding = PaddingValues(bottom = bottom),
+                        // The composer's height (and the keyboard's, under it) below and the bar's above:
+                        // the newest row sits just above the slab, the oldest just under the bar, and the
+                        // rows scroll on under both.
+                        contentPadding = PaddingValues(top = top, bottom = bottom),
                         modifier = Modifier.fillMaxSize(),
                     ) {
                         items(
@@ -1114,18 +1126,24 @@ internal fun ConversationContent(
                         }
                     }
                 }
+                // The ground behind the transparent top bar, fading out under it.
+                TopEdgeFade(top, Modifier.align(Alignment.TopCenter))
+                // The composer, over the list's bottom edge; its height is the list's reservation.
+                Box(Modifier.align(Alignment.BottomCenter).onSizeChanged { composerHeight = with(density) { it.height.toDp() } }) {
+                    composer()
+                }
                 // Over the rows, not above them: they float, and the list scrolls under them. Each sits
                 // on the edge it takes you to — the unread banner up top (in the connection banner's
                 // slot, which wins it), the jump pill in the bottom-trailing corner.
                 ConnectionBanner(
                     state = banner,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp, start = 16.dp, end = 16.dp),
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = top + 8.dp, start = 16.dp, end = 16.dp),
                     onShownChange = onConnectionBannerShown,
                 )
                 UnreadBanner(
                     visible = pills.showsUnread,
                     onClick = onJumpToUnread,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp, start = 16.dp, end = 16.dp),
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = top + 8.dp, start = 16.dp, end = 16.dp),
                 )
                 JumpToLatestButton(
                     visible = pills.showsLatest,

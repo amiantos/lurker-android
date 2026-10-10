@@ -79,8 +79,10 @@ import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.shell.StatusTitle
 import net.amiantos.lurker.ui.shell.StatusTitleText
+import net.amiantos.lurker.ui.shell.TopEdgeFade
 import net.amiantos.lurker.ui.shell.openNotification
 import net.amiantos.lurker.ui.shell.rememberToastSurface
+import net.amiantos.lurker.ui.shell.transparentTopBarColors
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.Buffer
@@ -401,6 +403,7 @@ internal fun BufferListContent(
             TopAppBar(
                 // Inline: the bar's own row is enough to say what the screen is.
                 title = { StatusTitleText(title) },
+                colors = transparentTopBarColors(),
                 actions = {
                     // Android's search action, where iOS puts a field in the bottom toolbar — on its own
                     // screen only: side by side the conversation column carries search (`ViewsLayout`).
@@ -416,14 +419,13 @@ internal fun BufferListContent(
         },
     ) { padding ->
         val direction = LocalLayoutDirection.current
+        // The rows run under the transparent top bar (`FloatingChrome`): the list is padded for it
+        // inside, so they scroll up under the fade, rather than stopping at it.
+        val top = padding.calculateTopPadding()
         Box(
             Modifier
                 .fillMaxSize()
-                .padding(
-                    top = padding.calculateTopPadding(),
-                    start = padding.calculateStartPadding(direction),
-                    end = padding.calculateEndPadding(direction),
-                ),
+                .padding(start = padding.calculateStartPadding(direction), end = padding.calculateEndPadding(direction)),
         ) {
             if (placeholder == BufferListPlaceholder.None) {
                 RosterList(
@@ -432,7 +434,7 @@ internal fun BufferListContent(
                     marksOpenBuffer = marksOpenBuffer,
                     draggingSection = draggingSection,
                     actions = actions,
-                    contentPadding = PaddingValues(bottom = padding.calculateBottomPadding() + RosterMetrics.groupGap),
+                    contentPadding = PaddingValues(top = top, bottom = padding.calculateBottomPadding() + RosterMetrics.groupGap),
                 )
             } else {
                 // One `StateView` for every state, so a change between them (loading settling to "No
@@ -455,12 +457,13 @@ internal fun BufferListContent(
                         subtitle = "Join a channel or start a DM to see it here.",
                     )
                 }
-                StateView(state, onAction = actions.onAddNetwork)
+                Box(Modifier.fillMaxSize().padding(top = top)) { StateView(state, onAction = actions.onAddNetwork) }
             }
+            TopEdgeFade(top, Modifier.align(Alignment.TopCenter))
             // Over the rows, not above them: it floats, and the list scrolls under it.
             ConnectionBanner(
                 state = banner,
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp, start = 16.dp, end = 16.dp),
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = top + 8.dp, start = 16.dp, end = 16.dp),
             )
             // Along the bottom, over the rows the same way the banner is — and after the list, so the
             // tap is the capsule's and not the row's under it.

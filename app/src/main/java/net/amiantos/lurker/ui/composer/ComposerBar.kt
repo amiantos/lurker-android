@@ -102,6 +102,7 @@ import net.amiantos.lurker.ui.message.rememberMessageTextStyle
 import net.amiantos.lurker.ui.message.typingGlyph
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
+import net.amiantos.lurker.ui.shell.CHROME_ALPHA
 import net.amiantos.lurker.ui.theme.monoTextStyle
 import net.amiantos.lurker.ui.uploads.Attachments
 import net.amiantos.lurker.ui.uploads.UploadBatchPosition
@@ -119,11 +120,11 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * The message composer — lurker-ios's `ComposerBar`, in Material's terms: one slab with a status row
+ * The message composer — lurker-ios's `ComposerBar`, in Material's terms: one block with a status row
  * on top and the field beside a round send button below, after the web client's status bar and input
- * as one piece. iOS draws the slab in glass over the conversation; here it sits on the log's own
- * ground at the bottom of the screen and the list's reservation includes it, which is the same
- * arrangement without a material Android doesn't have.
+ * as one piece. iOS draws it as a floating glass slab; here it's an edge-to-edge, square block —
+ * Android's motif — laid over the list rather than beside it, translucent so the rows scroll on under
+ * it (`FloatingChrome`), which is the glass arrangement without a material Android doesn't have.
  *
  * **The status row** is exactly the one-line field's height and uses the message list's fixed-width
  * face, as the field now does. Nothing moves when its content changes. Left side, one thing at a time:
@@ -328,28 +329,32 @@ internal fun ComposerBarContent(
 ) {
     val colors = LurkerTheme.colors
     val collapsed = collapsedHeight()
-    Column(
-        modifier
-            .fillMaxWidth()
-            .background(colors.bg)
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
-            // Match the message rows' horizontal inset, so the slab's edges line up with the column of
-            // text above it.
-            .padding(horizontal = 16.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        above()
-        when (strip) {
-            Strip.None -> Unit
-            is Strip.Away -> AwayStripRow(strip, onBack)
-        }
-        // The slab: one shape holding the status row on top and the field + send below. A fixed
-        // radius, not a capsule: it's always two rows tall, so a capsule's arcs would clip the text.
+    Column(modifier.fillMaxWidth()) {
+        // Above the block, over the list: an upload's readout and the away strip, in the rows' gutter.
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(SLAB_RADIUS)),
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            above()
+            when (strip) {
+                Strip.None -> Unit
+                is Strip.Away -> Box(Modifier.padding(bottom = 6.dp)) { AwayStripRow(strip, onBack) }
+            }
+        }
+        // The block: edge to edge and square, Android's motif rather than iOS's floating glass, holding
+        // the status row on top and the field + send below, with a hairline along its top. Translucent,
+        // so the rows scroll on under it (`FloatingChrome`); it pads itself for the keyboard and the
+        // navigation bar, which is why its height is what the list reserves.
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = CHROME_ALPHA))
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)),
+        ) {
+            HorizontalDivider(thickness = Dp.Hairline, color = colors.border)
             StatusRow(
                 lead = lead,
                 suggestions = suggestions,
@@ -404,7 +409,7 @@ private val FIELD_INSET_HORIZONTAL = 14.dp
 /** How far the send circle sits in from the slab's edge. */
 private val SEND_INSET = 5.dp
 
-/** The slab's corner radius: a rounded rectangle, since it's always two rows tall. */
+/** The away strip's corner radius: a rounded rectangle, floating above the block. */
 private val SLAB_RADIUS = 20.dp
 
 /** The notice glyph's size, a little under the text's. */
@@ -918,7 +923,7 @@ private fun ComposerPreview(
     readout: UploadReadout? = null,
 ) {
     LurkerTheme(darkTheme = dark) {
-        Box(Modifier.background(LurkerTheme.colors.bg)) {
+        Box(Modifier.background(LurkerTheme.colors.bg).padding(top = 12.dp)) {
             ComposerBarContent(
                 field = remember { TextFieldState(text) },
                 placeholder = placeholder,
