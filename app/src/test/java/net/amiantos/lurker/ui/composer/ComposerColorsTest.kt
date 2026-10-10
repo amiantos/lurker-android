@@ -31,8 +31,28 @@ class ComposerColorsTest {
 
     @Test
     fun aPenColoursWhatItIsTypedInto() {
-        val colors = ComposerColors.plain(1).followed("a", "abc", pen = blue)
+        val colors = ComposerColors.plain(1).followed("a", "abc", pen = ComposerColors.Pen(blue, at = 1))
         assertEquals(listOf(NONE, blue, blue), pairs(colors))
+    }
+
+    /** An edit somewhere else isn't typing where the colour was picked, and doesn't take it. */
+    @Test
+    fun aPenColoursOnlyAnEditAtItsCaret() {
+        val pen = ComposerColors.Pen(blue, at = 2)
+        val appended = ComposerColors.plain(4).followed("ab c", "ab c link", pen)
+        assertEquals(List(9) { NONE }, pairs(appended))
+        val prepended = colored("hello", 0, 5, red).followed("hello", "bob: hello", ComposerColors.Pen(blue, at = 3))
+        assertEquals(List(5) { NONE } + List(5) { red }, pairs(prepended))
+    }
+
+    @Test
+    fun aPenIsSpentByItsEditAndCarriedByOthers() {
+        val pen = ComposerColors.Pen(blue, at = 2)
+        assertEquals(null, pen.after("ab", "abc"))
+        // Three units in front of its caret carry it three along.
+        assertEquals(pen.copy(at = 5), pen.after("ab", "xyzab"))
+        assertEquals(pen, pen.after("abcd", "abcdlink"))
+        assertEquals(null, pen.after("abcd", "ad"))
     }
 
     /** Autocorrect's replace: the word takes the colour of what it replaces. */

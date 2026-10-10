@@ -7,6 +7,7 @@ import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -86,6 +87,8 @@ internal class ComposerState(
      * hands back what was typed, caret included. Opened on the buffer's draft ([openField]).
      */
     val field: TextFieldState = openField(model, key),
+    /** Whether the colour editor is up — the screen's, saved, so a rotation doesn't close it. */
+    editorOpenState: MutableState<Boolean> = mutableStateOf(false),
 ) {
     // MARK: - What the screen hands in (set every composition — see `rememberComposerState`)
 
@@ -148,14 +151,14 @@ internal class ComposerState(
      * UIKit's typing attributes are on iOS. Spent by the edit it colours, and dropped by a caret move,
      * so it lasts exactly as long as the caret it was picked at.
      */
-    var pen: Int? by mutableStateOf(null)
+    var pen: ComposerColors.Pen? by mutableStateOf(null)
         private set
 
     /** Where the caret was at the last [fieldChanged] — a move without an edit drops the [pen]. */
     private var lastSelection: TextRange = field.selection
 
     /** Set while the colour editor covers the composer: nothing may take the keyboard back to the bar. */
-    var editorOpen: Boolean by mutableStateOf(false)
+    var editorOpen: Boolean by editorOpenState
 
     /** The colour on [text] — the field's, fitted to it when the field has moved on since it was last. */
     fun colorsFor(text: String): ComposerColors {
@@ -167,7 +170,17 @@ internal class ComposerState(
      * What the field holds as a line, its colour written in (`ColorMarkup.encode`) — the draft that
      * syncs and the line a send sends. Plain text is itself.
      */
-    val line: String get() = this.field.text.toString().let { text -> ComposerColors.line(text, colorsFor(text)) } // `this.`: bare `field` is the backing field
+    val line: String get() {
+        val text = this.field.text.toString() // `this.`: bare `field` is the backing field
+        val now = painted
+        if (now.text != text) return ComposerColors.line(text, colorsFor(text))
+        // Written once per fitting rather than per read — it's read on every caret move and again by
+        // the draft save, and writing it walks the whole line.
+        lineCache?.let { (fitted, written) -> if (fitted === now) return written }
+        return ComposerColors.line(text, now.colors).also { lineCache = now to it }
+    }
+
+    private var lineCache: Pair<Painted, String>? = null
 
     /**
      * The pair the selection — or the caret, or the pen — is in, for the palette to ring.
@@ -178,7 +191,7 @@ internal class ComposerState(
         val selection = this.field.selection
         return when {
             !selection.collapsed -> colors.at(selection.min)
-            else -> pen ?: colors.at(selection.min - 1)
+            else -> pen?.takeIf { it.at == selection.min }?.pair ?: colors.at(selection.min - 1)
         }
     }
 
@@ -189,7 +202,7 @@ internal class ComposerState(
     fun pickColor(slot: Int?, layer: ComposerColors.Layer) {
         val selection = field.selection
         if (selection.collapsed) {
-            pen = ComposerColors.with(currentColors, slot, layer)
+            pen = ComposerColors.Pen(ComposerColors.with(currentColors, slot, layer), at = selection.min)
             return
         }
         val text = field.text.toString()
@@ -271,8 +284,9 @@ internal class ComposerState(
     internal fun fieldChanged(now: Snapshot) {
         // The colour first, so everything after reads it fitted to this text.
         if (now.text != painted.text) {
+            val old = painted.text
             painted = Painted(now.text, colorsFor(now.text))
-            pen = null
+            pen = pen?.after(old, now.text)
         } else if (now.selection != lastSelection) {
             pen = null
         }
@@ -805,7 +819,8 @@ internal fun rememberComposerState(
     // screen, and a remembered field came back as the stored draft — empty in the Lurker console and a
     // server log, whose drafts don't sync, and with the caret thrown to the end everywhere else.
     val field = rememberSaveable(saver = TextFieldState.Saver) { openField(model, key) }
-    val state = remember(model, key) { ComposerState(model, key, kind, scope, field) }
+    val editorOpen = rememberSaveable { mutableStateOf(false) }
+    val state = remember(model, key) { ComposerState(model, key, kind, scope, field, editorOpen) }
     val activity = LocalContext.current.findActivity()
     val keyboard = LocalSoftwareKeyboardController.current
     val events = LocalAppEvents.current

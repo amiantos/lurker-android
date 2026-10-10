@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -44,12 +45,15 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FullScreenDialog
 import net.amiantos.lurker.ui.networks.PageExit
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
+import net.amiantos.lurker.ui.uploads.Attachments
+import net.amiantos.lurker.ui.uploads.receivesPastedImages
 
 /**
  * The composer's Edit Color (lurker#1117): the draft full screen, with a palette under it that rides
@@ -68,9 +72,19 @@ import net.amiantos.lurker.ui.theme.LurkerTheme
  * Sixteen colours, not mIRC's 99: the sixteen are the ones every client paints, and the list draws
  * them in the same palette (`LurkerColors.mirc`). Colour changes don't join the field's undo, which
  * holds text only.
+ *
+ * The field is the bar's in all but size: the same capitalisation, and a pasted image uploads. Not its
+ * keys — Enter here is a line break, as on iOS: this is where a longer message gets written, and its
+ * Send is in the bar above.
  */
 @Composable
-internal fun ColorEditor(state: ComposerState, colorOutput: OutputTransformation, onClose: () -> Unit) {
+internal fun ColorEditor(
+    state: ComposerState,
+    colorOutput: OutputTransformation,
+    capitalizes: Boolean,
+    attachments: Attachments?,
+    onClose: () -> Unit,
+) {
     var layer by rememberSaveable { mutableStateOf(ComposerColors.Layer.Text) }
     val focus = remember { FocusRequester() }
     val canSend by remember(state) { derivedStateOf { ComposerModel.sendable(state.field.text.toString()) != null } }
@@ -98,12 +112,19 @@ internal fun ColorEditor(state: ComposerState, colorOutput: OutputTransformation
                     outputTransformation = colorOutput,
                     textStyle = MaterialTheme.typography.titleLarge.copy(color = LurkerTheme.colors.fg),
                     cursorBrush = SolidColor(LurkerTheme.colors.accent),
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = if (capitalizes) KeyboardCapitalization.Sentences else KeyboardCapitalization.None,
+                    ),
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 12.dp)
-                        .focusRequester(focus),
+                        .focusRequester(focus)
+                        .receivesPastedImages(attachments),
                 )
+                // Here, inside the dialog's content: its window composes after the dialog attaches, and a
+                // request made from outside it would reach a requester with no field behind it yet.
+                LaunchedEffect(Unit) { focus.requestFocus() }
                 ColorPalette(
                     state = state,
                     layer = layer,
@@ -113,7 +134,6 @@ internal fun ColorEditor(state: ComposerState, colorOutput: OutputTransformation
             }
         }
     }
-    LaunchedEffect(Unit) { focus.requestFocus() }
 }
 
 /** mIRC's own names, for TalkBack — the colour the code means to every other client. */

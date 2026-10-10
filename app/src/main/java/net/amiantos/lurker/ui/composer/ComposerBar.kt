@@ -168,7 +168,9 @@ internal fun ComposerBar(
             null
         },
     )
-    if (state.editorOpen) ColorEditor(state, colorOutput, onClose = { state.editorOpen = false })
+    if (state.editorOpen) {
+        ColorEditor(state, colorOutput, capitalizes, attachments, onClose = { state.editorOpen = false })
+    }
 }
 
 /**
@@ -428,7 +430,6 @@ private fun SendButton(enabled: Boolean, size: Dp, onClick: () -> Unit) {
     }
 }
 
-/** The strip's shape and ground — one slot, whichever of the two it says. */
 /**
  * The send button as the composer's menu (lurker#1117) — iOS's `sendMenu`. With something to send it's
  * the lit arrow and a tap sends; a long press opens the menu either way, and over an empty field the
@@ -511,6 +512,7 @@ private fun SendFace(canSend: Boolean, size: Dp, modifier: Modifier = Modifier) 
     }
 }
 
+/** The strip's shape and ground — one slot, whichever of the two it says. */
 @Composable
 private fun StripRow(label: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit, button: @Composable () -> Unit) {
     Row(

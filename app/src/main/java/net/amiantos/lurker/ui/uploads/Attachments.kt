@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.uploads
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -115,11 +116,10 @@ fun rememberAttachments(services: UploadServices?, attaches: Boolean): Attachmen
     val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { taken ->
         val path = pendingCapture ?: return@rememberLauncherForActivityResult
         pendingCapture = null
-        if (taken) {
-            runner.start(listOf(AttachmentSource.Content(captureUri(context, File(path)).toString())))
-        } else {
-            File(path).delete()
-        }
+        // A run that started while the camera was in front (a share) holds the gate, and a refused start
+        // would leave the photo behind with nothing to upload it — so it goes, like a cancelled one.
+        val started = taken && runner.start(listOf(AttachmentSource.Content(captureUri(context, File(path)).toString())))
+        if (!started) File(path).delete()
     }
     val hasCamera = remember { context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY) }
     val busy by runner.busy.collectAsStateWithLifecycle()
@@ -138,7 +138,14 @@ fun rememberAttachments(services: UploadServices?, attaches: Boolean): Attachmen
             {
                 val file = newCaptureFile(context)
                 pendingCapture = file.path
-                camera.launch(captureUri(context, file))
+                // ⚠ A camera on the device is not an app to take the picture: a disabled stock camera, a
+                // kiosk or work-profile policy. Then there's nothing to launch, and nothing to do.
+                try {
+                    camera.launch(captureUri(context, file))
+                } catch (_: ActivityNotFoundException) {
+                    pendingCapture = null
+                    file.delete()
+                }
             }
         },
         busy = busy,

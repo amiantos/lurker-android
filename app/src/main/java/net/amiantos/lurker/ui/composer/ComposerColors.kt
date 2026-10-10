@@ -29,20 +29,23 @@ internal class ComposerColors private constructor(private val cells: IntArray) {
 
     /**
      * Fitted to an edit that turned [old] into [new]: the replaced stretch goes, and what replaces it
-     * takes [pen] when one is set — a colour picked at a bare caret and not yet typed with — else the
-     * colour of what it replaces, else of the unit before it. At the very start it's plain, so a
-     * Reply's `bob: ` doesn't take the colour of the words it's put in front of.
+     * takes [pen] when the edit is at the pen's caret — a colour picked there and not yet typed with —
+     * else the colour of what it replaces, else of the unit before it. At the very start it's plain, so
+     * a Reply's `bob: ` doesn't take the colour of the words it's put in front of.
+     *
+     * ⚠ Only at the pen's caret. An upload's link appended at the end, a Reply's address, an
+     * autocorrect of the word before — none is the user typing where they picked, and none takes it.
      *
      * The edit is the smallest one that explains the two texts ([TextEdit]), which is exactly the
      * keystroke, the completion or the link when one thing changed — and, when the field's observer
      * folds two edits into one, the same span the two together made.
      */
-    fun followed(old: String, new: String, pen: Int?): ComposerColors {
+    fun followed(old: String, new: String, pen: Pen?): ComposerColors {
         if (old == new) return this
         val edit = TextEdit.difference(old, new)
         val start = edit.range.start
         val end = edit.range.end
-        val fill = pen ?: when {
+        val fill = pen?.takeIf { it.at == start }?.pair ?: when {
             end > start -> at(start)
             start > 0 -> at(start - 1)
             else -> NONE
@@ -90,6 +93,29 @@ internal class ComposerColors private constructor(private val cells: IntArray) {
     }
 
     data class Run(val start: Int, val end: Int, val fg: Int?, val bg: Int?)
+
+    /**
+     * A colour picked at a bare caret and not yet typed with — what typing at [at] writes in, as UIKit's
+     * typing attributes are on iOS.
+     */
+    data class Pen(val pair: Int, val at: Int) {
+        /**
+         * What's left of it after an edit turned [old] into [new]: spent by an edit at its caret, carried
+         * along by one before it, kept by one after it, and gone if one swallowed its caret.
+         */
+        fun after(old: String, new: String): Pen? {
+            if (old == new) return this
+            val edit = TextEdit.difference(old, new)
+            val start = edit.range.start
+            val end = edit.range.end
+            return when {
+                start == at -> null
+                start > at -> this
+                end <= at -> copy(at = at + edit.replacement.length - (end - start))
+                else -> null
+            }
+        }
+    }
 
     /** Which half of a pair a pick sets. */
     enum class Layer { Text, Highlight }
