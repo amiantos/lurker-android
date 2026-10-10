@@ -13,6 +13,7 @@ import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -272,7 +273,7 @@ internal class ComposerState(
         internal set
 
     /** Highlights waiting in other buffers (lurker#1099); 0 hides the count. */
-    var otherHighlights: Int by mutableStateOf(ComposerModel.highlightCount(model.state, key))
+    var otherHighlights: Int by mutableIntStateOf(ComposerModel.highlightCount(model.state, key))
         internal set
 
     /** The toast showing in the row now, mirrored from [toasts] so the bar can observe it. */
@@ -301,6 +302,9 @@ internal class ComposerState(
     /** A toast went up (`isNew`), or the one up was updated in place — the bar's haptic and announcement. */
     internal var onToastShown: (toast: StatusToast, isNew: Boolean) -> Unit = { _, _ -> }
 
+    /** A notification went up, or was updated in place — its sound (`ToastCenter.shown`). The screen's. */
+    internal var onNotificationShown: (StatusNotification) -> Unit = {}
+
     /**
      * The toast showing now, and the ones waiting their turn. Never over the completion chips —
      * they're what you're tapping — so the queue waits for them to close.
@@ -317,7 +321,10 @@ internal class ComposerState(
             }
         }
         onChange = { activeToast = active }
-        onShow = { toast, isNew -> onToastShown(toast, isNew) }
+        onShow = { toast, isNew ->
+            onToastShown(toast, isNew)
+            if (toast is StatusToast.Notification) onNotificationShown(toast.notification)
+        }
     }
 
     /** Show a toast in the row for a few seconds, in turn (`StatusToastQueue`). */

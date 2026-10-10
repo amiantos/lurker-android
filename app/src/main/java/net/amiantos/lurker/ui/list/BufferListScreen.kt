@@ -4,10 +4,8 @@
 package net.amiantos.lurker.ui.list
 
 import androidx.compose.runtime.DisposableEffect
-import androidx.lifecycle.compose.LifecycleStartEffect
 import kotlinx.coroutines.flow.conflate
 import net.amiantos.lurker.platform.LocalToastCenter
-import net.amiantos.lurker.platform.ToastCenter
 import net.amiantos.lurker.ui.composer.StatusToastPresenter
 import net.amiantos.lurker.ui.networks.NetworkSheets
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -81,6 +79,8 @@ import net.amiantos.lurker.ui.shell.StateSymbol
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.shell.StatusTitle
 import net.amiantos.lurker.ui.shell.StatusTitleText
+import net.amiantos.lurker.ui.shell.openNotification
+import net.amiantos.lurker.ui.shell.rememberToastSurface
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.Buffer
@@ -93,7 +93,6 @@ import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.FavoriteEntry
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.PresenceState
-import net.amiantos.lurkerkit.model.StatusNotification
 import net.amiantos.lurkerkit.model.StatusToast
 import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.store.ChatState
@@ -297,34 +296,22 @@ fun BufferListScreen(
     val scope = rememberCoroutineScope()
     val toasts = remember { StatusToastPresenter(scope) }
     var activeToast by remember { mutableStateOf<StatusToast?>(null) }
-    var started by remember { mutableStateOf(false) }
-    LifecycleStartEffect(Unit) {
-        started = true
-        onStopOrDispose { started = false }
-    }
-    val showsToasts = takesToasts && !covered && started
-    val currentShowsToasts by rememberUpdatedState(showsToasts)
-    SideEffect {
-        toasts.isVisible = { currentShowsToasts }
-        toasts.onChange = { activeToast = toasts.active }
-    }
-    LaunchedEffect(showsToasts) { if (!showsToasts) toasts.clear() }
     val toastCenter = LocalToastCenter.current
-    DisposableEffect(toastCenter, toasts) {
-        val unregister = toastCenter?.register(
-            object : ToastCenter.Surface {
-                override fun take(notification: StatusNotification): Boolean {
-                    if (!currentShowsToasts) return false
-                    toasts.show(StatusToast.Notification(notification))
-                    return true
-                }
-            },
-        )
-        onDispose {
-            unregister?.invoke()
-            toasts.clear()
-        }
+    val showsToasts = takesToasts && !covered
+    val currentShowsToasts by rememberUpdatedState(showsToasts)
+    val started = rememberToastSurface(
+        visible = { toasts.isVisible() },
+        show = { toasts.show(StatusToast.Notification(it)) },
+    )
+    val currentStarted by rememberUpdatedState(started)
+    SideEffect {
+        toasts.isVisible = { currentShowsToasts && currentStarted }
+        toasts.onChange = { activeToast = toasts.active }
+        // The sound comes with the capsule going up, not with the notification's arrival.
+        toasts.onShow = { toast, _ -> if (toast is StatusToast.Notification) toastCenter?.shown(toast.notification) }
     }
+    LaunchedEffect(showsToasts, started) { if (!(showsToasts && started)) toasts.clear() }
+    DisposableEffect(toasts) { onDispose { toasts.clear() } }
 
     BufferListContent(
         title = BufferListModel.statusTitle(inputs),
@@ -344,12 +331,10 @@ fun BufferListScreen(
         toast = activeToast,
         onToastTap = {
             // Where it goes when tapped: its line, or for a friend coming online, the conversation with
-            // them — through `MainScaffold.open`, like every other way in. The next one comes on after,
-            // so a tap that leaves the screen doesn't start it on the way out.
-            (toasts.takeActive() as? StatusToast.Notification)?.notification?.let { notification ->
-                events?.send(AppEvent.OpenBuffer(notification.key, jumpTo = notification.messageId.takeIf { it > 0 }))
-            }
-            toasts.presentNext()
+            // them — through `MainScaffold.open`, like every other way in. Nothing comes on after: the
+            // navigation is queued, not done, and a toast presented now would flash in a list that's
+            // about to leave (the capsule only ever carries notifications, which always go somewhere).
+            (toasts.takeActive() as? StatusToast.Notification)?.notification?.let { openNotification(model, events, it) }
         },
     )
 }

@@ -307,9 +307,7 @@ private fun LazyListScope.section(
         is SettingsSection.Appearance -> settingRows(id, section.rows, settings, edits, actions)
         is SettingsSection.Notifications -> for (row in section.rows) {
             when (row) {
-                is NotificationRow.Toggle -> item(key = "$id.${row.row.option.key}") {
-                    SettingRowView(SettingsModel.rowState(row.row, settings, edits), actions)
-                }
+                is NotificationRow.Toggle -> settingRows(id, listOf(row.row), settings, edits, actions)
                 is NotificationRow.Sound -> item(key = "$id.${row.kind.rawValue}.sound") {
                     val state = SettingsModel.soundRow(row.label, row.kind, settings, edits)
                     Column(Modifier.fillMaxWidth()) {

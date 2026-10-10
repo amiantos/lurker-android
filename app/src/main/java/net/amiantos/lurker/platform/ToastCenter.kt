@@ -31,8 +31,10 @@ import java.time.Instant
  * @param play plays a bundled sound by name (`NotificationSounds`).
  */
 class ToastCenter(
-    private val isForeground: () -> Boolean = { ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) },
+    /** The settings in force, read when a toast goes up — which kind sounds, and with what. */
+    private val settings: () -> Settings,
     private val play: (String) -> Unit,
+    private val isForeground: () -> Boolean = { ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) },
     private val now: () -> Instant = Instant::now,
 ) {
     /** A screen that can show an in-app notification. */
@@ -60,17 +62,24 @@ class ToastCenter(
      * toast, which updates in place (`StatusToastQueue`). The web drops the repeats instead,
      * since its first toast stays up; a one-line toast has to show the latest.
      *
-     * The sound goes with a toast a surface took, once for whichever one did, and a burst gets
-     * one: the web's per-source throttle, kept here for the sound alone. The sound comes with a
-     * toast you can see, as on the web: none under a dialog, where nothing says what it was or
-     * where to go.
+     * No sound here: it comes with the toast actually going up ([shown]), as on the web — none for
+     * one waiting behind the completion chips, or dropped off the end of the queue, or under a
+     * dialog, where nothing says what it was or where to go. (iOS sounds when a surface takes the
+     * toast; its surfaces present at once, so the two agree.)
      */
-    fun post(notification: StatusNotification, settings: Settings) {
+    fun post(notification: StatusNotification) {
         if (!isForeground()) return
         if (surfaces.any { it.showsBuffer(notification.key) }) return
-        val shown = surfaces.asReversed().any { it.take(notification) }
-        if (!shown) return
-        val sound = notification.sound(settings) ?: return
+        surfaces.asReversed().any { it.take(notification) }
+    }
+
+    /**
+     * A surface put [notification] up (or updated it in place): its sound, if its kind has one. A
+     * burst from one source gets one — the web's 3 s per-source throttle, kept here for the sound
+     * alone.
+     */
+    fun shown(notification: StatusNotification) {
+        val sound = notification.sound(settings()) ?: return
         if (!soundThrottled(notification)) play(sound)
     }
 

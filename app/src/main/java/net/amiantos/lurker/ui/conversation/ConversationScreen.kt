@@ -33,7 +33,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
@@ -89,7 +88,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import net.amiantos.lurker.platform.AppEvent
 import net.amiantos.lurker.platform.LocalAppEvents
 import net.amiantos.lurker.platform.LocalToastCenter
-import net.amiantos.lurker.platform.ToastCenter
 import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.actions.MessageActionsHost
 import net.amiantos.lurker.ui.actions.rememberMessageActionsState
@@ -104,6 +102,8 @@ import net.amiantos.lurker.ui.media.PreviewContext
 import net.amiantos.lurker.ui.media.PreviewToggles
 import net.amiantos.lurker.ui.shell.NoticeHost
 import net.amiantos.lurker.ui.shell.StateModel
+import net.amiantos.lurker.ui.shell.openNotification
+import net.amiantos.lurker.ui.shell.rememberToastSurface
 import net.amiantos.lurker.ui.uploads.ComposerInsertTarget
 import net.amiantos.lurker.ui.uploads.LocalUploadServices
 import net.amiantos.lurker.ui.uploads.UploadTargets
@@ -131,7 +131,6 @@ import net.amiantos.lurkerkit.model.LinkPreview
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageRow
 import net.amiantos.lurkerkit.model.Reactions
-import net.amiantos.lurkerkit.model.StatusNotification
 import net.amiantos.lurkerkit.model.StatusToast
 import net.amiantos.lurkerkit.rendering.NickHighlighter
 import net.amiantos.lurkerkit.session.ChatViewModel
@@ -705,44 +704,28 @@ fun ConversationScreen(
     )
 
     // In-app notifications in the status row (lurker#1098). Whether the row can be seen: this screen
-    // is the destination, started, with nothing over it — neither a dialog from either pane nor the
-    // composer's own colour editor. iOS's `isUncovered`.
+    // is the destination, started, with nothing over it — neither a dialog from either pane, nor a
+    // message's sheet, nor the composer's own colour editor. iOS's `isUncovered`.
     val events = LocalAppEvents.current
-    var started by remember { mutableStateOf(false) }
-    LifecycleStartEffect(Unit) {
-        started = true
-        onStopOrDispose { started = false }
-    }
-    val uncovered = takesToasts && !covered && !composer.editorOpen
+    val toastCenter = LocalToastCenter.current
+    val uncovered = takesToasts && !covered && !composer.editorOpen && actions.sheet == null
     val currentUncovered by rememberUpdatedState(uncovered)
+    val started = rememberToastSurface(
+        visible = { composer.canShowToasts() },
+        // By `id`, which folds case: `#Lurker` and `#lurker` are one conversation.
+        showsBuffer = { it.id == composer.key.id && composer.canShowToasts() },
+        show = { composer.showToast(StatusToast.Notification(it)) },
+    )
+    val currentStarted by rememberUpdatedState(started)
     SideEffect {
-        composer.canShowToasts = { currentUncovered && lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED) }
+        composer.canShowToasts = { currentUncovered && currentStarted }
         // A notice too long for the one-line row floats above the composer, where it can wrap.
         composer.onNoticeOverflow = { message -> events?.send(AppEvent.Notice(message, floats = true)) }
+        // The sound comes with the toast going up, not with its arrival.
+        composer.onNotificationShown = { notification -> toastCenter?.shown(notification) }
     }
     // Toasts that waited while the row was covered go up once it's clear.
     LaunchedEffect(uncovered, started) { if (uncovered && started) composer.toastSurfaceChanged() }
-    val toastCenter = LocalToastCenter.current
-    DisposableEffect(toastCenter, composer) {
-        val unregister = toastCenter?.register(
-            object : ToastCenter.Surface {
-                // By `id`, which folds case: `#Lurker` and `#lurker` are one conversation.
-                override fun showsBuffer(key: BufferKey): Boolean = key.id == composer.key.id && composer.canShowToasts()
-                override fun take(notification: StatusNotification): Boolean {
-                    // Not into a row a dialog is covering: it would expire there unseen.
-                    if (!composer.canShowToasts()) return false
-                    composer.showToast(StatusToast.Notification(notification))
-                    return true
-                }
-            },
-        )
-        onDispose { unregister?.invoke() }
-    }
-    // Where a notification goes when tapped: its line, or for a friend coming online, the conversation
-    // with them — through `MainScaffold.open`, like every other way in.
-    fun openNotification(notification: StatusNotification) {
-        events?.send(AppEvent.OpenBuffer(notification.key, jumpTo = notification.messageId.takeIf { it > 0 }))
-    }
 
     // Uploads (lurker-android#15): this composer is where outside text lands while it's on screen — an
     // upload's link, Add to Message, a share's text — and its paperclip and paste start a run.
@@ -799,7 +782,7 @@ fun ConversationScreen(
                 sideBySide = sideBySide,
                 // The highlight count goes where the highlights are.
                 onHighlightCountTap = onBack,
-                onToastTap = ::openNotification,
+                onToastTap = { notification -> openNotification(model, events, notification) },
             )
         },
         // Inside the screen's link-opener provider, so Open Link uses the same `SafeUriHandler` as a tap.
@@ -817,8 +800,9 @@ fun ConversationScreen(
         overlay = { bottom ->
             // The app's notices, while a conversation is up: into the status row when one fits and
             // has no button (iOS's `showNotice`), else a snackbar floated above the composer, where it
-            // can wrap. An invitation's Join stays a snackbar: the row has no room for a button.
-            if (events != null) {
+            // can wrap. An invitation's Join stays a snackbar: the row has no room for a button. Not
+            // while this screen is leaving, or its session is over: the scaffold's host has them then.
+            if (events != null && takesToasts) {
                 NoticeHost(
                     events,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = bottom),

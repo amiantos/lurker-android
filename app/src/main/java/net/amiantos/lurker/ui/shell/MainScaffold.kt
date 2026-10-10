@@ -514,14 +514,18 @@ fun MainScaffold(
     // (lurker#1098) stay out of a status row or a list a dialog is covering — they'd expire there
     // unseen, sound and all. ⚠ Side by side, a dialog from EITHER column covers both: each column
     // opens its own, and the conversation can't see the list's. iOS's `isUncovered`.
+    //
+    // Every full-screen dialog claims a dialog-priority notice host while it's up, so those are read
+    // off the hosts rather than enumerated here; the windowless overlay (the media viewer) and the
+    // alerts, which host no notices, are named.
+    val noticeHosts by events.noticeHosts.collectAsStateWithLifecycle()
     val share by uploads.shares.share.collectAsStateWithLifecycle()
     val dccPrompt by dccOffers.prompt.collectAsStateWithLifecycle()
     val uploadReport by uploads.runner.report.collectAsStateWithLifecycle()
     val serverErrorFlow = remember(model) { model.statePublisher.map { it.error != null }.distinctUntilChanged() }
     val serverError by serverErrorFlow.collectAsStateWithLifecycle(initialValue = model.state.error != null)
-    val covered = showingSettings || sheets.current != null || bufferSheets.current != null || feedSheets.current != null ||
-        uploadsSheets.current != null || mediaViewer.current != null || share != null || dccPrompt != null ||
-        uploadReport != null || serverError
+    val covered = noticeHosts.any { it.priority >= NoticeHost.PRIORITY_DIALOG } || mediaViewer.current != null ||
+        share != null || dccPrompt != null || uploadReport != null || serverError
 
     CompositionLocalProvider(LocalAppEvents provides events, LocalUploadServices provides uploads, LocalToastCenter provides toastCenter) {
     Box(Modifier.fillMaxSize()) {
@@ -542,8 +546,10 @@ fun MainScaffold(
                         onOpenView = { view -> openView(view) },
                         covered = covered,
                         // In-app notifications go to the list only while it's the destination with no
-                        // conversation beside it — one there shows them in its status row instead.
-                        takesToasts = !sideBySide && openRoute == null,
+                        // conversation beside it — one there shows them in its status row instead —
+                        // and only for the live session: a scaffold fading out after a sign-out must
+                        // not take the next session's.
+                        takesToasts = sessionLive && !sideBySide && openRoute == null,
                     )
                 }
             },
@@ -589,8 +595,10 @@ fun MainScaffold(
                             onOpenMedia = mediaViewer::show,
                             media = media,
                             covered = covered,
-                            // The destination, not a pane sliding out behind the list on a phone.
-                            takesToasts = route != null && (openRoute != null || sideBySide),
+                            // The destination — side by side that's always one, the system buffer at
+                            // rest included — not a pane sliding out behind the list on a phone, and
+                            // not a session that's over (see the list's).
+                            takesToasts = sessionLive && (openRoute != null || sideBySide),
                         )
                     }
                 }

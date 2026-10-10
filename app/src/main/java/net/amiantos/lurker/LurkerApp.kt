@@ -78,7 +78,7 @@ class LurkerApp : Application() {
      * In-app notifications (lurker#1098): a highlight, DM or always-notify line while the app is open
      * — push's foreground half — offered to whichever screen is on top, with its sound. See [ToastCenter].
      */
-    val toastCenter = ToastCenter(play = NotificationSounds::play)
+    val toastCenter = ToastCenter(settings = { model.state.settings }, play = NotificationSounds::play)
 
     /**
      * The DCC chat offer standing for an answer (lurker-android#38) — a StateFlow here rather than an
@@ -270,7 +270,7 @@ class LurkerApp : Application() {
         // A highlight, DM or always-notify line while the app is open — push's foreground half
         // (lurker#1098). Whether it's worth showing is the center's call: not for the buffer on
         // screen, not while backgrounded.
-        model.onNotify = { notification -> toastCenter.post(notification, model.state.settings) }
+        model.onNotify = { notification -> toastCenter.post(notification) }
 
         // An invitation offers a Join on a snackbar (lurker#261) — the web's toast, which a snackbar
         // can carry and an iOS toast can't (iOS asks in an alert). One at a time: the system buffer

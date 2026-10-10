@@ -17,9 +17,6 @@ class ToastCenterTest {
     private fun notification(nick: String = "bob", target: String = "#a", kind: StatusNotification.Kind = StatusNotification.Kind.AlwaysNotify) =
         StatusNotification(kind = kind, key = BufferKey(1, target), nick = nick, text = "hi", messageId = 1, date = Instant.EPOCH)
 
-    /** Always-notify sounds by default (plink). */
-    private val settings = Settings(registry = emptyMap(), values = emptyMap())
-
     private class Surface(val shows: BufferKey? = null, var takes: Boolean = true) : ToastCenter.Surface {
         val taken = mutableListOf<StatusNotification>()
         override fun showsBuffer(key: BufferKey): Boolean = shows?.id == key.id
@@ -33,78 +30,75 @@ class ToastCenterTest {
     private class Rig(foreground: Boolean = true, var now: Instant = Instant.EPOCH) {
         val played = mutableListOf<String>()
         var foreground = foreground
-        val center = ToastCenter(isForeground = { this.foreground }, play = { played += it }, now = { now })
+        /** Always-notify sounds by default (plink). */
+        var settings = Settings(registry = emptyMap(), values = emptyMap())
+        val center = ToastCenter(settings = { settings }, play = { played += it }, isForeground = { this.foreground }, now = { now })
     }
 
     @Test
-    fun theNewestSurfaceIsAskedFirstAndTheSoundGoesWithTheOneThatShowed() {
+    fun theNewestSurfaceIsAskedFirstAndASurfaceThatCantBeSeenPassesItOn() {
         val rig = Rig()
         val list = Surface()
         val chat = Surface()
         rig.center.register(list)
         rig.center.register(chat)
-        rig.center.post(notification(), settings)
+        rig.center.post(notification())
         assertEquals(1, chat.taken.size)
         assertEquals(0, list.taken.size)
-        assertEquals(listOf("plink"), rig.played)
-        // A surface that can't be seen passes it on.
         chat.takes = false
-        rig.now = Instant.EPOCH.plusSeconds(10)
-        rig.center.post(notification(), settings)
+        rig.center.post(notification())
         assertEquals(1, list.taken.size)
-        assertEquals(listOf("plink", "plink"), rig.played)
+        // Taking a toast makes no sound of its own: the surface says when it went up.
+        assertEquals(emptyList<String>(), rig.played)
     }
 
     @Test
-    fun nothingInTheBackgroundOrForTheBufferOnScreenOrWhenNobodyShowsIt() {
+    fun nothingInTheBackgroundOrForTheBufferOnScreenAndAnUnregisteredSurfaceIsNotAsked() {
         val rig = Rig(foreground = false)
         val chat = Surface()
-        rig.center.register(chat)
-        rig.center.post(notification(), settings)
+        val unregister = rig.center.register(chat)
+        rig.center.post(notification())
         assertEquals(0, chat.taken.size)
         rig.foreground = true
-        // The line is arriving in plain view: no toast, no sound, anywhere.
+        // The line is arriving in plain view: no toast anywhere, whatever the case of the target.
         val showing = Surface(shows = BufferKey(1, "#A"))
         rig.center.register(showing)
-        rig.center.post(notification(target = "#a"), settings)
+        rig.center.post(notification(target = "#a"))
         assertEquals(0, chat.taken.size + showing.taken.size)
-        assertEquals(emptyList<String>(), rig.played)
-        // Nobody takes it (a dialog over everything): no sound either.
-        chat.takes = false
+        rig.center.post(notification(target = "#b"))
+        assertEquals(1, showing.taken.size)
+        unregister()
         showing.takes = false
-        rig.center.post(notification(target = "#b"), settings)
-        assertEquals(emptyList<String>(), rig.played)
+        rig.center.post(notification(target = "#b"))
+        assertEquals(0, chat.taken.size)
     }
 
     @Test
-    fun aBurstFromOneSourceSoundsOnceAndAnUnregisteredSurfaceIsNotAsked() {
+    fun theSoundComesWithTheToastGoingUpOncePerSourceAndPerTheSettings() {
         val rig = Rig()
-        val chat = Surface()
-        val unregister = rig.center.register(chat)
-        rig.center.post(notification(), settings)
+        rig.center.shown(notification())
         rig.now = Instant.EPOCH.plusSeconds(1)
-        rig.center.post(notification(), settings)
-        // Another person in the same buffer is their own source.
-        rig.center.post(notification(nick = "Alice"), settings)
+        // A burst from one source: one sound.
+        rig.center.shown(notification())
+        // Another person in the same buffer is their own source, whatever their nick's case.
+        rig.center.shown(notification(nick = "Alice"))
+        rig.now = Instant.EPOCH.plusSeconds(2)
+        rig.center.shown(notification(nick = "alice"))
         rig.now = Instant.EPOCH.plusSeconds(4)
-        rig.center.post(notification(nick = "alice"), settings)
-        assertEquals(4, chat.taken.size)
+        rig.center.shown(notification())
         assertEquals(listOf("plink", "plink", "plink"), rig.played)
-        // A kind whose sound is off is shown in silence.
-        rig.center.post(notification(nick = "carol", kind = StatusNotification.Kind.Highlight), settings)
+        // A kind whose sound is off goes up in silence.
+        rig.center.shown(notification(nick = "carol", kind = StatusNotification.Kind.Highlight))
         assertEquals(3, rig.played.size)
-        // A sound switched on by settings plays its pick.
-        val on = Settings(
+        // A sound switched on by settings plays its pick — the settings as they stand when it goes up.
+        rig.settings = Settings(
             registry = emptyMap(),
             values = mapOf(
                 "notifications.highlight.sound.enabled" to SettingValue.Bool(true),
                 "notifications.highlight.sound.choice" to SettingValue.String("knock"),
             ),
         )
-        rig.center.post(notification(nick = "dave", kind = StatusNotification.Kind.Highlight), on)
+        rig.center.shown(notification(nick = "dave", kind = StatusNotification.Kind.Highlight))
         assertEquals("knock", rig.played.last())
-        unregister()
-        rig.center.post(notification(nick = "erin"), settings)
-        assertEquals(6, chat.taken.size)
     }
 }

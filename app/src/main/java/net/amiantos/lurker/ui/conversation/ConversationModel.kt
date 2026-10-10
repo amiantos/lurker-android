@@ -267,8 +267,7 @@ internal object ConversationModel {
             // A jump onto a row the `/clear` marker hides peels it back — screen state, see
             // `ConversationScroll.revealIfJumpTargetHidden`.
             showsClearedHistory = options.showsClearedHistory,
-            // The typing line lives in the composer's status row now (lurker-ios#61), never in the list.
-            typists = emptyList(),
+            // No `typists`: the typing line lives in the composer's status row now (lurker-ios#61), never in the list.
             settings = inputs.settings,
             speakers = inputs.speakers ?: SpeakerMap(),
             ownNick = inputs.ownNick,

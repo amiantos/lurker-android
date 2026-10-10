@@ -92,6 +92,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.StateFlow
@@ -198,7 +199,9 @@ internal fun ComposerBar(
             val count = ComposerModel.highlightCountLabel(highlightCount)
             val countWidth = if (count == null) 0 else measurer.measure(count, mono, softWrap = false).size.width + with(density) { 8.dp.roundToPx() }
             val room = rowWidthPx - with(density) { (FIELD_INSET_HORIZONTAL * 2 + NOTICE_GLYPH + 6.dp).roundToPx() } - countWidth
-            rowWidthPx > 0 && measurer.measure(message, mono, softWrap = false).size.width <= room
+            // Not laid out yet (a notice racing the screen open): the row is almost always wide enough,
+            // so it's taken rather than floated past a composer with room for it.
+            rowWidthPx == 0 || measurer.measure(message, mono, softWrap = false).size.width <= room
         }
         state.onToastShown = { toast, isNew ->
             // A notice gets a tap of feedback — the only feedback its action has. The row's text
@@ -212,15 +215,17 @@ internal fun ComposerBar(
         placeholder = ComposerModel.placeholder(state.chrome, state.key, state.kind),
         strip = ComposerModel.strip(away),
         lead = lead,
+        replyPending = state.reply != null,
         suggestions = state.suggestions,
         onPick = state::pick,
         highlightCount = highlightCount,
         onHighlightCountTap = onHighlightCountTap,
         onToastTap = {
-            // A notification goes somewhere when tapped; a notice just clears. Either way the next
-            // one comes on after, so a tap that leaves the screen doesn't start it on the way out.
-            state.tapToast()?.let(onToastTap)
-            state.nextToast()
+            // A notification goes somewhere when tapped — and the navigation is queued, not done, so
+            // nothing comes on after it: the next toast would flash in a screen about to leave. A
+            // notice just clears, and the next one comes on.
+            val notification = state.tapToast()
+            if (notification != null) onToastTap(notification) else state.nextToast()
         },
         onRowWidth = { rowWidthPx = it },
         capitalizes = capitalizes,
@@ -286,6 +291,8 @@ internal fun ComposerBarContent(
     strip: Strip,
     /** The status row's left side; the chips in [suggestions] cover it while they're up. */
     lead: StatusLead,
+    /** A reply is pending — whatever the row shows over it. Escape cancels it (`ComposerKeys`). */
+    replyPending: Boolean,
     suggestions: List<Suggestion>,
     onPick: (Suggestion) -> Unit,
     /** Highlights waiting in other buffers; 0 hides the count. */
@@ -365,7 +372,7 @@ internal fun ComposerBarContent(
                 Field(
                     field, placeholder, capitalizes, enterSends, collapsed, focusRequester, onFocusChange,
                     remember(onSend, onTab, onNewline, onCancelReply) { FieldKeys(onSend, onTab, onNewline, onCancelReply) },
-                    isComposing, lead is StatusLead.Reply, fieldModifier, inputTransformation, outputTransformation,
+                    isComposing, replyPending, fieldModifier, inputTransformation, outputTransformation,
                 )
                 // Derived, so the bar recomposes when the answer flips rather than on every keystroke.
                 val canSend by remember(field) { derivedStateOf { ComposerModel.sendable(field.text.toString()) != null } }
@@ -777,7 +784,14 @@ private fun SendMenuButton(
                     onLongClick(label = "Attachments and color") { expanded = true; true }
                 },
         )
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+        // ⚠ Not focusable: a focusable popup takes the window's focus, and the IME goes down with it —
+        // so opening the menu mid-sentence closed the keyboard. Outside taps still dismiss it; only the
+        // back key no longer does, and a tap anywhere is the same gesture.
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            properties = PopupProperties(focusable = false),
+        ) {
             @Composable
             fun item(title: String, icon: ImageVector, enabled: Boolean = true, action: () -> Unit) = DropdownMenuItem(
                 text = { Text(title) },
@@ -910,6 +924,7 @@ private fun ComposerPreview(
                 placeholder = placeholder,
                 strip = strip,
                 lead = lead,
+                replyPending = lead is StatusLead.Reply,
                 suggestions = suggestions,
                 onPick = {},
                 highlightCount = highlightCount,
