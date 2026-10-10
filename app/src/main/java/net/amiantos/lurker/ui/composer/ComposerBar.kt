@@ -7,6 +7,7 @@ import android.icu.text.SimpleDateFormat
 import android.text.format.DateFormat
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,15 +27,20 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.text.input.KeyboardActionHandler
+import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.TextFieldState
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -42,6 +48,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
@@ -55,11 +63,13 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -75,7 +85,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.StateFlow
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
-import net.amiantos.lurker.ui.uploads.AttachButton
 import net.amiantos.lurker.ui.uploads.Attachments
 import net.amiantos.lurker.ui.uploads.UploadBatchPosition
 import net.amiantos.lurker.ui.uploads.UploadPhase
@@ -107,10 +116,15 @@ import java.util.Locale
  * on top of whichever is taller, and the list above — laid out in reverse, item 0 at the bottom —
  * keeps its newest row anchored as the bar and the keyboard grow.
  *
- * The paperclip (iOS's `onAttach`) leads the row and an image pasted into the field uploads
- * (`onPasteImage`) — both from [attachments], which is null in the system buffer (nothing to attach)
- * and drops the paperclip there. While a run is under way its readout sits above everything else in
- * the bar (`UploadStatusView`).
+ * The send button is also the composer's menu (lurker#1117): a long press offers Send, Attach Photo,
+ * Take Photo, Attach File and Edit Color, and over an empty field — nothing to send, and where you'd
+ * start an attachment — it shows a `+` that opens the menu on a tap. That and an image pasted into the
+ * field uploading (`onPasteImage`) come from [attachments], which is null in the system buffer
+ * (nothing to attach or colour), where the button is only a send button. While a run is under way its
+ * readout sits above everything else in the bar (`UploadStatusView`).
+ *
+ * Colour is shown as it will be sent: [ComposerState.colorsFor] painted over the field by an
+ * `OutputTransformation` ([rememberColorOutput]). The field's text never holds a control code.
  */
 @Composable
 internal fun ComposerBar(
@@ -126,6 +140,7 @@ internal fun ComposerBar(
     val capitalizes by autocapitalizes.collectAsStateWithLifecycle()
     val sends by enterSends.collectAsStateWithLifecycle()
     val away = rememberAwayStrip(state.chrome.away, clockKey)
+    val colorOutput = rememberColorOutput(state)
     ComposerBarContent(
         field = state.field,
         placeholder = ComposerModel.placeholder(state.chrome, state.key, state.kind),
@@ -144,10 +159,42 @@ internal fun ComposerBar(
         },
         isComposing = { state.isComposing },
         modifier = modifier,
-        leading = if (attachments != null) { size -> AttachButton(attachments, size) } else null,
         above = { UploadStatusView(attachments?.readout, onCancel = { attachments?.cancel() }) },
         fieldModifier = Modifier.receivesPastedImages(attachments),
+        outputTransformation = colorOutput,
+        sendButton = if (attachments != null) {
+            { canSend, size -> SendMenuButton(canSend, size, attachments, state::send, onEditColor = { state.editorOpen = true }) }
+        } else {
+            null
+        },
     )
+    if (state.editorOpen) ColorEditor(state, colorOutput, onClose = { state.editorOpen = false })
+}
+
+/**
+ * The colour on the field, painted — [ComposerState.colorsFor] fitted to the text being shown, so a
+ * keystroke is drawn in its colour in the frame it's typed, before the composer has caught up with it.
+ * Reads composer state, which the field's transformation tracks, so a pick repaints too. Shared by the
+ * bar and the colour editor: they show the same field.
+ */
+@Composable
+internal fun rememberColorOutput(state: ComposerState): OutputTransformation {
+    val palette = LurkerTheme.colors.mirc
+    return remember(state, palette) {
+        OutputTransformation {
+            val text = asCharSequence().toString()
+            for (run in state.colorsFor(text).runs()) {
+                addStyle(
+                    SpanStyle(
+                        color = run.fg?.let(palette::getOrNull) ?: Color.Unspecified,
+                        background = run.bg?.let(palette::getOrNull) ?: Color.Unspecified,
+                    ),
+                    run.start,
+                    minOf(run.end, length),
+                )
+            }
+        }
+    }
 }
 
 /** The bar itself, stateless — for previews, and so what it draws is only what it's given. */
@@ -171,12 +218,14 @@ internal fun ComposerBarContent(
     onFocusChange: (Boolean) -> Unit,
     isComposing: () -> Boolean,
     modifier: Modifier = Modifier,
-    /** Leads the row, sized to the collapsed field: the paperclip. */
-    leading: (@Composable (size: Dp) -> Unit)? = null,
     /** Above the strip: an upload's readout. */
     above: @Composable () -> Unit = {},
     /** The field's extra behaviour: taking a pasted image as an upload. */
     fieldModifier: Modifier = Modifier,
+    /** Paints the field's colour (lurker#1117). */
+    outputTransformation: OutputTransformation? = null,
+    /** The send button with its menu, where there is one; else a plain [SendButton]. */
+    sendButton: (@Composable (canSend: Boolean, size: Dp) -> Unit)? = null,
 ) {
     val colors = LurkerTheme.colors
     val collapsed = collapsedHeight()
@@ -201,15 +250,14 @@ internal fun ComposerBarContent(
             // The button sits at the BOTTOM, beside the last line as the field grows upward.
             verticalAlignment = Alignment.Bottom,
         ) {
-            leading?.invoke(collapsed)
             Field(
                 field, placeholder, capitalizes, enterSends, collapsed, focusRequester, onFocusChange,
                 remember(onSend, onTab, onNewline, onCancelReply) { FieldKeys(onSend, onTab, onNewline, onCancelReply) },
-                isComposing, strip is Strip.Reply, fieldModifier,
+                isComposing, strip is Strip.Reply, fieldModifier, outputTransformation,
             )
             // Derived, so the bar recomposes when the answer flips rather than on every keystroke.
             val canSend by remember(field) { derivedStateOf { ComposerModel.sendable(field.text.toString()) != null } }
-            SendButton(enabled = canSend, size = collapsed, onClick = onSend)
+            if (sendButton != null) sendButton(canSend, collapsed) else SendButton(enabled = canSend, size = collapsed, onClick = onSend)
         }
     }
 }
@@ -249,6 +297,7 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
     isComposing: () -> Boolean,
     replyPending: Boolean,
     modifier: Modifier,
+    outputTransformation: OutputTransformation?,
 ) {
     val colors = LurkerTheme.colors
     val text = MaterialTheme.typography.bodyLarge
@@ -256,6 +305,7 @@ private fun androidx.compose.foundation.layout.RowScope.Field(
     val keys = remember { ComposerKeys() }
     BasicTextField(
         state = field,
+        outputTransformation = outputTransformation,
         modifier = Modifier
             .weight(1f)
             .then(modifier)
@@ -379,6 +429,88 @@ private fun SendButton(enabled: Boolean, size: Dp, onClick: () -> Unit) {
 }
 
 /** The strip's shape and ground — one slot, whichever of the two it says. */
+/**
+ * The send button as the composer's menu (lurker#1117) — iOS's `sendMenu`. With something to send it's
+ * the lit arrow and a tap sends; a long press opens the menu either way, and over an empty field the
+ * button is a `+` whose tap opens it: an empty field is where an attachment starts, and a disabled
+ * button couldn't open anything.
+ *
+ * The attach items grey out while a run is under way rather than doing nothing when picked. Take Photo
+ * is left out on a device without a camera.
+ */
+@Composable
+private fun SendMenuButton(
+    canSend: Boolean,
+    size: Dp,
+    attachments: Attachments,
+    onSend: () -> Unit,
+    onEditColor: () -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val haptics = LocalHapticFeedback.current
+    val open = {
+        haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+        expanded = true
+    }
+    Box {
+        SendFace(
+            canSend = canSend,
+            size = size,
+            modifier = Modifier
+                .combinedClickable(
+                    role = Role.Button,
+                    onClick = { if (canSend) onSend() else expanded = true },
+                    onLongClick = open,
+                )
+                .clearAndSetSemantics {
+                    contentDescription = if (canSend) "Send" else "Add"
+                    role = Role.Button
+                    onClick { if (canSend) onSend() else expanded = true; true }
+                    onLongClick(label = "Attachments and color") { expanded = true; true }
+                },
+        )
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            @Composable
+            fun item(title: String, icon: ImageVector, enabled: Boolean = true, action: () -> Unit) = DropdownMenuItem(
+                text = { Text(title) },
+                leadingIcon = { Icon(icon, contentDescription = null) },
+                enabled = enabled,
+                onClick = {
+                    expanded = false
+                    action()
+                },
+            )
+            if (canSend) item("Send", LurkerIcons.ArrowUpward, action = onSend)
+            item("Attach Photo", LurkerIcons.PhotoLibrary, enabled = !attachments.busy, action = attachments::pickPhotos)
+            if (attachments.hasCamera) {
+                item("Take Photo", LurkerIcons.PhotoCamera, enabled = !attachments.busy, action = attachments::takePhoto)
+            }
+            item("Attach File", LurkerIcons.AttachFile, enabled = !attachments.busy, action = attachments::pickFiles)
+            item("Edit Color", LurkerIcons.Palette, action = onEditColor)
+        }
+    }
+}
+
+/** The send button as drawn: the lit arrow with something to send, else the `+` that opens the menu. */
+@Composable
+private fun SendFace(canSend: Boolean, size: Dp, modifier: Modifier = Modifier) {
+    val colors = LurkerTheme.colors
+    Box(
+        Modifier
+            .size(size)
+            .background(if (canSend) colors.accent else MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape)
+            .then(modifier),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            if (canSend) LurkerIcons.ArrowUpward else LurkerIcons.Add,
+            contentDescription = null,
+            tint = if (canSend) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}
+
 @Composable
 private fun StripRow(label: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit, button: @Composable () -> Unit) {
     Row(
@@ -531,18 +663,10 @@ private fun ComposerPreview(
                 onBack = {},
                 onFocusChange = {},
                 isComposing = { false },
-                leading = if (attaches) { size -> PreviewPaperclip(size) } else null,
                 above = { UploadStatusView(readout, onCancel = {}) },
+                sendButton = if (attaches) { canSend, size -> SendFace(canSend, size) } else null,
             )
         }
-    }
-}
-
-/** The paperclip as drawn, without the run behind it. */
-@Composable
-private fun PreviewPaperclip(size: Dp) {
-    Box(Modifier.size(size).background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape), contentAlignment = Alignment.Center) {
-        Icon(LurkerIcons.AttachFile, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
     }
 }
 

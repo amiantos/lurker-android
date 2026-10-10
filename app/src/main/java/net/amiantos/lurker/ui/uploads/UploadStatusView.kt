@@ -120,51 +120,6 @@ private fun ReadoutCapsule(readout: UploadReadout, onCancel: () -> Unit) {
     }
 }
 
-/**
- * The paperclip, and the menu of its two sources — iOS's action sheet of Photo Library / Files /
- * Cancel; Android's dropdown, where dismissing is the cancel. Off while a run is under way.
- */
-@Composable
-fun AttachButton(attachments: Attachments, size: Dp) {
-    var expanded by remember { mutableStateOf(false) }
-    val enabled = !attachments.busy
-    val tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else LurkerTheme.colors.fgMuted.copy(alpha = 0.5f)
-    Box {
-        Box(
-            Modifier
-                .size(size)
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape)
-                .clickable(enabled = enabled, role = Role.Button) { expanded = true }
-                .clearAndSetSemantics {
-                    contentDescription = "Attach"
-                    role = Role.Button
-                    if (enabled) onClick { expanded = true; true } else disabled()
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(LurkerIcons.AttachFile, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(
-                text = { Text("Photo Library") },
-                leadingIcon = { Icon(LurkerIcons.PhotoLibrary, contentDescription = null) },
-                onClick = {
-                    expanded = false
-                    attachments.pickPhotos()
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("Files") },
-                leadingIcon = { Icon(LurkerIcons.InsertDriveFile, contentDescription = null) },
-                onClick = {
-                    expanded = false
-                    attachments.pickFiles()
-                },
-            )
-        }
-    }
-}
-
 // MARK: - Previews
 
 @Composable
