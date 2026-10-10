@@ -918,7 +918,7 @@ private fun ComposerPreview(
     lead: StatusLead = StatusLead.Where(Location("#lurker", null, null), emptyList()),
     suggestions: List<Suggestion> = emptyList(),
     highlightCount: Int = 0,
-    placeholder: String = "@amiantos",
+    placeholder: String = "> @amiantos",
     attaches: Boolean = false,
     readout: UploadReadout? = null,
 ) {

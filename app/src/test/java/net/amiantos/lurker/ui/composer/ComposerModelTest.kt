@@ -337,8 +337,8 @@ class ComposerModelTest {
     @Test
     fun `the prompt is your nick, with your rank in a channel`() {
         val chrome = ComposerChrome(nick = "amiantos", ownModes = listOf("v", "o"), dccSession = null, away = null)
-        assertEquals("@amiantos", ComposerModel.placeholder(chrome, channel, BufferKind.Channel))
-        assertEquals("amiantos", ComposerModel.placeholder(chrome.copy(ownModes = emptyList()), channel, BufferKind.Channel))
+        assertEquals("> @amiantos", ComposerModel.placeholder(chrome, channel, BufferKind.Channel))
+        assertEquals("> amiantos", ComposerModel.placeholder(chrome.copy(ownModes = emptyList()), channel, BufferKind.Channel))
         assertEquals("Message", ComposerModel.placeholder(ComposerChrome.Empty, channel, BufferKind.Channel))
     }
 
