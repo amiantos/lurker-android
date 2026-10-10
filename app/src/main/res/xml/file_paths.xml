@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copyright (c) 2026 Brad Root
+  SPDX-License-Identifier: MPL-2.0
+-->
+<!-- What FileProvider may hand out: only the camera's own scratch directory (Take Photo, lurker#1117). -->
+<paths>
+    <cache-path name="camera" path="camera/" />
+</paths>

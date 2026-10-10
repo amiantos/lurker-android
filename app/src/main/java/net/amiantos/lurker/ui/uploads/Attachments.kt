@@ -3,6 +3,9 @@
 
 package net.amiantos.lurker.ui.uploads
 
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -15,21 +18,31 @@ import androidx.compose.foundation.content.hasMediaType
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.withFrameNanos
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import java.io.File
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+import java.util.Locale
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.UploadContentTypes
 
 /**
- * The composer's way to attach — the paperclip's two sources, a pasted image, and the run they start.
- * lurker-ios's `presentAttachmentSources` / `pick` / `handlePick` / `uploadPastedImage`, over Android's
- * pickers: the **Photo Picker** for photos and videos (out of process, so no media permission is
- * asked for, as iOS's `PHPickerViewController`), and the **document picker** for files.
+ * The composer's way to attach — the send menu's three sources (lurker#1117), a pasted image, and the
+ * run they start. lurker-ios's `attach(from:)` / `pick` / `handlePick` / `uploadPastedImage`, over
+ * Android's pickers: the **Photo Picker** for photos and videos (out of process, so no media permission
+ * is asked for, as iOS's `PHPickerViewController`), the **system camera** for a photo taken now, and the
+ * **document picker** for files.
  *
  * Every entry point goes through the one busy gate ([UploadRunner.busy]) so a second pick or paste
  * can't start atop the first.
@@ -38,7 +51,9 @@ class Attachments internal constructor(
     private val runner: UploadRunner,
     private val launchPhotos: () -> Unit,
     private val launchFiles: () -> Unit,
-    /** Whether a run is under way — the paperclip is off until it has really ended. */
+    /** Opens the camera, or null on a device without one — the menu leaves Take Photo out. */
+    private val launchCamera: (() -> Unit)?,
+    /** Whether a run is under way — the attach items are off until it has really ended. */
     val busy: Boolean,
     /** The readout above the composer, while a run is under way. */
     val readout: UploadReadout?,
@@ -46,6 +61,14 @@ class Attachments internal constructor(
     /** "Photo Library": photos and videos, as many as the picker allows. */
     fun pickPhotos() {
         if (!busy) launchPhotos()
+    }
+
+    /** Whether there's a camera to take a photo with. */
+    val hasCamera: Boolean get() = launchCamera != null
+
+    /** "Take Photo": the system camera, photos only. */
+    fun takePhoto() {
+        if (!busy) launchCamera?.invoke()
     }
 
     /** "Files": the document picker, over `UploadContentTypes.forOpening`. */
@@ -84,6 +107,21 @@ fun rememberAttachments(services: UploadServices?, attaches: Boolean): Attachmen
     val files = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         if (uris.isNotEmpty()) runner.start(uris.map { AttachmentSource.Content(it.toString()) })
     }
+    // Take Photo: the camera writes into a file we hand it, under the cache's `camera/` (the only path
+    // FileProvider serves). Saved, not remembered — the camera app is in front, and this process can
+    // be killed and rebuilt before it answers. No camera permission: an app that doesn't declare one
+    // may send the capture intent freely.
+    val context = LocalContext.current
+    var pendingCapture by rememberSaveable { mutableStateOf<String?>(null) }
+    val camera = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { taken ->
+        val path = pendingCapture ?: return@rememberLauncherForActivityResult
+        pendingCapture = null
+        // A run that started while the camera was in front (a share) holds the gate, and a refused start
+        // would leave the photo behind with nothing to upload it — so it goes, like a cancelled one.
+        val started = taken && runner.start(listOf(AttachmentSource.Content(captureUri(context, File(path)).toString())))
+        if (!started) File(path).delete()
+    }
+    val hasCamera = remember { context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY) }
     val busy by runner.busy.collectAsStateWithLifecycle()
     val readout by runner.readout.collectAsStateWithLifecycle()
     // Unlimited, deliberately: files stage and upload one at a time, peak disk is one file, the
@@ -96,6 +134,20 @@ fun rememberAttachments(services: UploadServices?, attaches: Boolean): Attachmen
         // ⚠⚠ The list is `UploadContentTypes`', and it is the whole of what the picker lets you choose:
         // a type absent from it is greyed out, which reads as "Lurker can't send this" (#125).
         launchFiles = { files.launch(UploadContentTypes.forOpening.toTypedArray()) },
+        launchCamera = if (!hasCamera) null else {
+            {
+                val file = newCaptureFile(context)
+                pendingCapture = file.path
+                // ⚠ A camera on the device is not an app to take the picture: a disabled stock camera, a
+                // kiosk or work-profile policy. Then there's nothing to launch, and nothing to do.
+                try {
+                    camera.launch(captureUri(context, file))
+                } catch (_: ActivityNotFoundException) {
+                    pendingCapture = null
+                    file.delete()
+                }
+            }
+        },
         busy = busy,
         readout = readout,
     )
@@ -144,3 +196,19 @@ fun Modifier.receivesPastedImages(attachments: Attachments?): Modifier {
         if (attachments.paste(uris)) rest else content
     }
 }
+
+/**
+ * A fresh file for the camera to write into, named for the moment it was taken — the name the upload
+ * goes out under (`OpenableColumns.DISPLAY_NAME`, which FileProvider answers from the file's name).
+ * Captures left from earlier runs are cleared first: each was handed to its upload and is done with,
+ * and the cache directory is the only place they live.
+ */
+private fun newCaptureFile(context: Context): File {
+    val dir = File(context.cacheDir, "camera").apply { mkdirs() }
+    dir.listFiles()?.forEach { it.delete() }
+    val stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss", Locale.US))
+    return File(dir, "photo-$stamp.jpg")
+}
+
+private fun captureUri(context: Context, file: File): Uri =
+    FileProvider.getUriForFile(context, "${context.packageName}.files", file)

@@ -20,28 +20,21 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
@@ -116,51 +109,6 @@ private fun ReadoutCapsule(readout: UploadReadout, onCancel: () -> Unit) {
                     Icon(LurkerIcons.Close, contentDescription = null, tint = muted, modifier = Modifier.size(16.dp))
                 }
             }
-        }
-    }
-}
-
-/**
- * The paperclip, and the menu of its two sources — iOS's action sheet of Photo Library / Files /
- * Cancel; Android's dropdown, where dismissing is the cancel. Off while a run is under way.
- */
-@Composable
-fun AttachButton(attachments: Attachments, size: Dp) {
-    var expanded by remember { mutableStateOf(false) }
-    val enabled = !attachments.busy
-    val tint = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else LurkerTheme.colors.fgMuted.copy(alpha = 0.5f)
-    Box {
-        Box(
-            Modifier
-                .size(size)
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape)
-                .clickable(enabled = enabled, role = Role.Button) { expanded = true }
-                .clearAndSetSemantics {
-                    contentDescription = "Attach"
-                    role = Role.Button
-                    if (enabled) onClick { expanded = true; true } else disabled()
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(LurkerIcons.AttachFile, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
-        }
-        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            DropdownMenuItem(
-                text = { Text("Photo Library") },
-                leadingIcon = { Icon(LurkerIcons.PhotoLibrary, contentDescription = null) },
-                onClick = {
-                    expanded = false
-                    attachments.pickPhotos()
-                },
-            )
-            DropdownMenuItem(
-                text = { Text("Files") },
-                leadingIcon = { Icon(LurkerIcons.InsertDriveFile, contentDescription = null) },
-                onClick = {
-                    expanded = false
-                    attachments.pickFiles()
-                },
-            )
         }
     }
 }

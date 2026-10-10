@@ -22,10 +22,13 @@ package net.amiantos.lurkerkit.commands
  * Port note: LurkerKit walks the text by `Character` (grapheme cluster); this walks it by
  * UTF-16 unit, which is what the web's original does. The two differ only where a combining
  * mark directly follows a `|` or a `\`: Swift then sees one character that is neither, and
- * this (like the web) still sees the `|` or the `\`.
+ * this (like the web) still sees the `|` or the `\`. `layout` counts the same units, and
+ * `ColorMarkup.chatBody` hands it the same units, so the two writers still agree on every line.
  */
 object SpoilerMarkup {
-    internal const val open = "\u000314,14"
+    /** The box's colour, grey on grey. `ColorMarkup.chatBody` paints its boxes from this too. */
+    internal const val slot = 14
+    internal const val open = "\u0003$slot,$slot"
     internal const val close = "\u0003"
 
     /**
@@ -60,112 +63,129 @@ object SpoilerMarkup {
      * spend the heavier close (and 99's less-universal semantics) on text that never needed it —
      * most often Arabic, Persian or Devanagari, which is a poor place to be needlessly clever.
      *
-     * Port note: [next] is a UTF-16 unit where LurkerKit passes a `Character`. They disagree on
-     * a digit that leads a longer cluster — a keycap emoji (`5` + U+FE0F + U+20E3) is not ASCII
-     * to Swift, so LurkerKit gives it the bare close; here it is a `5` and gets the long one.
-     * The wire parser reads units, and so does the web's original, so this side is the one that
-     * keeps the digit.
+     * ⚠ The first SCALAR, not the character. The parser reads scalars, and a keycap `1️⃣` is one
+     * character that isn't ASCII but opens with an ASCII `1` — which a bare close would read as
+     * colour 1, eating the digit and breaking the emoji. (The web's `/^\d/` sees the `1`.)
+     *
+     * Port note: [next] is the next UTF-16 unit where LurkerKit passes the next `Character` and
+     * reads its first scalar. Every digit is a single BMP unit, so the first unit of a cluster is
+     * a digit exactly when its first scalar is: the two agree, keycap included.
      */
     internal fun close(next: Char?): String {
         if (next == null || next !in '0'..'9') return close
         return closeBeforeDigit
     }
 
-    private sealed interface Token {
-        data class Text(val value: String) : Token
-        data object Delimiter : Token
-    }
+    /** One spoiler's opening and closing `||`, each by the offset of its first `|`. */
+    internal data class Spoiler(val open: Int, val close: Int)
 
     /**
-     * Split into literal-text and `||`-delimiter tokens, resolving `\||` escapes into a literal
-     * `||` inside the text tokens as we go.
+     * How `apply` reads `text`, by position: where each `||` pair that makes a spoiler sits,
+     * which `||` stay literal, and where the `\||` escapes are. Character offsets.
      *
+     * Positional rather than a rewrite so a second writer can make the SAME spoilers out of the
+     * same text: `ColorMarkup.chatBody` builds them itself on a coloured body, where the user's
+     * colour has to stop at the box and resume after it, which a bare-close rewrite can't do.
+     * Both read this, so the two can't disagree about what is a spoiler.
+     *
+     * Port note: the offsets are UTF-16 units, the unit `apply` walks here (see the note on
+     * `SpoilerMarkup`), and `ColorMarkup.chatBody` builds its cells in the same units for that
+     * reason.
+     */
+    internal data class Layout(
+        /** The opening and closing `||` of each spoiler, by the offset of its first `|`. */
+        val spoilers: List<Spoiler> = emptyList(),
+        /** `||` that stay as text — unmatched, or an empty `||||`. */
+        val literals: List<Int> = emptyList(),
+        /** `\||` escapes, by the offset of the backslash. */
+        val escapes: List<Int> = emptyList(),
+    )
+
+    /**
      * `\||` is the only sequence treated specially, and there is deliberately no escape for the
      * backslash itself: a lone `\` is always literal, so `path\to\file` needs no thought from
      * the user. The cost is that a literal `\||` cannot be written — judged the better trade,
      * since `||` is far commoner in real text than `\||`.
-     */
-    private fun tokenize(text: String): List<Token> {
-        val tokens = mutableListOf<Token>()
-        // Port note: builders, not `+=` on a String — that copies the whole text per character
-        // here, where Swift's `append` does not.
-        val buffer = StringBuilder()
-        val chars = text
-        var i = 0
-        while (i < chars.length) {
-            if (chars[i] == '\\' && i + 2 < chars.length && chars[i + 1] == '|' && chars[i + 2] == '|') {
-                buffer.append("||")
-                i += 3
-                continue
-            }
-            if (chars[i] == '|' && i + 1 < chars.length && chars[i + 1] == '|') {
-                if (buffer.isNotEmpty()) {
-                    tokens.add(Token.Text(buffer.toString()))
-                    buffer.setLength(0)
-                }
-                tokens.add(Token.Delimiter)
-                i += 2
-                continue
-            }
-            buffer.append(chars[i])
-            i += 1
-        }
-        if (buffer.isNotEmpty()) tokens.add(Token.Text(buffer.toString()))
-        return tokens
-    }
-
-    /**
-     * Rewrite every `||spoiler||` pair into IRC spoiler codes.
      *
      * Pairing is non-greedy — the nearest closing `||` wins, so `||a||b||c||` is a spoiler, a
      * literal `b`, then another spoiler — and an empty pair (`||||`) is left literal. Both match
      * how Discord treats them, which is where users' expectations come from.
+     */
+    internal fun layout(chars: CharSequence): Layout {
+        val spoilers = mutableListOf<Spoiler>()
+        val literals = mutableListOf<Int>()
+        val escapes = mutableListOf<Int>()
+        val delimiters = mutableListOf<Int>()
+        var i = 0
+        while (i < chars.length) {
+            if (chars[i] == '\\' && i + 2 < chars.length && chars[i + 1] == '|' && chars[i + 2] == '|') {
+                escapes.add(i)
+                i += 3
+            } else if (chars[i] == '|' && i + 1 < chars.length && chars[i + 1] == '|') {
+                delimiters.add(i)
+                i += 2
+            } else {
+                i += 1
+            }
+        }
+        var d = 0
+        while (d < delimiters.size) {
+            // Something between the two — an escape counts — or the opener is just text.
+            if (d + 1 < delimiters.size && delimiters[d + 1] > delimiters[d] + 2) {
+                spoilers.add(Spoiler(delimiters[d], delimiters[d + 1]))
+                d += 2
+            } else {
+                literals.add(delimiters[d])
+                d += 1
+            }
+        }
+        return Layout(spoilers = spoilers, literals = literals, escapes = escapes)
+    }
+
+    /**
+     * Rewrite every `||spoiler||` pair into IRC spoiler codes, and each `\||` into a literal `||`.
      *
      * ⚠ Apply this to a user-authored CHAT body only, and opt in per command — see the note on
      * `CommandParser`. It must never become something a shared send helper does to everything.
      */
     fun apply(text: String): String {
         if (!text.contains("||")) return text
-        val tokens = tokenize(text)
+        val chars = text
+        val layout = layout(chars)
+        val opens = layout.spoilers.associate { it.open to it.close }
+        val escapes = layout.escapes.toSet()
+
+        /**
+         * The character at `i` as it will read — an escape reads as `|`. Null for a delimiter or
+         * the end, neither of which can be a digit.
+         */
+        fun reads(i: Int): Char? {
+            if (i >= chars.length) return null
+            if (i in escapes) return '|'
+            if (chars[i] == '|' && i + 1 < chars.length && chars[i + 1] == '|') return null
+            return chars[i]
+        }
+        // Port note: a builder, not `+=` on a String — that copies the whole text per character
+        // here, where Swift's `append` does not.
         val out = StringBuilder()
         var i = 0
-        while (i < tokens.size) {
-            when (val token = tokens[i]) {
-                is Token.Text -> {
-                    out.append(token.value)
-                    i += 1
-                    continue
-                }
-                Token.Delimiter -> Unit
-            }
-            // An opening `||`: gather everything up to the next delimiter.
-            val content = StringBuilder()
-            var closeIndex = -1
-            for (j in i + 1 until tokens.size) {
-                when (val candidate = tokens[j]) {
-                    Token.Delimiter -> {
-                        closeIndex = j
-                        break
-                    }
-                    is Token.Text -> content.append(candidate.value)
-                }
-            }
-            if (closeIndex != -1 && content.isNotEmpty()) {
+        var closeAt: Int? = null
+        while (i < chars.length) {
+            val pairClose = opens[i]
+            if (pairClose != null) {
+                out.append(open)
+                closeAt = pairClose
+                i += 2
+            } else if (i == closeAt) {
                 // What follows the spoiler decides how it has to be closed — see `close(next)`.
-                // The next character is the first of the next text token, if there is one; a
-                // delimiter or the end of the message can't be a digit.
-                var next: Char? = null
-                if (closeIndex + 1 < tokens.size) {
-                    when (val following = tokens[closeIndex + 1]) {
-                        is Token.Text -> next = following.value.firstOrNull()
-                        Token.Delimiter -> Unit
-                    }
-                }
-                out.append(open).append(content).append(close(next))
-                i = closeIndex + 1
-            } else {
-                // Unmatched, or an empty `||||` — the opening `||` is just literal text.
+                out.append(close(reads(i + 2)))
+                closeAt = null
+                i += 2
+            } else if (i in escapes) {
                 out.append("||")
+                i += 3
+            } else {
+                out.append(chars[i])
                 i += 1
             }
         }

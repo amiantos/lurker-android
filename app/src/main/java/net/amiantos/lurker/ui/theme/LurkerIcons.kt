@@ -23,7 +23,7 @@ import androidx.compose.ui.unit.dp
  * `open_in_new`, `share`, `block`, `alternate_email`, `bookmark_remove`, `play_circle_filled`,
  * `graphic_eq`, `image`, `attach_file`, `photo_library`, `star`, `star_border`, `movie`, `audiotrack`,
  * `description`, `insert_drive_file`, `delete`, `filter_list`, `link`, `error_outline`, `dns`,
- * `auto_awesome`, `forum`, `public_off` — Apache-2.0), so a
+ * `auto_awesome`, `forum`, `public_off`, `photo_camera`, `palette` — Apache-2.0), so a
  * glyph here is the one every Android user already reads. Tinted by the `Icon` that draws it.
  */
 object LurkerIcons {
@@ -544,6 +544,29 @@ object LurkerIcons {
                 "M21.19,21.19l-1.41,1.41l-2.27,-2.27C15.93,21.39 14.04,22 12,22C6.48,22 2,17.52 2,12" +
                 "c0,-2.04 0.61,-3.93 1.66,-5.51L1.39,4.22l1.41,-1.41L21.19,21.19z" +
                 "M11,18c-1.1,0 -2,-0.9 -2,-2v-1l-4.79,-4.79C4.08,10.79 4,11.38 4,12c0,4.08 3.05,7.44 7,7.93V18z",
+        )
+    }
+
+    /** Take a photo — the send menu's camera (lurker#1117). */
+    val PhotoCamera: ImageVector by lazy {
+        icon(
+            "PhotoCamera",
+            "M12,12m-3.2,0a3.2,3.2 0,1 1,6.4 0a3.2,3.2 0,1 1,-6.4 0" +
+                "M9,2L7.17,4H4c-1.1,0 -2,0.9 -2,2v12c0,1.1 0.9,2 2,2h16c1.1,0 2,-0.9 2,-2V6c0,-1.1 -0.9,-2 -2,-2h-3.17L15,2H9z" +
+                "M12,17c-2.76,0 -5,-2.24 -5,-5s2.24,-5 5,-5 5,2.24 5,5 -2.24,5 -5,5z",
+        )
+    }
+
+    /** Colour the draft — the send menu's Edit Color (lurker#1117). */
+    val Palette: ImageVector by lazy {
+        icon(
+            "Palette",
+            "M12,3c-4.97,0 -9,4.03 -9,9s4.03,9 9,9c0.83,0 1.5,-0.67 1.5,-1.5 0,-0.39 -0.15,-0.74 -0.39,-1.01" +
+                " -0.23,-0.26 -0.38,-0.61 -0.38,-0.99 0,-0.83 0.67,-1.5 1.5,-1.5H16c2.76,0 5,-2.24 5,-5 0,-4.42 -4.03,-8 -9,-8z" +
+                "M6.5,12c-0.83,0 -1.5,-0.67 -1.5,-1.5S5.67,9 6.5,9 8,9.67 8,10.5 7.33,12 6.5,12z" +
+                "M9.5,8C8.67,8 8,7.33 8,6.5S8.67,5 9.5,5s1.5,0.67 1.5,1.5S10.33,8 9.5,8z" +
+                "M14.5,8c-0.83,0 -1.5,-0.67 -1.5,-1.5S13.67,5 14.5,5s1.5,0.67 1.5,1.5S15.33,8 14.5,8z" +
+                "M17.5,12c-0.83,0 -1.5,-0.67 -1.5,-1.5S16.67,9 17.5,9s1.5,0.67 1.5,1.5 -0.67,1.5 -1.5,1.5z",
         )
     }
 
