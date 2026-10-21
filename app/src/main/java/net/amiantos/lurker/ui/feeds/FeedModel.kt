@@ -186,8 +186,7 @@ object FeedModel {
      * One row, as iOS's `cellForRowAt` builds it.
      *
      * Every row is its own block — they come from different buffers and hours — so each carries a header
-     * with its time, rather than the message list's "only when the minute changed", which means nothing
-     * across unrelated conversations. No nick for a `/me` or an activity line, which print their actor
+     * with its time, as a run's first line does in the message list. No nick for a `/me` or an activity line, which print their actor
      * inside the sentence; the header stays, carrying the time alone, since the section header gives
      * only the day.
      *

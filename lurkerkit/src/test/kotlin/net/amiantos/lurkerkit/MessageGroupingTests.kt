@@ -96,9 +96,10 @@ class MessageGroupingTests {
     }
 
     @Test
-    fun testAMissingTimestampFallsBackToTheAuthorRatherThanSplitting() {
+    fun testAMissingTimestampStartsANewRun() {
         val undated = Message(id = 2, type = EventType.Message, nick = "alice", text = "hi", date = null)
-        assertTrue(MessageGrouping.continuesRun(undated, previous = message("alice", offset = seconds(0))))
+        assertFalse(MessageGrouping.continuesRun(undated, previous = message("alice", offset = seconds(0))))
+        assertFalse(MessageGrouping.continuesRun(message("alice", offset = seconds(1)), previous = undated))
     }
 
     // MARK: - Self

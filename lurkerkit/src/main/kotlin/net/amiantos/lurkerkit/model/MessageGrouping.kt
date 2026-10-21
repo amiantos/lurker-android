@@ -46,10 +46,10 @@ object MessageGrouping {
         ) {
             return false
         }
-        // No clock on one side → fall back to author alone rather than splitting a run
-        // that probably belongs together.
-        val earlier = previous.date ?: return true
-        val later = message.date ?: return true
+        // No clock on one side → a new run, as the web has it. A header is where a run's time
+        // shows, so a dated line joined under an undated header would never show its time.
+        val earlier = previous.date ?: return false
+        val later = message.date ?: return false
         // Non-negative, as the web has it: a bouncer replay can stamp a line OLDER than the one
         // above it, and that's not more of the same run.
         val gap = Duration.between(earlier, later)

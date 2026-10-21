@@ -535,6 +535,16 @@ class MessageRowsTests {
         assertEquals(true, secondOpensARun(none))
     }
 
+    @Test
+    fun testAZeroWindowGroupsOnlyTheSameInstant() {
+        val none = Settings(registry = emptyMap(), values = mapOf("look.message.collapse_authors_window" to SettingValue.Int(0)))
+        fun secondOpensARun(gap: Long): Boolean? =
+            (row(build(listOf(msg(1, date = noon), msg(2, date = noon.plusSeconds(gap))), settings = none), 2) as? MessageRow.Bubble)
+                ?.position?.isFirst
+        assertEquals(false, secondOpensARun(0), "same timestamp still groups")
+        assertEquals(true, secondOpensARun(1), "a second apart does not")
+    }
+
     // MARK: - Settings
 
     @Test
