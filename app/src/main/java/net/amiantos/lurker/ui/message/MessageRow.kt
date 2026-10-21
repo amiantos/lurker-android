@@ -72,9 +72,9 @@ import kotlin.math.ceil
  *     bob
  *      yeah, ten minutes ago
  *
- * The PWA's mobile compact mode, with one deliberate difference: the timestamp sits on the author line
- * rather than floating at the end of whichever body line starts a new minute. Same rule about *when*
- * it appears; it lands somewhere structural instead of somewhere incidental.
+ * The PWA's compact layout: a header with the nick and the time at the trailing edge opens each
+ * author run, and the run's later lines carry no time. A run lasts while the same author keeps
+ * talking within `look.message.collapse_authors_window`, whatever the minute.
  *
  * What to draw is `MessageListLayout.plan`'s decision; this file only draws it.
  */
@@ -390,7 +390,7 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
 }
 
 /**
- * The author line: the name (with its rank glyph and relay source) on the leading edge, the minute on
+ * The author line: the name (with its rank glyph and relay source) on the leading edge, the time on
  * the trailing one. The name truncates before the clock does: a long nick is recoverable from context,
  * a half-drawn time is just wrong.
  */
@@ -473,7 +473,7 @@ internal fun typingGlyph(tint: Color): Map<String, InlineTextContent> =
 
 // MARK: - Previews
 
-/** A conversation's worth of rows: a day, a run with a minute change, a /me, churn, a spoiler, a reply. */
+/** A conversation's worth of rows: a day, a run across a minute, a /me, churn, a spoiler, a reply. */
 internal fun previewMessageRows(): List<MessageRow> {
     val base = Instant.parse("2026-07-25T14:41:00Z")
     var id = 100L

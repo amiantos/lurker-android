@@ -230,7 +230,8 @@ object MessageRows {
      *   iff this is non-null, so a boundary with no instant hides rows and says nothing —
      *   which is why `Buffer.applyCleared` moves the two together.
      * @param typists who is composing right now, for the foot of the list.
-     * @param settings the user's settings, for the event tier and the two consolidation keys.
+     * @param settings the user's settings, for the event tier, the two consolidation keys and the
+     *   author-run window.
      * @param speakers who has spoken in this buffer and when. Feeds both the `Smart` tier and
      *   consolidation's truncated name lists — see `SpeakerMap`.
      * @param ownNick your nick on this buffer's network, so the `Smart` tier never hides your
@@ -476,7 +477,12 @@ object MessageRows {
         // describes the present rather than the past. Appended *after* the run pass so it
         // never participates in one: it isn't a bubble, and a run that tried to include it
         // would re-tighten its corners every time somebody started or stopped typing.
-        val built = withBubbleRuns(rows).toMutableList()
+        // The web's author window (`look.message.collapse_authors_window`, minutes), so a run
+        // groups on the phone exactly as it does in the browser.
+        val runWindow = Duration.ofMinutes(
+            maxOf(0, settings.int("look.message.collapse_authors_window", default = 5)).toLong(),
+        )
+        val built = withBubbleRuns(rows, runWindow).toMutableList()
         if (typists.isNotEmpty()) built.add(MessageRow.Typing(typists))
         return built
     }
@@ -486,7 +492,7 @@ object MessageRows {
      * consecutive bubble rows group; a line, a summary, or a divider between two bubbles is a
      * non-bubble neighbour and so breaks the run — exactly what we want.
      */
-    private fun withBubbleRuns(rows: List<MessageRow>): List<MessageRow> {
+    private fun withBubbleRuns(rows: List<MessageRow>, window: Duration): List<MessageRow> {
         fun bubble(index: Int): Message? {
             if (index !in rows.indices) return null
             return (rows[index] as? MessageRow.Bubble)?.message
@@ -494,8 +500,10 @@ object MessageRows {
         return rows.mapIndexed { index, row ->
             if (row !is MessageRow.Bubble) return@mapIndexed row
             val message = row.message
-            val isFirst = !MessageGrouping.continuesRun(message, previous = bubble(index - 1))
-            val isLast = bubble(index + 1)?.let { !MessageGrouping.continuesRun(it, previous = message) } ?: true
+            val isFirst = !MessageGrouping.continuesRun(message, previous = bubble(index - 1), window = window)
+            val isLast = bubble(index + 1)?.let {
+                !MessageGrouping.continuesRun(it, previous = message, window = window)
+            } ?: true
             MessageRow.Bubble(message, RunPosition(isFirst = isFirst, isLast = isLast))
         }
     }

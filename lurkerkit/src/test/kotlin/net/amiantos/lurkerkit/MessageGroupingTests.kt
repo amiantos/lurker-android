@@ -80,6 +80,22 @@ class MessageGroupingTests {
     }
 
     @Test
+    fun testTheWindowIsTheCallersToSet() {
+        val first = message("alice", offset = seconds(0))
+        val later = message("alice", offset = seconds(8 * 60))
+        assertFalse(MessageGrouping.continuesRun(later, previous = first))
+        assertTrue(MessageGrouping.continuesRun(later, previous = first, window = seconds(10 * 60)))
+    }
+
+    @Test
+    fun testALineStampedBeforeTheOneAboveBreaksTheRun() {
+        // A bouncer replay can land an older line under a newer one. The web treats that as a
+        // new run (`collapseDisplay`'s non-negative delta), and so does this.
+        val first = message("alice", offset = seconds(60))
+        assertFalse(MessageGrouping.continuesRun(message("alice", offset = seconds(30)), previous = first))
+    }
+
+    @Test
     fun testAMissingTimestampFallsBackToTheAuthorRatherThanSplitting() {
         val undated = Message(id = 2, type = EventType.Message, nick = "alice", text = "hi", date = null)
         assertTrue(MessageGrouping.continuesRun(undated, previous = message("alice", offset = seconds(0))))

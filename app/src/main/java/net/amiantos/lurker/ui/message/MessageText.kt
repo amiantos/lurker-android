@@ -291,9 +291,8 @@ object MessageText {
     /**
      * `14:42` for a compact header.
      *
-     * Minutes, not seconds: the stamp only appears when the minute changes, so a seconds field would
-     * be the precise moment of whichever message happened to start the minute — precision the format
-     * doesn't carry. Fixed 24-hour through the root locale, as iOS uses POSIX, since `HH` in some
+     * Minutes, not seconds: `look.buffer.time_format_compact`'s default, and the stamp speaks for a
+     * whole run. Fixed 24-hour through the root locale, as iOS uses POSIX, since `HH` in some
      * locales still comes out in other digits.
      */
     fun compactHeaderTime(instant: Instant, zone: ZoneId = ZoneId.systemDefault()): String =

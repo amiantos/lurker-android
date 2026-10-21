@@ -17,10 +17,8 @@ import net.amiantos.lurkerkit.model.ReplyQuote
 import net.amiantos.lurkerkit.model.RunPosition
 import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.rendering.NickHighlighter
-import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.temporal.ChronoUnit
 import java.util.Locale
 import net.amiantos.lurkerkit.model.MemberPrefix
 
@@ -73,7 +71,7 @@ class MessageListContext(
      * Null on screens with no actions sheet; the rows then take no long press at all.
      */
     val onLongPress: ((RowPress) -> Unit)? = null,
-    /** Which time zone decides a minute and a day. */
+    /** Which time zone a header's time and a day are read in. */
     val zone: ZoneId = ZoneId.systemDefault(),
     /** Today, as the day labels read it — the screen advances it at midnight. */
     val today: LocalDate = LocalDate.now(zone),
@@ -161,11 +159,11 @@ class ReactionContext(
     val onOpen: (Message) -> Unit,
 )
 
-/** What to draw above a body, when the row starts a new author/minute block. lurker-ios's `CompactCell.Header`. */
+/** What to draw above a body, when the row starts a new author block. lurker-ios's `CompactCell.Header`. */
 data class CompactHeader(
     val nick: String,
     val color: Color,
-    /** Null unless the minute changed — the whole point of the format. */
+    /** Null only for a line with no clock. */
     val time: String?,
     /**
      * The speaker's channel-mode glyph and its colour tier, when [nick] opens with the glyph. Carried
@@ -247,11 +245,9 @@ enum class MarkerTone { Unread, Muted, Faint }
  * The decisions behind each row: who heads a block, where a block ends, whether a reply is quoted
  * again. lurker-ios's `MessageListRenderer`, minus the cells.
  *
- * The shape: an author header (nick, plus the time when the minute changed) and the message indented
- * one character under it, several messages stacking beneath one header. A header appears on an
- * author change — `RunPosition.isFirst`, which `MessageRows` already computed — **or** on a minute
- * change, because the stamp needs a header to sit on and a run crossing a minute boundary would
- * otherwise lose it. Anything that names its own actor — a `/me`, a join, a collapsed run, the typing
+ * The shape: an author header (nick and time) and the message indented one character under it,
+ * several messages stacking beneath one header. A header appears where a run starts —
+ * `RunPosition.isFirst`, which `MessageRows` already computed. Anything that names its own actor — a `/me`, a join, a collapsed run, the typing
  * line — is header-less and starts flush with the nicks, because it *is* that line.
  */
 object MessageListLayout {
@@ -261,7 +257,7 @@ object MessageListLayout {
         when (row) {
             is MessageRow.Bubble -> {
                 // Once, not three times: it walks the neighbouring rows and builds a caption.
-                val header = header(row.message, row.position, index, context)
+                val header = header(row.message, row.position, context)
                 RowPlan.Compact(
                     content = RowPlan.Content.Of(row.message),
                     header = header,
@@ -309,14 +305,12 @@ object MessageListLayout {
         }
 
     /**
-     * The header for a message, or null when it continues the block above it. The time is carried
-     * only when the minute differs from the previous message's — that's the format's whole idea, and
-     * why a minute change forces a header even mid-run.
+     * The header for a message, or null when it continues the block above it. Every header carries
+     * its time and no continuation does, as the web's compact layout has it: the run is the unit, so
+     * a run that crosses a minute keeps going under its first stamp.
      */
-    fun header(message: Message, position: RunPosition, index: Int, context: MessageListContext): CompactHeader? {
-        val previous = previousMessage(index, context)
-        val minuteChanged = changedMinute(message.date, previous?.date, context.zone)
-        if (!position.isFirst && !minuteChanged) return null
+    fun header(message: Message, position: RunPosition, context: MessageListContext): CompactHeader? {
+        if (!position.isFirst) return null
 
         // No rank glyph on a re-attributed relay line (#277): the name belongs to someone speaking
         // through a bridge, so a hit in the nicklist would be a coincidence of spelling. The bot's
@@ -330,7 +324,7 @@ object MessageListLayout {
         return CompactHeader(
             nick = name,
             color = MessageText.captionColor(message, networkName, context.style),
-            time = if (minuteChanged) message.date?.let { MessageText.compactHeaderTime(it, context.zone) } else null,
+            time = message.date?.let { MessageText.compactHeaderTime(it, context.zone) },
             // Only when `caption` actually used it: it prefixes a nick and nothing else. ⚠ Asked by
             // building the caption without it, never by `name.startsWith(prefix)`: a network's own
             // symbol can be any character (lurker-ios#191), and with PREFIX `(ov)-+` a notice's
@@ -355,7 +349,7 @@ object MessageListLayout {
         // A divider, a `/me`, the typing line: each stands alone, so the row above it ends whatever
         // it was part of.
         if (next !is MessageRow.Bubble) return true
-        return header(next.message, next.position, index + 1, context) != null
+        return header(next.message, next.position, context) != null
     }
 
     /** Whether a header-less row opens a block. Only status narration ever doesn't: a run of joins is one block. */
@@ -392,20 +386,6 @@ object MessageListLayout {
     fun previousMessage(index: Int, context: MessageListContext): Message? {
         if (index <= 0) return null
         return context.row(index - 1)?.message
-    }
-
-    /**
-     * Whether two instants fall in different minutes of the reader's clock.
-     *
-     * A message with no clock never counts as a change: it has no stamp to show, so breaking the block
-     * for it would cost a header and gain nothing. A message *following* one with no clock does count,
-     * so the first line that knows what time it is says so.
-     */
-    fun changedMinute(date: Instant?, previous: Instant?, zone: ZoneId = ZoneId.systemDefault()): Boolean {
-        if (date == null || previous == null) return date != null
-        val minute = date.atZone(zone).toLocalDateTime().truncatedTo(ChronoUnit.MINUTES)
-        val previousMinute = previous.atZone(zone).toLocalDateTime().truncatedTo(ChronoUnit.MINUTES)
-        return minute != previousMinute
     }
 
     /**
