@@ -72,28 +72,19 @@ class MessageListLayoutTest {
     }
 
     @Test
-    fun `a minute change forces a header mid-run, with the time`() {
+    fun `a run that crosses a minute keeps its one header`() {
+        // The web's compact layout: the run is the unit, and only its header carries a time.
         val plans = plans(rows(line("alice", 0), line("alice", 70)))
-        val header = plans[1].header()
-        assertNotNull(header)
-        assertEquals("alice", header?.nick)
-        assertEquals("14:42", header?.time)
+        assertEquals("14:41", plans[0].header()?.time)
+        assertNull(plans[1].header())
     }
 
     @Test
-    fun `an author change heads a block, and the time shows only when the minute moved`() {
+    fun `every author change heads a block with its time, even within the same minute`() {
         val plans = plans(rows(line("alice", 0), line("bob", 10), line("carol", 65)))
         assertEquals("bob", plans[1].header()?.nick)
-        assertNull(plans[1].header()?.time)
+        assertEquals("14:41", plans[1].header()?.time)
         assertEquals("14:42", plans[2].header()?.time)
-    }
-
-    @Test
-    fun `an undated line never counts as a minute change, and the first dated one after it does`() {
-        assertFalse(MessageListLayout.changedMinute(null, base))
-        assertTrue(MessageListLayout.changedMinute(base, null))
-        assertFalse(MessageListLayout.changedMinute(base, base.plusSeconds(59), ZoneOffset.UTC))
-        assertTrue(MessageListLayout.changedMinute(base.plusSeconds(60), base, ZoneOffset.UTC))
     }
 
     @Test
@@ -183,14 +174,14 @@ class MessageListLayoutTest {
     }
 
     @Test
-    fun `a reply after someone else's line is quoted again, but a minute change alone doesn't re-quote`() {
+    fun `a reply after someone else's line is quoted again, but a run across a minute doesn't re-quote`() {
         val reply = ReplyContext(msgid = "p", parent = null)
         val interrupted = plans(rows(line("alice", 0, replyTo = reply), line("bob", 5), line("alice", 10, replyTo = reply)))
             .map { it as RowPlan.Compact }
         assertNotNull(interrupted[2].reply)
-        // Same author run across a minute: a new header, but still the same reply's next chunk.
+        // Same author run across a minute: still one block, and still the same reply's next chunk.
         val sameRun = plans(rows(line("alice", 0, replyTo = reply), line("alice", 70, replyTo = reply))).map { it as RowPlan.Compact }
-        assertNotNull(sameRun[1].header)
+        assertNull(sameRun[1].header)
         assertNull(sameRun[1].reply)
     }
 

@@ -17,6 +17,9 @@ object MessageGrouping {
     /**
      * A gap longer than this breaks a run even for the same author. Without it, two
      * messages from the same nick three hours apart would render as one conversation.
+     *
+     * The default of `look.message.collapse_authors_window` (5 minutes), for callers with no
+     * settings to hand. The list reads the user's value — see `MessageRows.build`.
      */
     val runGap: Duration = Duration.ofSeconds(5 * 60)
 
@@ -31,8 +34,10 @@ object MessageGrouping {
      * same nick are different kinds of utterance — NOTICE is what a bot uses precisely to
      * say "this is not a reply to talk back to" — and grouping them would caption the run
      * once and render the rest identically, erasing the distinction the sender chose.
+     *
+     * [window] is the largest gap a run survives, as the web's `collapseDisplay` judges it.
      */
-    fun continuesRun(message: Message, previous: Message?): Boolean {
+    fun continuesRun(message: Message, previous: Message?, window: Duration = runGap): Boolean {
         if (previous == null ||
             !message.type.isBubble || !previous.type.isBubble ||
             message.type != previous.type ||
@@ -41,11 +46,14 @@ object MessageGrouping {
         ) {
             return false
         }
-        // No clock on one side → fall back to author alone rather than splitting a run
-        // that probably belongs together.
-        val earlier = previous.date ?: return true
-        val later = message.date ?: return true
-        return Duration.between(earlier, later).abs() <= runGap
+        // No clock on one side → a new run, as the web has it. A header is where a run's time
+        // shows, so a dated line joined under an undated header would never show its time.
+        val earlier = previous.date ?: return false
+        val later = message.date ?: return false
+        // Non-negative, as the web has it: a bouncer replay can stamp a line OLDER than the one
+        // above it, and that's not more of the same run.
+        val gap = Duration.between(earlier, later)
+        return !gap.isNegative && gap <= window
     }
 
     /**
@@ -82,8 +90,7 @@ object MessageGrouping {
  *
  * `isFirst` is what decides whether a message opens an author block, and so whether it draws a
  * header. `isLast` is computed for symmetry and currently read by nothing — the list works out
- * where a block *ends* from the following row, because a block can also be ended by a minute
- * change, which a run position knows nothing about.
+ * where a block *ends* from the following row.
  */
 data class RunPosition(
     val isFirst: Boolean,

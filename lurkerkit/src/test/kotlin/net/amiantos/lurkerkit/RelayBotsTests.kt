@@ -24,6 +24,7 @@ import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import java.time.Instant
 
 /**
  * Relay-bot marks end to end (lurker#277): the wire in, the set they build, what they do to a
@@ -38,7 +39,8 @@ class RelayBotsTests {
         type: EventType = EventType.Message,
         isSelf: Boolean = false,
     ): Message =
-        Message(id = id, type = type, nick = nick, text = text, isSelf = isSelf)
+        // One instant for every line: run grouping needs a clock on both sides.
+        Message(id = id, type = type, nick = nick, text = text, isSelf = isSelf, date = Instant.ofEpochSecond(1_700_000_000))
 
     // MARK: - The set
 
