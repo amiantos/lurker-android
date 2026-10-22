@@ -290,8 +290,12 @@ class LurkerApp : Application() {
             if (events.notices.value.none { it.action != null }) {
                 val network = model.state.networks[networkId]?.displayName
                 val place = if (network != null) " on $network" else ""
-                val text = "$from tried to message you$place — caller ID blocked it"
-                val accept = NoticeAction("Accept") { model.acceptCaller(networkId = networkId, nick = from) }
+                val text = "Caller ID blocked $from$place. Accept lets their next message through."
+                val accept = NoticeAction("Accept") {
+                    if (!model.acceptCaller(networkId = networkId, nick = from)) {
+                        events.send(AppEvent.Notice("Couldn't accept $from — ${network ?: "the network"} isn't connected."))
+                    }
+                }
                 events.send(AppEvent.Notice(text, accept))
             }
         }

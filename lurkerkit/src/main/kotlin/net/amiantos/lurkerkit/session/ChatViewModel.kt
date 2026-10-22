@@ -2285,6 +2285,21 @@ class ChatViewModel(
     fun setBack(networkId: Int?): Boolean = canWrite && client.setBack(networkId = networkId, all = null)
 
     /**
+     * Let `nick` through our caller ID (+g) on this network (lurker#1184): `ACCEPT nick`, which
+     * is what `/accept nick` sends. The server's reply, if any, lands in the server log. One nick
+     * only, since the line is raw: a comma would accept a list, a leading `-` take someone off,
+     * `*` list them; a `=bob` DCC chat is bob. False when it didn't go: the network can't be
+     * written to, or the nick isn't one.
+     */
+    fun acceptCaller(networkId: Int, nick: String): Boolean {
+        val peer = DccChat.peer(nick.trimmingWhitespacesAndNewlines())
+        if (peer.isEmpty() || peer.startsWith("-") || peer.any { it.isWhitespace() || it == ',' || it == '*' }) return false
+        if (!store.state.canWrite(networkId = networkId)) return false
+        val line = "ACCEPT $peer"
+        return sendRawSeam?.invoke(line) ?: client.sendRaw(networkId = networkId, line = line)
+    }
+
+    /**
      * Ask the network who `nick` is (lurker-ios#12) — what the profile screen sends on open, and
      * what its Refresh does.
      *
@@ -2318,17 +2333,6 @@ class ChatViewModel(
      * caller handing over the buffer's target would put `WHOIS =bob` on the wire. Normalized
      * here, at the one door every profile goes through, rather than trusted to each screen.
      */
-    /**
-     * Let `nick` through our caller ID (+g) on this network (lurker#1184): `ACCEPT nick`, which
-     * is what `/accept nick` sends. The server's reply, if any, lands in the server log.
-     */
-    fun acceptCaller(networkId: Int, nick: String): Boolean {
-        val peer = nick.trimmingWhitespacesAndNewlines()
-        if (peer.isEmpty() || peer.contains(' ')) return false
-        val line = "ACCEPT $peer"
-        return sendRawSeam?.invoke(line) ?: client.sendRaw(networkId = networkId, line = line)
-    }
-
     fun requestWhois(networkId: Int, nick: String) {
         val peer = DccChat.peer(nick.trimmingWhitespacesAndNewlines())
         if (peer.isEmpty() || store.state.isWhoisPending(networkId = networkId, nick = peer)) return

@@ -345,7 +345,13 @@ class ProtocolSweepTests {
         val sent = mutableListOf<String>()
         model.sendRawSeam = { line -> sent.add(line); true }
         assertTrue(model.acceptCaller(networkId = 1, nick = " bob "))
-        assertFalse(model.acceptCaller(networkId = 1, nick = "bob carol"))
-        assertEquals(listOf("ACCEPT bob"), sent)
+        assertTrue(model.acceptCaller(networkId = 1, nick = "=carol"))
+        // One nick, never a different ACCEPT: a list, a removal, the listing.
+        for (nick in listOf("bob carol", "bob\tcarol", "bob,carol", "-bob", "*", "")) {
+            assertFalse(model.acceptCaller(networkId = 1, nick = nick), nick)
+        }
+        // Not where the network can't be written to.
+        assertFalse(model.acceptCaller(networkId = 2, nick = "bob"))
+        assertEquals(listOf("ACCEPT bob", "ACCEPT carol"), sent)
     }
 }
