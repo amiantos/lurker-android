@@ -1228,6 +1228,14 @@ internal object FrameParser {
                 )
             }
         }
+        // `callerid-blocked` (lurker#1184) is the invite's shape again: someone messaged us and
+        // our caller ID discarded it. Below the guard it has no text and would be dropped.
+        if (obj.string("type") == "callerid-blocked") {
+            val networkId = obj.intOrNull("networkId") ?: return ServerFrame.Ignored
+            val from = obj.string("from")
+            if (from.isEmpty()) return ServerFrame.Ignored
+            return ServerFrame.CallerIdBlocked(networkId = networkId, from = from)
+        }
         // `react-support` is network-scoped state on a `:server:<id>` carrier, like those above.
         if (obj.string("type") == "react-support") {
             val networkId = obj.intOrNull("networkId") ?: return ServerFrame.Ignored

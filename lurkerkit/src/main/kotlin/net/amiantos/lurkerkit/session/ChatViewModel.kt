@@ -255,6 +255,13 @@ class ChatViewModel(
     var onInvited: ((networkId: Int, channel: String, from: String) -> Unit)? = null
 
     /**
+     * Our caller ID (+g) discarded a message from `from` (lurker#1184). The app offers an
+     * Accept, which is `acceptCaller`; it lets their NEXT message through, since this one is
+     * gone. The system buffer already holds the line, so a prompt never answered loses nothing.
+     */
+    var onCallerIdBlocked: ((networkId: Int, from: String) -> Unit)? = null
+
+    /**
      * A live line the server says to alert about, with its kind's toggle on (see
      * `StatusNotification`). The app decides whether it's worth showing — not for the buffer
      * already on screen, not while backgrounded, where push has it.
@@ -2311,6 +2318,17 @@ class ChatViewModel(
      * caller handing over the buffer's target would put `WHOIS =bob` on the wire. Normalized
      * here, at the one door every profile goes through, rather than trusted to each screen.
      */
+    /**
+     * Let `nick` through our caller ID (+g) on this network (lurker#1184): `ACCEPT nick`, which
+     * is what `/accept nick` sends. The server's reply, if any, lands in the server log.
+     */
+    fun acceptCaller(networkId: Int, nick: String): Boolean {
+        val peer = nick.trimmingWhitespacesAndNewlines()
+        if (peer.isEmpty() || peer.contains(' ')) return false
+        val line = "ACCEPT $peer"
+        return sendRawSeam?.invoke(line) ?: client.sendRaw(networkId = networkId, line = line)
+    }
+
     fun requestWhois(networkId: Int, nick: String) {
         val peer = DccChat.peer(nick.trimmingWhitespacesAndNewlines())
         if (peer.isEmpty() || store.state.isWhoisPending(networkId = networkId, nick = peer)) return
@@ -2957,6 +2975,7 @@ class ChatViewModel(
                 )
                 if (!joined && !ignored) onInvited?.invoke(frame.networkId, frame.channel, frame.from)
             }
+            is ServerFrame.CallerIdBlocked -> onCallerIdBlocked?.invoke(frame.networkId, frame.from)
             else -> Unit
         }
     }

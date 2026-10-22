@@ -1731,9 +1731,9 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                     if (frame.live) peers = peers + frame.nick
                     state.copy(dccChats = state.dccChats.setting(frame.networkId, if (peers.isEmpty()) null else peers))
                 }
-                // A moment, not state: the view model offers the Join, and the system buffer's
-                // line is the record.
-                is ServerFrame.Invited -> state
+                // A moment, not state: the view model offers the Join or the Accept, and the
+                // system buffer's line is the record.
+                is ServerFrame.Invited, is ServerFrame.CallerIdBlocked -> state
                 is ServerFrame.Typing ->
                     applyTyping(
                         state, networkId = frame.networkId, target = frame.target,

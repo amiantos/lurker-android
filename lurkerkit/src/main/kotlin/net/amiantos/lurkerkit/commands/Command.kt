@@ -459,6 +459,11 @@ object CommandRegistry {
             listOf("ping"), CommandCategory.Messaging, "CTCP PING a user",
             args = listOf(ArgSpec("nick", ArgKind.Nick)),
         ),
+        // Caller ID (lurker#1184): `-nick` takes one off, and no argument lists them.
+        CommandSpec(
+            listOf("accept"), CommandCategory.Messaging, "Caller ID (+g): let nicks message you",
+            args = listOf(ArgSpec("nick", ArgKind.Nick, optional = true, rest = true)),
+        ),
         // irssi's syntax exactly (lurker#270), type-first on close: `/dcc close chat bob`.
         // `-passive` asks the peer to listen, for when this server can't be reached.
         CommandSpec(

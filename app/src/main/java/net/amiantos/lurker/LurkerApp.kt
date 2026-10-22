@@ -284,6 +284,18 @@ class LurkerApp : Application() {
             }
         }
 
+        // …and so does a message our caller ID (+g) blocked, offering an Accept (lurker#1184), which
+        // lets their next message through. Same rule: one actionable snackbar at a time.
+        model.onCallerIdBlocked = { networkId, from ->
+            if (events.notices.value.none { it.action != null }) {
+                val network = model.state.networks[networkId]?.displayName
+                val place = if (network != null) " on $network" else ""
+                val text = "$from tried to message you$place — caller ID blocked it"
+                val accept = NoticeAction("Accept") { model.acceptCaller(networkId = networkId, nick = from) }
+                events.send(AppEvent.Notice(text, accept))
+            }
+        }
+
         // An offer someone made us is asked about over whatever is on screen (iOS `DccOfferPrompt`):
         // `MainScaffold` draws the dialog from `dccOffers.prompt`.
         dccOffers.follow()
