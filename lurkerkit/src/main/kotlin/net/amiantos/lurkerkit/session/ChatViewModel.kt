@@ -255,6 +255,13 @@ class ChatViewModel(
     var onInvited: ((networkId: Int, channel: String, from: String) -> Unit)? = null
 
     /**
+     * Our caller ID (+g) discarded a message from `from` (lurker#1184). The app offers an
+     * Accept, which is `acceptCaller`; it lets their NEXT message through, since this one is
+     * gone. The system buffer already holds the line, so a prompt never answered loses nothing.
+     */
+    var onCallerIdBlocked: ((networkId: Int, from: String) -> Unit)? = null
+
+    /**
      * A live line the server says to alert about, with its kind's toggle on (see
      * `StatusNotification`). The app decides whether it's worth showing — not for the buffer
      * already on screen, not while backgrounded, where push has it.
@@ -2278,6 +2285,21 @@ class ChatViewModel(
     fun setBack(networkId: Int?): Boolean = canWrite && client.setBack(networkId = networkId, all = null)
 
     /**
+     * Let `nick` through our caller ID (+g) on this network (lurker#1184): `ACCEPT nick`, which
+     * is what `/accept nick` sends. The server's reply, if any, lands in the server log. One nick
+     * only, since the line is raw: a comma would accept a list, a leading `-` take someone off,
+     * `*` list them; a `=bob` DCC chat is bob. False when it didn't go: the network can't be
+     * written to, or the nick isn't one.
+     */
+    fun acceptCaller(networkId: Int, nick: String): Boolean {
+        val peer = DccChat.peer(nick.trimmingWhitespacesAndNewlines())
+        if (peer.isEmpty() || peer.startsWith("-") || peer.any { it.isWhitespace() || it == ',' || it == '*' }) return false
+        if (!store.state.canWrite(networkId = networkId)) return false
+        val line = "ACCEPT $peer"
+        return sendRawSeam?.invoke(line) ?: client.sendRaw(networkId = networkId, line = line)
+    }
+
+    /**
      * Ask the network who `nick` is (lurker-ios#12) — what the profile screen sends on open, and
      * what its Refresh does.
      *
@@ -2957,6 +2979,7 @@ class ChatViewModel(
                 )
                 if (!joined && !ignored) onInvited?.invoke(frame.networkId, frame.channel, frame.from)
             }
+            is ServerFrame.CallerIdBlocked -> onCallerIdBlocked?.invoke(frame.networkId, frame.from)
             else -> Unit
         }
     }

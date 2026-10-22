@@ -349,6 +349,14 @@ class CommandParserTests {
         assertEquals(listOf<CommandEffect>(CommandEffect.ShowProfile(nick = "bob")), effects("/whois", target = "bob"))
     }
 
+    /** Caller ID (lurker#1184): one comma list, as the wire wants; none lists them. */
+    @Test
+    fun testAcceptSendsOneCommaList() {
+        assertEquals(listOf<CommandEffect>(CommandEffect.Raw(line = "ACCEPT alice,bob,-carol")), effects("/accept alice bob -carol"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.Raw(line = "ACCEPT alice,bob")), effects("/accept alice,bob"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.Raw(line = "ACCEPT *")), effects("/accept"))
+    }
+
     @Test
     fun testInviteDefaultsChannelToCurrentBuffer() {
         assertEquals(listOf<CommandEffect>(CommandEffect.Raw(line = "INVITE bob #chan")), effects("/invite bob"))

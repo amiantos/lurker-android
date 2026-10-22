@@ -420,6 +420,13 @@ object CommandParser {
                 if (who.isEmpty()) return listOf(CommandEffect.Info("usage: /whois <nick>"))
                 return listOf(CommandEffect.ShowProfile(nick = who))
             }
+            "accept" -> {
+                // Caller ID (lurker#1184): `/accept alice bob -carol` → `ACCEPT alice,bob,-carol`.
+                // The wire wants one comma list (a second word is ignored), and no argument asks
+                // for the list, as irssi's /accept does. The reply lands in the server log.
+                val nicks = rest.joinToString(",").split(",").filter { it.isNotEmpty() }.joinToString(",")
+                return listOf(CommandEffect.Raw(line = if (nicks.isEmpty()) "ACCEPT *" else "ACCEPT $nicks"))
+            }
             "invite" -> {
                 // `/invite <nick> [#chan]`, or channel-first as /kick takes it: `/invite #chan <nick>`.
                 // The channel defaults to the current buffer, but only if that's a channel — an

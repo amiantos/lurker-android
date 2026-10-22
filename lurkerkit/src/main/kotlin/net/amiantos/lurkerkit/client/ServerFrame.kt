@@ -518,6 +518,14 @@ internal sealed interface ServerFrame {
     ) : ServerFrame
 
     /**
+     * A `callerid-blocked` ephemeral (lurker#1184): `from` messaged us and our caller ID (+g)
+     * discarded it. The invite's shape, on a `:server:<id>` carrier. Nothing is stored; the
+     * system buffer's line is the record, and this is the moment to offer an `ACCEPT`. The
+     * server has already skipped ignored nicks, so there's no check to make here.
+     */
+    data class CallerIdBlocked(val networkId: Int, val from: String) : ServerFrame
+
+    /**
      * WS `pins-changed`: this network's pinned buffers, in the user's order.
      *
      * Authoritative and wholesale — the server re-sends the whole list on every pin, unpin

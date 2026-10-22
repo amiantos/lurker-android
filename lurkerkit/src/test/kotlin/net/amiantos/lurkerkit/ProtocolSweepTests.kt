@@ -18,6 +18,7 @@ import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.store.LurkerStore
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -315,5 +316,42 @@ class ProtocolSweepTests {
         model.handle(ServerFrame.Invited(networkId = 1, channel = "#spam", from = "troll", userhost = "troll!t@example.org"))
         model.handle(ServerFrame.Invited(networkId = 1, channel = "#secret", from = "bob", userhost = "bob!b@example.org"))
         assertEquals(listOf("#secret bob"), offered)
+    }
+
+    // Caller ID (lurker#1184)
+
+    @Test
+    fun testACallerIdBlockIsItsOwnFrame() {
+        assertEquals(
+            ServerFrame.CallerIdBlocked(networkId = 1, from = "bob"),
+            FrameParser.parseWs(
+                """{"kind":"irc","networkId":1,"target":":server:1","type":"callerid-blocked","from":"bob","userhost":"bob!b@example.org"}""",
+            ),
+        )
+        assertEquals(
+            ServerFrame.Ignored,
+            FrameParser.parseWs("""{"kind":"irc","networkId":1,"target":":server:1","type":"callerid-blocked"}"""),
+        )
+    }
+
+    @Test
+    fun testABlockedCallerIsOfferedAndAcceptSendsAccept() {
+        val model = viewModel()
+        val offered = mutableListOf<String>()
+        model.onCallerIdBlocked = { networkId, from -> offered.add("$networkId $from") }
+        model.handle(ServerFrame.CallerIdBlocked(networkId = 1, from = "bob"))
+        assertEquals(listOf("1 bob"), offered)
+
+        val sent = mutableListOf<String>()
+        model.sendRawSeam = { line -> sent.add(line); true }
+        assertTrue(model.acceptCaller(networkId = 1, nick = " bob "))
+        assertTrue(model.acceptCaller(networkId = 1, nick = "=carol"))
+        // One nick, never a different ACCEPT: a list, a removal, the listing.
+        for (nick in listOf("bob carol", "bob\tcarol", "bob,carol", "-bob", "*", "")) {
+            assertFalse(model.acceptCaller(networkId = 1, nick = nick), nick)
+        }
+        // Not where the network can't be written to.
+        assertFalse(model.acceptCaller(networkId = 2, nick = "bob"))
+        assertEquals(listOf("ACCEPT bob", "ACCEPT carol"), sent)
     }
 }
