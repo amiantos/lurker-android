@@ -551,7 +551,7 @@ class BufferListModelTest {
         assertEquals(listOf("#b", "#a"), moved.rendered().section(SectionId.Favorites).names())
     }
 
-    // MARK: - Menu and swipe
+    // MARK: - Menu
 
     @Test
     fun theMenuHasIosFourTitles() {
@@ -603,17 +603,6 @@ class BufferListModelTest {
         val s = state(buffers = listOf(server(1)))
         assertNull(BufferListModel.rowMenu(s, Buffer.system))
         assertNull(BufferListModel.rowMenu(s, server(1)))
-    }
-
-    @Test
-    fun onlyNetworkRowsSwipe() {
-        val channel = Row(buffer(1, "#a"), networkName = null)
-        assertEquals("Leave", BufferListModel.swipeTitle(SectionId.Network(1), channel))
-        assertEquals("Close", BufferListModel.swipeTitle(SectionId.Network(1), channel.copy(parted = true)))
-        assertEquals("Close", BufferListModel.swipeTitle(SectionId.Unrostered(1), Row(buffer(1, "bob"), networkName = null)))
-        assertNull(BufferListModel.swipeTitle(SectionId.Favorites, channel))
-        assertNull(BufferListModel.swipeTitle(SectionId.Friends, Row(buffer(1, "bob"), networkName = "Libera")))
-        assertNull(BufferListModel.swipeTitle(SectionId.Network(1), Row(server(1), networkName = null)))
     }
 
     // MARK: - Gate, placeholder, title

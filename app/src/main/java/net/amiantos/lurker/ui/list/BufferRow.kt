@@ -55,7 +55,7 @@ import kotlin.math.roundToInt
  * ground. No cards and no separators: the guides say which rows belong together, which is the job
  * iOS's inset-grouped cards and chip grids did before at several times the height.
  *
- * These are drawing only. What a touch does — open, the menu, a swipe, a drag — is the screen's,
+ * These are drawing only. What a touch does — open, the menu, a drag — is the screen's,
  * handed in as [Modifier]s, so a row can't grow a gesture its section shouldn't have.
  */
 
@@ -169,8 +169,8 @@ internal fun BufferRow(
         modifier
             .fillMaxWidth()
             .then(if (lifted) Modifier.shadow(6.dp) else Modifier)
-            // ⚠ Opaque, swiped or lifted: a row sliding over its Leave/Close action shows whatever
-            // is behind it, and behind a clear row is the red action, through the text.
+            // ⚠ Opaque: a lifted row (a drag) slides over its neighbours, and a clear one would
+            // show them through its text.
             .background(colors.rosterGround)
             .then(gestures)
             .heightIn(min = RosterMetrics.row)

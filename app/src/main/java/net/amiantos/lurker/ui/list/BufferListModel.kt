@@ -902,21 +902,6 @@ object BufferListModel {
     }
 
     /**
-     * The swipe action's title for a row in [section], or null when the row has none.
-     *
-     * Network rows only. Friends and Favorites get nothing: closing a favorite also unfavorites it,
-     * and a full swipe fires the action outright — too easy a way to drop a friend. Their long-press
-     * menu has Close. The server log and the system buffer can't be closed (and neither is ever a
-     * row). A parted channel has nothing to leave, so it's Close — as on the long-press menu.
-     */
-    fun swipeTitle(section: SectionId, row: Row): String? {
-        if (section.reorderable) return null
-        val kind = row.buffer.kind
-        if (kind == BufferKind.Server || kind == BufferKind.System) return null
-        return if (kind == BufferKind.Channel && !row.parted) "Leave" else "Close"
-    }
-
-    /**
      * The long-press menu for [buffer], read from [state] as the menu opens: a drop while it sits
      * open leaves Join enabled, and that JOIN goes nowhere — as a typed `/join` would. Null on the
      * system buffer and a server log, which have no menu.
@@ -930,11 +915,11 @@ object BufferListModel {
      * presence is tracked, and a DCC peer has none — the socket is the whole story), so the item
      * would be a tap that does nothing (lurker#270).
      *
-     * ⚠⚠ Close belongs on THIS menu, not only on the network row's swipe. A favorited buffer has no
-     * network row any more — its Favorites row is where it lives — so without this there is no way
-     * to leave a favorited channel short of unfavoriting it first, and the buffers people favorite
-     * are exactly the ones they keep. The web reaches the same conclusion by giving every row,
-     * favorites included, one menu ending in Close.
+     * ⚠⚠ Close belongs on THIS menu, for every row. It is the only way to leave now that the network
+     * rows' swipe is gone (lurker#1102), and it was already the only way for a favorited buffer: that
+     * has no network row any more — its Favorites row is where it lives — and the buffers people
+     * favorite are exactly the ones they keep. The web reaches the same conclusion by giving every
+     * row, favorites included, one menu ending in Close.
      */
     fun rowMenu(state: ChatState, buffer: Buffer): RowMenu? {
         if (buffer.kind == BufferKind.System || buffer.kind == BufferKind.Server) return null

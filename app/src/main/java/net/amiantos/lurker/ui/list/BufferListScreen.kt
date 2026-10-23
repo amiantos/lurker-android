@@ -9,7 +9,6 @@ import net.amiantos.lurker.platform.LocalToastCenter
 import net.amiantos.lurker.ui.composer.StatusToastPresenter
 import net.amiantos.lurker.ui.networks.NetworkSheets
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -35,9 +34,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxState
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -123,8 +119,8 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
  * @param sideBySide whether the list is beside the conversation rather than instead of it — iOS's
  *   `marksOpenBuffer`. It gates the open mark, and the banner: side by side the conversation pane
  *   carries it, so the two never draw over each other or are read out twice.
- * @param onClose leaves a channel or closes a buffer — the swipe and the menu both come here. False
- *   when it couldn't go out: the row stays, and the swipe puts it back.
+ * @param onClose leaves a channel or closes a buffer, from the row's long-press menu. False when it
+ *   couldn't go out: the row stays.
  * @param onOpenSettings opens Settings, which `MainScaffold` hosts (with Sign Out inside it).
  * @param sheets the networks dialogs, hosted by `MainScaffold`: "+" opens Join Channel and Add
  *   Network, and Settings → Networks opens the networks list over Settings.
@@ -642,7 +638,6 @@ private fun RosterList(
                             )
                         } else {
                             NetworkRow(
-                                sectionId = section.id,
                                 row = entry.row,
                                 isOpen = isOpen(entry.row.buffer),
                                 actions = actions,
@@ -656,12 +651,14 @@ private fun RosterList(
 }
 
 /**
- * A row in a network's group: tap opens, long-press opens the menu, a full swipe from the end
- * leaves or closes. Never reorders — those groups are the same sorted list every time.
+ * A row in a network's group: tap opens, long-press opens the menu. Never reorders — those groups
+ * are the same sorted list every time. And no swipe: a full swipe used to leave or close, and
+ * people left channels by accident scrolling past them (lurker#1102). A destructive action lives
+ * on the long-press menu alone.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun NetworkRow(sectionId: SectionId, row: Row, isOpen: Boolean, actions: BufferListActions) {
+private fun NetworkRow(row: Row, isOpen: Boolean, actions: BufferListActions) {
     RowWithMenu(row = row, actions = actions) { openMenu, _ ->
         val gestures = Modifier.combinedClickable(
             role = Role.Button,
@@ -669,14 +666,7 @@ private fun NetworkRow(sectionId: SectionId, row: Row, isOpen: Boolean, actions:
             onLongClick = openMenu,
             onClick = { actions.onOpen(row) },
         )
-        val swipe = BufferListModel.swipeTitle(sectionId, row)
-        if (swipe == null) {
-            BufferRow(row = row, isOpen = isOpen, gestures = gestures)
-        } else {
-            SwipeToClose(title = swipe, onClose = { actions.onClose(row.buffer) }) {
-                BufferRow(row = row, isOpen = isOpen, gestures = gestures)
-            }
-        }
+        BufferRow(row = row, isOpen = isOpen, gestures = gestures)
     }
 }
 
@@ -861,65 +851,6 @@ private fun RowWithMenu(
                 )
             }
         }
-    }
-}
-
-/**
- * A full swipe from the end leaves or closes — iOS's trailing swipe action, destructive, firing on
- * a full swipe. Half the row's width is the line: far enough that a scroll that drifts sideways
- * doesn't leave a channel, near enough to be one motion.
- *
- * The state is `remember`ed, not saved: a row that comes back (a channel rejoined) must not come
- * back already swiped away.
- */
-@Composable
-private fun SwipeToClose(title: String, onClose: () -> Boolean, content: @Composable () -> Unit) {
-    val state = remember {
-        SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, positionalThreshold = { distance -> distance * 0.5f })
-    }
-    val currentOnClose by rememberUpdatedState(onClose)
-    val scope = rememberCoroutineScope()
-    // Once: the box re-runs its dismiss callback whenever it recomposes still dismissed, and the
-    // row stays composed until the store's removal lands.
-    var fired by remember { mutableStateOf(false) }
-    val onDismiss = remember {
-        { _: SwipeToDismissBoxValue ->
-            if (!fired) {
-                fired = true
-                // A close that couldn't go out leaves the row, so it slides back rather than
-                // sitting swiped off with nothing coming to remove it (sweep L16).
-                // `fired` stays set until the row is home: the box re-runs this while it's still
-                // dismissed, and a second close mid-slide could go out once the connection is back.
-                if (!currentOnClose()) {
-                    scope.launch {
-                        // `finally`: a new drag cancels the reset, and the row must still be closable.
-                        try {
-                            state.reset()
-                        } finally {
-                            fired = false
-                        }
-                    }
-                }
-            }
-        }
-    }
-    SwipeToDismissBox(
-        state = state,
-        enableDismissFromStartToEnd = false,
-        onDismiss = onDismiss,
-        backgroundContent = {
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.error)
-                    .padding(end = RosterMetrics.inset),
-                contentAlignment = Alignment.CenterEnd,
-            ) {
-                Text(title, style = rosterTextStyle(), color = MaterialTheme.colorScheme.onError)
-            }
-        },
-    ) {
-        content()
     }
 }
 
