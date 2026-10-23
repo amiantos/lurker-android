@@ -411,13 +411,12 @@ fun MainScaffold(
     //
     // Offline it says so and leaves the row (sweep L16). Removing it anyway sent no PART, so the
     // reconnect's snapshot put the row back and the channel had never been left.
-    fun close(buffer: Buffer): Boolean {
+    fun close(buffer: Buffer) {
         if (!model.closeBuffer(buffer.key)) {
             events.send(AppEvent.Notice(BufferListModel.NOT_CONNECTED))
-            return false
+            return
         }
         uiPreferences.forgetLastOpenBuffer(ifMatching = buffer.key)
-        return true
     }
 
     // Join Channel, Add Network and the networks list — full-screen dialogs. Here, not in the list

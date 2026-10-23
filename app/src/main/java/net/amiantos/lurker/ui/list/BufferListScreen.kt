@@ -63,7 +63,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
 import net.amiantos.lurker.platform.AppEvent
 import net.amiantos.lurker.platform.LocalAppEvents
 import net.amiantos.lurker.ui.feeds.AppView
@@ -119,8 +118,8 @@ import sh.calvin.reorderable.rememberReorderableLazyListState
  * @param sideBySide whether the list is beside the conversation rather than instead of it — iOS's
  *   `marksOpenBuffer`. It gates the open mark, and the banner: side by side the conversation pane
  *   carries it, so the two never draw over each other or are read out twice.
- * @param onClose leaves a channel or closes a buffer, from the row's long-press menu. False when it
- *   couldn't go out: the row stays.
+ * @param onClose leaves a channel or closes a buffer, from the row's long-press menu. Offline it posts
+ *   the Not Connected notice and the row stays.
  * @param onOpenSettings opens Settings, which `MainScaffold` hosts (with Sign Out inside it).
  * @param sheets the networks dialogs, hosted by `MainScaffold`: "+" opens Join Channel and Add
  *   Network, and Settings → Networks opens the networks list over Settings.
@@ -138,7 +137,7 @@ fun BufferListScreen(
     openKey: BufferKey?,
     sideBySide: Boolean,
     onOpen: (Buffer) -> Unit,
-    onClose: (Buffer) -> Boolean,
+    onClose: (Buffer) -> Unit,
     onOpenSettings: () -> Unit,
     sheets: NetworkSheets,
     onOpenView: (AppView) -> Unit = {},
@@ -340,7 +339,7 @@ fun BufferListScreen(
 /** What the list's touches do. One object so the content composable stays stateless (previews). */
 internal class BufferListActions(
     val onOpen: (Row) -> Unit,
-    val onClose: (Buffer) -> Boolean,
+    val onClose: (Buffer) -> Unit,
     val menuFor: (Buffer) -> RowMenu?,
     val onJoin: (Buffer) -> Unit,
     val onToggleFavorite: (Buffer, isFavorite: Boolean) -> Unit,
@@ -361,7 +360,7 @@ internal class BufferListActions(
         /** Touches that do nothing — for previews. */
         val None = BufferListActions(
             onOpen = {},
-            onClose = { true },
+            onClose = {},
             menuFor = { null },
             onJoin = {},
             onToggleFavorite = { _, _ -> },

@@ -184,7 +184,8 @@ class LurkerColors private constructor(
 
     /**
      * What the buffer list and every roster row stand on. The list paints it and so does each
-     * row — opaque, because a row sliding over its swipe action shows whatever is behind it.
+     * row — opaque, because a lifted row (a drag) slides over its neighbours and a clear one would
+     * show them through its text.
      *
      * iOS's is `systemBackground`, the system's plain-list ground rather than the message list's.
      * Android has no system ground that is Lurker's — the window's ground is [bg] (U0's
