@@ -379,8 +379,8 @@ private fun FeedHeaderLine(row: FeedRow, style: MessageTextStyle, textStyle: Tex
 
 /**
  * A bookmark row with iOS's trailing swipe: a full swipe from the end removes it. Half the width is the
- * line, as the buffer list's swipe draws it — far enough that a scroll drifting sideways doesn't
- * unsave anything. When the verb couldn't go out the row springs back (and the page says why).
+ * line — far enough that a scroll drifting sideways doesn't unsave anything. When the verb couldn't
+ * go out the row springs back (and the page says why).
  *
  * The state is `remember`ed, not saved: a row that comes back after a pull must not come back already
  * swiped away.

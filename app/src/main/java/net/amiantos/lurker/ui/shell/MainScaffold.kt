@@ -400,7 +400,7 @@ fun MainScaffold(
         }
     }
 
-    // Leave a channel / close a DM. Shared by the swipe and the menu rather than written twice:
+    // Leave a channel / close a DM, from the row's long-press menu. One path, even with one caller:
     // the forget half is easy to leave out of a second copy and impossible to notice missing until
     // a relaunch strands someone on a spinner. Closing here is the one moment the client *knows* a
     // buffer is gone; restoring into one that isn't there lands on a spinner, and the launch path
@@ -411,13 +411,12 @@ fun MainScaffold(
     //
     // Offline it says so and leaves the row (sweep L16). Removing it anyway sent no PART, so the
     // reconnect's snapshot put the row back and the channel had never been left.
-    fun close(buffer: Buffer): Boolean {
+    fun close(buffer: Buffer) {
         if (!model.closeBuffer(buffer.key)) {
             events.send(AppEvent.Notice(BufferListModel.NOT_CONNECTED))
-            return false
+            return
         }
         uiPreferences.forgetLastOpenBuffer(ifMatching = buffer.key)
-        return true
     }
 
     // Join Channel, Add Network and the networks list — full-screen dialogs. Here, not in the list
