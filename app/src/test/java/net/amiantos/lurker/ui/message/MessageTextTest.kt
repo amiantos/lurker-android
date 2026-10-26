@@ -11,6 +11,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import net.amiantos.lurker.ui.theme.LurkerColors
 import net.amiantos.lurkerkit.model.CompactDensity
@@ -331,8 +332,8 @@ class MessageTextTest {
     @Test
     fun `a message body sits one character in, first line included`() {
         val indent = body("hi").paragraphStyles.single().item.textIndent!!
-        assertEquals(style.indentSp.sp, indent.firstLine)
-        assertEquals(style.indentSp.sp, indent.restLine)
+        assertEquals(style.indentEm.em, indent.firstLine)
+        assertEquals(style.indentEm.em, indent.restLine)
     }
 
     @Test
@@ -547,6 +548,16 @@ class MessageTextTest {
     }
 
     @Test
+    fun `only an ordinary space stands in for the gap, and painted spaces are text`() {
+        // A no-break space would glue the time to the last word, so a breakable one still follows it.
+        val nbsp = MessageText.renderCompactBody(message("hi\u00A0", type = EventType.Error, nick = null), style, trailingTime = "14:41")
+        assertTrue(nbsp.text.replace("\u2060", "").endsWith("hi\u00A0 14:41"))
+        // A colour bar: spaces on a background, drawn, so the row keeps its time.
+        val bar = MessageText.renderCompactBody(message("\u000300,04   \u0003", type = EventType.Error, nick = null), style, trailingTime = "14:41")
+        assertTrue(bar.text.replace("\u2060", "").endsWith("14:41"))
+    }
+
+    @Test
     fun `a trailing time is spoken without its word joiners`() {
         val line = MessageText.renderCompactBody(message("waves", type = EventType.Action, nick = "bob"), style, trailingTime = "14:41")
         assertEquals("* bob waves 14:41", MessageText.spoken(line))
@@ -574,21 +585,21 @@ class MessageTextTest {
     fun `a message body is indented by the setting, narration keeps its own hang`() {
         val wide = style.copy(density = CompactDensity.of(groupGap = 10, lineHeightPercent = 155, indent = 4))
         val body = MessageText.renderCompactBody(message("hi"), wide).paragraphStyles.single().item.textIndent!!
-        assertEquals((wide.indentSp * 4).sp, body.firstLine)
-        assertEquals((wide.indentSp * 4).sp, body.restLine)
+        assertEquals((wide.indentEm * 4).em, body.firstLine)
+        assertEquals((wide.indentEm * 4).em, body.restLine)
         val me = MessageText.renderCompactBody(message("waves", type = EventType.Action, nick = "bob"), wide)
             .paragraphStyles.single().item.textIndent!!
         assertEquals(0.sp, me.firstLine)
         assertEquals((wide.indentSp * 2).sp, me.restLine)
         val flush = style.copy(density = CompactDensity.of(groupGap = 10, lineHeightPercent = 155, indent = 0))
-        assertEquals(0.sp, MessageText.renderCompactBody(message("hi"), flush).paragraphStyles.single().item.textIndent!!.firstLine)
+        assertEquals(0f, MessageText.renderCompactBody(message("hi"), flush).paragraphStyles.single().item.textIndent!!.firstLine.value)
     }
 
     @Test
     fun `a reply's quote lines up with the body's indent`() {
         val wide = style.copy(density = CompactDensity.of(groupGap = 10, lineHeightPercent = 155, indent = 3))
         val quote = MessageText.renderReplyQuote(null, indented = true, style = wide)
-        assertEquals((wide.indentSp * 3).sp, quote.paragraphStyles.single().item.textIndent!!.firstLine)
+        assertEquals((wide.indentEm * 3).em, quote.paragraphStyles.single().item.textIndent!!.firstLine)
     }
 
     @Test
@@ -650,7 +661,7 @@ class MessageTextTest {
         val line = MessageText.renderReplyQuote(quote(), indented = true, style)
         assertEquals(FontStyle.Italic, line.styleAt(line.indexOf("hello")).fontStyle)
         assertEquals(MessageText.hashedColor("alice", style), line.styleAt(line.indexOf("alice")).color)
-        assertEquals(style.indentSp.sp, line.paragraphStyles.single().item.textIndent!!.firstLine)
+        assertEquals(style.indentEm.em, line.paragraphStyles.single().item.textIndent!!.firstLine)
     }
 
     @Test

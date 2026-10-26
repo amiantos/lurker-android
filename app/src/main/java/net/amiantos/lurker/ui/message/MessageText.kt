@@ -18,6 +18,8 @@ import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import net.amiantos.lurker.ui.theme.LurkerColors
 import net.amiantos.lurkerkit.model.CompactDensity
@@ -65,20 +67,27 @@ data class MessageTextStyle(
     /** The compact face's size, in sp — the one text size. */
     val fontSizeSp: Float = 14f,
     /**
-     * One character of the monospaced face, in sp — iOS's `compactIndent`: the unit a body's indent
-     * is counted in ([bodyIndentSp]), and how far a wrapped narration line hangs. Measured, not
-     * guessed, by the screen; 0.6em is what a monospaced face's advance almost always is.
+     * One character of the monospaced face, in sp — iOS's `compactIndent`: how far a wrapped narration
+     * line hangs. Measured, not guessed, by the screen; 0.6em is what a monospaced face's advance
+     * almost always is.
      */
     val indentSp: Float = fontSizeSp * 0.6f,
-    /** How tightly the rows sit — the settings' units; [bodyIndentSp] and `MessageRow` turn them into sp and dp. */
+    /** How tightly the rows sit — the settings' units; [bodyIndent] and `MessageRow` turn them into em and dp. */
     val density: CompactDensity = CompactDensity.standard,
+    /**
+     * One character as a fraction of the font size — [indentSp] measured against the face rather
+     * than converted to sp. What a count of characters is multiplied in: Android 14's nonlinear font
+     * scaling makes the sp conversion a curve, so eight times a converted character is not eight
+     * characters at a large scale (at 200%, about half). An em is the font size, whatever the scale.
+     */
+    val indentEm: Float = 0.6f,
 ) {
     /**
      * How far a message body sits in from its author: `look.message.compact.indent` characters
-     * (iOS's `CompactSpacing.bodyIndent`). Narration keeps its own one-character hang, as the web's
-     * setting applies only to message bodies.
+     * (iOS's `CompactSpacing.bodyIndent`), in em so it is that many characters at any font scale.
+     * Narration keeps its own one-character hang, as the web's setting applies only to message bodies.
      */
-    val bodyIndentSp: Float get() = indentSp * density.indent
+    val bodyIndent: TextUnit get() = (indentEm * density.indent).em
 
     /**
      * The typing line's keyboard glyph, wide. iOS measures its symbol (about two and a half
@@ -273,23 +282,27 @@ object MessageText {
     /**
      * A header-less row's time, after its text in the muted grey (lurker#1237).
      *
-     * Three quarters of a character in, the web's gap: a space tightened by a quarter — or none, after
-     * a line that already ends in one (a `/me` whose only text was a picture's address). The space is
-     * an ordinary one so a long line can wrap the time to the next row, and the time itself can't
-     * break, as the web's `white-space: nowrap` has it: its spaces are non-breaking and a word joiner
-     * sits between every other pair of characters, so "2026-10-20 14:42" — or a format with no spaces
-     * to protect, like `YYYY年MM月DD日` — moves as one piece. Between grapheme clusters, never inside
+     * Three quarters of a character in, the web's gap: a space tightened by a quarter — the line's own,
+     * when it already ends in one (a `/me` whose only text was a picture's address). The space is an
+     * ordinary one, never a no-break space, so a long line can wrap the time to the next row, and the
+     * time itself can't break, as the web's `white-space: nowrap` has it: its spaces are non-breaking
+     * and a word joiner sits between every other pair of characters, so "2026-10-20 14:42" — or a
+     * format with no spaces to protect, like `YYYY年MM月DD日` — moves as one piece. Between grapheme clusters, never inside
      * one, so an accent or an emoji's selector stays on its character.
      *
      * Nothing on a line with no text at all — a line whose only words were an address its picture
-     * stands in for: a lone time drawn above the picture would read as the row's text.
+     * stands in for: a lone time drawn above the picture would read as the row's text (and `MessageRow`
+     * judges a body by exactly this, an empty string). A line of colour-painted spaces is text: it
+     * draws.
      */
     private fun appendCompactTime(time: String?, line: StyledBody, style: MessageTextStyle) {
         if (time.isNullOrEmpty()) return
-        val text = line.string
-        if (text.trimmingWhitespacesAndNewlines().isEmpty()) return
-        if (!text.last().isInWhitespacesAndNewlines()) {
-            line.append(" ", SpanStyle(letterSpacing = (-style.indentSp / 4).sp))
+        if (line.length == 0) return
+        val gap = SpanStyle(letterSpacing = (-style.indentEm / 4).em)
+        if (line.string.endsWith(' ')) {
+            line.style(TextRange(line.length - 1, line.length), gap)
+        } else {
+            line.append(" ", gap)
         }
         val unbreakable = StringBuilder()
         var start = 0
@@ -470,7 +483,7 @@ object MessageText {
                 }
             }
             if (indented) {
-                val indent = style.bodyIndentSp.sp
+                val indent = style.bodyIndent
                 addStyle(ParagraphStyle(textIndent = TextIndent(firstLine = indent, restLine = indent)), 0, length)
             }
         }
@@ -682,7 +695,7 @@ object MessageText {
 
     /**
      * Indent and seal a line: a message body sits under its author throughout, by
-     * `look.message.compact.indent` ([MessageTextStyle.bodyIndentSp]); narration that names its own
+     * `look.message.compact.indent` ([MessageTextStyle.bodyIndent]); narration that names its own
      * actor — a `/me`, a join, a collapsed run — starts flush, since it *is* the nick line, and only
      * its wrapped continuations tuck in, by its own hang: [indentCharacters] characters, two for a
      * `/me`, whose `* ` prefix is two wide. The setting leaves that hang alone, as the web's applies
@@ -703,7 +716,7 @@ object MessageText {
         val paragraph = if (flushFirstLine) {
             ParagraphStyle(textIndent = TextIndent(firstLine = 0.sp, restLine = (style.indentSp * indentCharacters).sp))
         } else {
-            val indent = style.bodyIndentSp.sp
+            val indent = style.bodyIndent
             ParagraphStyle(textIndent = TextIndent(firstLine = indent, restLine = indent))
         }
         return line.toAnnotatedString(paragraph, linkStyles(style), onToggleSpoiler)

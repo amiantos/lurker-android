@@ -122,6 +122,7 @@ fun rememberMessageTextStyle(compact: CompactDensity = CompactDensity.standard):
                 fontSizeSp = textStyle.fontSize.value,
                 indentSp = width.toSp().value,
                 density = compact,
+                indentEm = width / textStyle.fontSize.toPx(),
             )
         }
     }
@@ -316,7 +317,8 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
     // own one-character hang on a header-less line (a `/me`), whose words start flush and which the
     // setting leaves alone.
     val attachedIndent = with(LocalDensity.current) {
-        (if (plan.indentsBody) style.bodyIndentSp else style.indentSp).sp.toDp()
+        // From the font's real size, as `bodyIndent`'s em is, so the two agree at any font scale.
+        if (plan.indentsBody) (textStyle.fontSize.toPx() * style.indentEm * style.density.indent).toDp() else style.indentSp.sp.toDp()
     }
     val onLongPress = context.onLongPress
     val targets = remember { PressTargets() }
@@ -432,7 +434,7 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
 @Composable
 internal fun HeaderLine(header: CompactHeader, style: MessageTextStyle, textStyle: TextStyle, modifier: Modifier = Modifier) {
     val name = remember(header, style) { MessageText.headerName(header, style) }
-    val gap = with(LocalDensity.current) { (style.indentSp * 0.75f).sp.toDp() }
+    val gap = with(LocalDensity.current) { (textStyle.fontSize.toPx() * style.indentEm * 0.75f).toDp() }
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
         // None when there's no name to show (a reaction to a `/me` in the feed), so the gap doesn't
         // push the time off the leading edge.

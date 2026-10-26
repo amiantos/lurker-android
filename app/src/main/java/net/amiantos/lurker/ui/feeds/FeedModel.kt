@@ -260,7 +260,7 @@ object FeedModel {
             // the hiding — "on “he was a ghost”" would print the secret of your own line.
             val line = reaction.lineText?.let { SpoilerSafeText.of(it).shown } ?: ""
             withStyle(SpanStyle(color = style.colors.fgMuted)) { append(" on “$line”") }
-            val indent = style.bodyIndentSp.sp
+            val indent = style.bodyIndent
             addStyle(ParagraphStyle(textIndent = TextIndent(firstLine = indent, restLine = indent)), 0, length)
         }
 
@@ -298,7 +298,7 @@ object FeedModel {
                 append(Replies.excerpt(safe.shown))
             }
             if (indented) {
-                val indent = style.bodyIndentSp.sp
+                val indent = style.bodyIndent
                 addStyle(ParagraphStyle(textIndent = TextIndent(firstLine = indent, restLine = indent)), 0, length)
             }
         }
