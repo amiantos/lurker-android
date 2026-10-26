@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -143,12 +144,6 @@ internal data class CompactMetrics(
      * scales with the font as iOS's scales with Dynamic Type (`CompactSpacing.blockGap`).
      */
     val blockGap: Dp,
-    /**
-     * The air a marker keeps above and below its text inside its own row: the web's 6px divider
-     * padding, in sp like [blockGap] (`CompactSpacing.markerPadding`). Fixed, not a density: the
-     * setting moves the gap *around* a marker (lurker#1238), never the marker itself.
-     */
-    val markerPadding: Dp,
 ) {
     /** The share of [blockGap] a block keeps inside its own wash, at each end (`compactWashPadding`). */
     val wash: Dp get() = blockGap / 3
@@ -178,6 +173,13 @@ internal data class CompactMetrics(
         /** Air above and below a message's attachments (`CompactCell.showAttachments`). */
         val attachmentsTop: Dp = 6.dp
         val attachmentsBottom: Dp = 8.dp
+
+        /**
+         * The air a marker keeps above and below its text: the web's 6px divider padding, in sp so it
+         * scales with the font like [blockGap]. Fixed, not a density: the setting moves the gap
+         * *around* a marker (lurker#1238), never the marker itself.
+         */
+        val markerPadding: TextUnit = 6.sp
     }
 }
 
@@ -185,7 +187,7 @@ internal data class CompactMetrics(
 internal fun rememberCompactMetrics(compact: CompactDensity = CompactDensity.standard): CompactMetrics {
     val density = LocalDensity.current
     return remember(compact, density) {
-        with(density) { CompactMetrics(blockGap = compact.groupGap.sp.toDp(), markerPadding = 6.sp.toDp()) }
+        CompactMetrics(blockGap = with(density) { compact.groupGap.sp.toDp() })
     }
 }
 
@@ -206,22 +208,23 @@ fun MessageListRow(row: MessageRow, index: Int, context: MessageListContext, mod
  * ⚠ One font size, the app's rule — `bodyMedium`, where iOS draws these a size down (`caption1`).
  *
  * A marker is a block of its own: a cluster boundary, as the web's compact layout treats a divider
- * (lurker#1238). So it takes the wash a block opens with above its text, and the rest of the block gap
- * below it, the way any block's last row does ([CompactRow]). The row above a marker always ends its
+ * (lurker#1238). So it takes the wash a block opens with above its text, and below it the rest of the
+ * block gap and the nudge, the way any block's last row does ([CompactRow]). The row above a marker always ends its
  * block and the row below always starts one (a divider breaks a run), so the marker sits one gap from
  * each neighbour, and two markers in a row sit one gap apart, not two.
  */
 @Composable
 private fun MarkerRow(plan: RowPlan.Marker, metrics: CompactMetrics, modifier: Modifier = Modifier) {
     val colors = LurkerTheme.colors
+    val padding = with(LocalDensity.current) { CompactMetrics.markerPadding.toDp() }
     Text(
         plan.text,
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = CompactMetrics.side)
             .padding(
-                top = metrics.markerPadding + metrics.wash,
-                bottom = metrics.markerPadding + metrics.blockGap - metrics.wash,
+                top = padding + metrics.wash,
+                bottom = padding + metrics.blockGap - metrics.wash + CompactMetrics.washBottomNudge,
             ),
         style = MaterialTheme.typography.bodyMedium,
         color = when (plan.tone) {

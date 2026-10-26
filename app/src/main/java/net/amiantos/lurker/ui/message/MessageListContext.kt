@@ -269,7 +269,9 @@ object MessageListLayout {
                 RowPlan.Compact(
                     content = RowPlan.Content.Of(row.message),
                     header = header,
-                    startsBlock = header != null,
+                    // A caption-less line under a marker still opens a block: the marker closed the
+                    // one above it, and leaves the wash for the row below to take (lurker#1238).
+                    startsBlock = header != null || isMarker(context.row(index - 1)),
                     endsBlock = endsBlock(index, context),
                     highlighted = row.message.matched,
                     reply = replyLine(row.message, row.position, index, context),
@@ -390,6 +392,15 @@ object MessageListLayout {
     /** Whether a header-less row opens a block. Only status narration ever doesn't: a run of joins is one block. */
     fun startsBlock(index: Int, context: MessageListContext): Boolean =
         !(context.isStatusRow(index) && context.isStatusRow(index - 1))
+
+    /** Whether [row] is a marker — what closes the block above it, whatever comes next. */
+    fun isMarker(row: MessageRow?): Boolean =
+        when (row) {
+            MessageRow.UnreadDivider, is MessageRow.DateDivider, MessageRow.StartOfHistory,
+            is MessageRow.ClearedDivider, is MessageRow.AwayDivider, is MessageRow.BackDivider,
+            -> true
+            is MessageRow.Bubble, is MessageRow.Line, is MessageRow.Consolidated, is MessageRow.Typing, null -> false
+        }
 
     /**
      * A reply's quote line, or null when the row isn't a reply — or is the next chunk of one already
