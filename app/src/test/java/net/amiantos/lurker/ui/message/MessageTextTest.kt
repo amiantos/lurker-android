@@ -525,6 +525,34 @@ class MessageTextTest {
     }
 
     @Test
+    fun `a time keeps an accent or an emoji's selector on its character`() {
+        val line = MessageText.renderCompactBody(message(null, type = EventType.Join, nick = "bob"), style, trailingTime = "e\u0301 \u23F0\uFE0F")
+        val time = line.text.substringAfterLast(' ')
+        assertEquals("e\u0301\u00A0\u23F0\uFE0F", time)
+    }
+
+    @Test
+    fun `a line with no text left gets no time, and a trailing space isn't doubled`() {
+        // A nick-less error whose only text was an address its picture stands in for.
+        val error = MessageText.renderCompactBody(
+            message("https://x.test/a.png", type = EventType.Error, nick = null), style,
+            trailingTime = "14:41", hiddenUrls = setOf("https://x.test/a.png"),
+        )
+        assertEquals("", error.text.trim())
+        val me = MessageText.renderCompactBody(
+            message("https://x.test/a.png", type = EventType.Action, nick = "bob"), style,
+            trailingTime = "14:41", hiddenUrls = setOf("https://x.test/a.png"),
+        )
+        assertEquals("* bob 14:41", me.text.replace("\u2060", ""))
+    }
+
+    @Test
+    fun `a trailing time is spoken without its word joiners`() {
+        val line = MessageText.renderCompactBody(message("waves", type = EventType.Action, nick = "bob"), style, trailingTime = "14:41")
+        assertEquals("* bob waves 14:41", MessageText.spoken(line))
+    }
+
+    @Test
     fun `no trailing time leaves the text as it was`() {
         assertEquals(
             MessageText.renderCompactBody(message("waves", type = EventType.Action, nick = "bob"), style).text,

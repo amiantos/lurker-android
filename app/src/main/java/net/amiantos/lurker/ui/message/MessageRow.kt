@@ -400,7 +400,9 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                 ReactionChipRow(
                     chips = chips,
                     style = style,
-                    textStyle = textStyle,
+                    // The face's own line height, not the density's: the setting spaces lines of the
+                    // log, and a chip sized from it would balloon at 250%.
+                    textStyle = textStyle.copy(lineHeight = MaterialTheme.typography.bodyMedium.lineHeight),
                     onToggle = { value -> context.reactions?.onToggle?.invoke(message, value) },
                     onOpen = context.reactions?.let { reactions -> { reactions.onOpen(message) } },
                     // Under the body, lined up with its words. Placed before the padding, so a long

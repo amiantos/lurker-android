@@ -213,7 +213,7 @@ lurker-ios#241 (lurker#1179, lurker#1224, lurker#1237), the compact layout's cat
 
 | Swift file | Lines | Status | Notes |
 |---|---:|---|---|
-| `Model/CompactDensity.swift` | 50 | ported | The clamping initialisers are `of(groupGap:lineHeightPercent:indent:)` and `of(settings)`: a data class's constructor can't clamp, so it takes values as given. |
+| `Model/CompactDensity.swift` | 50 | ported | The clamping initialisers are `of(groupGap, lineHeightPercent, indent)` and `of(settings)`: a data class's constructor can't clamp, so it (and `copy`) is private and `of` is the only way in. |
 | `Model/TimestampFormat.swift` | 95 | ported | LurkerKit's `calendar` is `zone`, a `ZoneId`: `java.time` is always ISO, so there is no calendar to pin Gregorian, and a `ZoneId.systemDefault()` default is read per call, which follows a zone change as the autoupdating zone does. Walks UTF-16 units, where the Swift walks scalars; the tokens are ASCII, so the output is the same. |
 
 ## Tests

@@ -17,7 +17,7 @@ class CompactDensityTests {
         CompactDensity.of(Settings(registry = emptyMap(), values = values))
 
     @Test fun testNothingStoredIsTheRegistryDefaults() {
-        assertEquals(CompactDensity(groupGap = 10, lineHeightPercent = 155, indent = 1), density())
+        assertEquals(CompactDensity.of(groupGap = 10, lineHeightPercent = 155, indent = 1), density())
         assertEquals(CompactDensity.standard, density())
     }
 
@@ -42,7 +42,7 @@ class CompactDensityTests {
                 CompactDensity.indentKey to SettingValue.Int(-1),
             ),
         )
-        assertEquals(CompactDensity(groupGap = 0, lineHeightPercent = 100, indent = 0), low)
+        assertEquals(CompactDensity.of(groupGap = 0, lineHeightPercent = 100, indent = 0), low)
         val high = density(
             mapOf(
                 CompactDensity.groupGapKey to SettingValue.Int(99),
@@ -50,7 +50,7 @@ class CompactDensityTests {
                 CompactDensity.indentKey to SettingValue.Int(20),
             ),
         )
-        assertEquals(CompactDensity(groupGap = 48, lineHeightPercent = 250, indent = 8), high)
+        assertEquals(CompactDensity.of(groupGap = 48, lineHeightPercent = 250, indent = 8), high)
     }
 
     @Test fun testAValueOfTheWrongTypeFallsBackToTheDefault() {

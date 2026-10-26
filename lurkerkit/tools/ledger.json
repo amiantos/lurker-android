@@ -289,7 +289,7 @@
     "Model/StatusNotification.swift": "`id` is a `UUID` minted per instance, as in the Swift; the data class compares every field, which is the same answer as LurkerKit's `==` on `id` alone. `cameOnline(frame, before, now)` is internal, as the Swift's is. `sound(settings)` / `sound(kind, settings)` take the settings as a plain parameter (the Swift's `in:` label).",
     "Model/StatusToast.swift": "`StatusToastQueue` is case 3 (a struct whose mutators return values): a plain mutable class with `private set` on `active` and `waiting`, one owner (a surface's presenter), never published. `presentNext` returns a `Presented(toast, hold: Duration)` for the Swift's named tuple.",
     "Model/TimestampFormat.swift": "LurkerKit's `calendar` is `zone`, a `ZoneId`: `java.time` is always ISO, so there is no calendar to pin Gregorian, and a `ZoneId.systemDefault()` default is read per call, which follows a zone change as the autoupdating zone does. Walks UTF-16 units, where the Swift walks scalars; the tokens are ASCII, so the output is the same.",
-    "Model/CompactDensity.swift": "The clamping initialisers are `of(groupGap:lineHeightPercent:indent:)` and `of(settings)`: a data class's constructor can't clamp, so it takes values as given."
+    "Model/CompactDensity.swift": "The clamping initialisers are `of(groupGap, lineHeightPercent, indent)` and `of(settings)`: a data class's constructor can't clamp, so it (and `copy`) is private and `of` is the only way in."
   },
   "testNotes": {
     "NotificationTapTests.swift": {

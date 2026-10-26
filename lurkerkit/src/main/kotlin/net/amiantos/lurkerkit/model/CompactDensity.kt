@@ -12,7 +12,8 @@ package net.amiantos.lurkerkit.model
  * density saved into a custom theme only reaches the phone once the apps resolve themes
  * (lurker#1094) — the same gap every other themed key has today.
  */
-data class CompactDensity(
+@ConsistentCopyVisibility
+data class CompactDensity private constructor(
     /**
      * Space between blocks, in points. The web puts it before each head line, action, notice, event
      * and divider; the apps put it after the block above, which is the same gap between two blocks,
@@ -30,7 +31,8 @@ data class CompactDensity(
     val indent: Int,
 ) {
     // Port note: LurkerKit's initialiser clamps, which a data class's constructor can't. [of] is that
-    // initialiser; the constructor takes values as given, for in-range literals like [standard].
+    // initialiser, and the constructor (and `copy`) is private, so nothing builds one out of range: a
+    // negative gap would reach a `padding` that throws.
 
     companion object {
         const val groupGapKey = "look.message.compact.group_gap"

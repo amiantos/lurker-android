@@ -273,28 +273,43 @@ object MessageText {
     /**
      * A header-less row's time, after its text in the muted grey (lurker#1237).
      *
-     * Three quarters of a character in, the web's gap: a space tightened by a quarter. The space is an
-     * ordinary one so a long line can wrap the time to the next row, and the time itself can't break,
-     * as the web's `white-space: nowrap` has it: its spaces are non-breaking and a word joiner sits
-     * between every other pair of characters, so "2026-10-20 14:42" — or a format with no spaces to
-     * protect, like `YYYY年MM月DD日` — moves as one piece.
+     * Three quarters of a character in, the web's gap: a space tightened by a quarter — or none, after
+     * a line that already ends in one (a `/me` whose only text was a picture's address). The space is
+     * an ordinary one so a long line can wrap the time to the next row, and the time itself can't
+     * break, as the web's `white-space: nowrap` has it: its spaces are non-breaking and a word joiner
+     * sits between every other pair of characters, so "2026-10-20 14:42" — or a format with no spaces
+     * to protect, like `YYYY年MM月DD日` — moves as one piece. Between grapheme clusters, never inside
+     * one, so an accent or an emoji's selector stays on its character.
+     *
+     * Nothing on a line with no text at all — a line whose only words were an address its picture
+     * stands in for: a lone time drawn above the picture would read as the row's text.
      */
     private fun appendCompactTime(time: String?, line: StyledBody, style: MessageTextStyle) {
         if (time.isNullOrEmpty()) return
-        line.append(" ", SpanStyle(letterSpacing = (-style.indentSp / 4).sp))
+        val text = line.string
+        if (text.trimmingWhitespacesAndNewlines().isEmpty()) return
+        if (!text.last().isInWhitespacesAndNewlines()) {
+            line.append(" ", SpanStyle(letterSpacing = (-style.indentSp / 4).sp))
+        }
         val unbreakable = StringBuilder()
-        for (char in time) {
-            if (char == ' ') {
+        var start = 0
+        for (end in graphemeEnds(time)) {
+            val cluster = time.substring(start, end)
+            start = end
+            if (cluster == " ") {
                 unbreakable.append('\u00A0')
                 continue
             }
+            // Not beside a non-breaking space, which holds already.
             val last = unbreakable.lastOrNull()
-            // Not inside a surrogate pair, and not beside a non-breaking space, which holds already.
-            if (last != null && last != '\u00A0' && !char.isLowSurrogate()) unbreakable.append('\u2060')
-            unbreakable.append(char)
+            if (last != null && last != '\u00A0') unbreakable.append(WORD_JOINER)
+            unbreakable.append(cluster)
         }
         line.append(unbreakable.toString(), muted(style))
     }
+
+    /** What keeps a trailing time in one piece: layout, not text, so speech leaves it out. */
+    private const val WORD_JOINER = '\u2060'
 
     /**
      * "⌨ alice, bob" — the live composing line at the foot of the buffer (lurker-ios#61).
@@ -540,6 +555,15 @@ object MessageText {
                 hidden.add(range)
             }
         }
+        // A trailing time's word joiners (`appendCompactTime`) say nothing: each is replaced with
+        // nothing, through the same substitution, so the links after one keep their place.
+        val boxes = hidden.toList()
+        plain.forEachIndexed { index, char ->
+            if (char == WORD_JOINER && boxes.none { index >= it.start && index < it.end }) {
+                hidden.add(AnnotatedString.Range("", index, index + 1))
+            }
+        }
+        hidden.sortBy { it.start }
         val spoken = buildAnnotatedString {
             fun segment(from: Int, to: Int) {
                 if (from >= to) return
