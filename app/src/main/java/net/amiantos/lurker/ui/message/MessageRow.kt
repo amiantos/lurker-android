@@ -41,6 +41,7 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -148,7 +149,20 @@ internal data class CompactMetrics(
     /** The share of [blockGap] a block keeps inside its own wash, at each end (`compactWashPadding`). */
     val wash: Dp get() = blockGap / 3
 
+    /**
+     * The gap a marker carries above its text: the wash a block opens with ([MarkerRow]). Part of the
+     * space between two rows, not of the marker, so it doesn't count toward the marker being on screen.
+     */
+    val markerGapAbove: Dp get() = wash
+
+    /** The gap a marker carries below its text: the rest of the block gap and the nudge ([MarkerRow]). */
+    val markerGapBelow: Dp get() = blockGap - wash + washBottomNudge
+
     companion object {
+        /** `look.message.compact.group_gap` at [density]'s font scale. */
+        fun of(compact: CompactDensity, density: Density): CompactMetrics =
+            CompactMetrics(blockGap = with(density) { compact.groupGap.sp.toDp() })
+
         /** A row's own side margins, so a cutout or a rail can't swallow a timestamp (`useOwnSideMargins`). */
         val side: Dp = 20.dp
 
@@ -187,7 +201,7 @@ internal data class CompactMetrics(
 internal fun rememberCompactMetrics(compact: CompactDensity = CompactDensity.standard): CompactMetrics {
     val density = LocalDensity.current
     return remember(compact, density) {
-        CompactMetrics(blockGap = with(density) { compact.groupGap.sp.toDp() })
+        CompactMetrics.of(compact, density)
     }
 }
 
@@ -223,8 +237,8 @@ private fun MarkerRow(plan: RowPlan.Marker, metrics: CompactMetrics, modifier: M
             .fillMaxWidth()
             .padding(horizontal = CompactMetrics.side)
             .padding(
-                top = padding + metrics.wash,
-                bottom = padding + metrics.blockGap - metrics.wash + CompactMetrics.washBottomNudge,
+                top = padding + metrics.markerGapAbove,
+                bottom = padding + metrics.markerGapBelow,
             ),
         style = MaterialTheme.typography.bodyMedium,
         color = when (plan.tone) {

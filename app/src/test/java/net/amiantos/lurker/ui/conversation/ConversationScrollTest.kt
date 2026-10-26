@@ -980,6 +980,25 @@ class ConversationScrollTest {
     }
 
     @Test
+    fun `the divider's group gap peeking in isn't the divider on screen`() {
+        val (_, built) = withDivider()
+        val divider = built.itemIndex(built.dividerRow!!)
+        fun facts(scrolled: Int, above: Int, below: Int) =
+            LayoutFacts.of(laidOut(built, 20, 60, scrolled), built, 60, 80, 300, dividerGapAbove = above, dividerGapBelow = below)!!
+        // Its bottom 5px in at the top edge: the gap under "New messages", when it carries 8px of one
+        // (lurker#1238) — still above, not reached.
+        val bottomEdge = divider * 20 - 55
+        assertTrue(facts(bottomEdge, 0, 0).dividerVisible)
+        assertFalse(facts(bottomEdge, 0, 8).dividerVisible)
+        assertTrue(facts(bottomEdge, 0, 8).dividerAbove)
+        // Its top 5px in at the bottom edge: the gap over it.
+        val topEdge = divider * 20 + 15
+        assertTrue(facts(topEdge, 0, 0).dividerVisible)
+        assertFalse(facts(topEdge, 8, 0).dividerVisible)
+        assertFalse(facts(topEdge, 8, 0).dividerAbove)
+    }
+
+    @Test
     fun `distances to an edge that isn't laid out are estimated from the rows that are`() {
         val scroll = machine()
         val built = build(scroll, state(messages = msgs(1L..100L)))

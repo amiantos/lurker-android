@@ -113,6 +113,7 @@ import net.amiantos.lurker.ui.uploads.ComposerInsertTarget
 import net.amiantos.lurker.ui.uploads.LocalUploadServices
 import net.amiantos.lurker.ui.uploads.UploadTargets
 import net.amiantos.lurker.ui.uploads.rememberAttachments
+import net.amiantos.lurker.ui.message.CompactMetrics
 import net.amiantos.lurker.ui.message.MessageListContext
 import net.amiantos.lurker.ui.message.MessageListLayout
 import net.amiantos.lurker.ui.message.MessageListRow
@@ -559,12 +560,15 @@ fun ConversationScreen(
                     return@collect
                 }
                 val info = sample.layout
+                val metrics = CompactMetrics.of(CompactDensity.of(rows.inputs.settings), density)
                 val facts = LayoutFacts.of(
                     items = info.visibleItemsInfo.map { VisibleItem(it.key, it.index, it.offset, it.size) },
                     built = rows,
                     contentEnd = info.viewportEndOffset - info.afterContentPadding,
                     nearBottomPx = followSlop,
                     pagingPx = pagingDistance,
+                    dividerGapAbove = with(density) { metrics.markerGapAbove.roundToPx() },
+                    dividerGapBelow = with(density) { metrics.markerGapBelow.roundToPx() },
                 ) ?: return@collect
                 jobs.nearBottom = facts.nearBottom
                 // Read live, as iOS's `isDetached` is: whether a page is worth asking for is a question
