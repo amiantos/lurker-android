@@ -44,6 +44,15 @@ sealed interface RowPress {
  * press is let go the moment the finger moves past the touch slop (the list is being scrolled),
  * lifts early (it was a tap), or a second finger lands.
  *
+ * The slop alone misses a scroll, though: it's measured in the row's space, and the row is a list
+ * item. A touch that lands while the list is still coasting is scrolled from its first move, so the
+ * row follows the finger and the finger hardly moves relative to it (lurker-android#92). That list
+ * consumes the down itself, on this same Initial pass and ahead of the row, so a consumed down is let
+ * go at once: a touch that stops a scroll is the scroll's, even held still. A link or chip consumes
+ * its down only later, on the Main pass. Each move is also checked on the Final pass, after the list
+ * has had it: a move something consumed means the touch became a scroll, the same check
+ * `detectTapGestures` makes for its own long press.
+ *
  * A plain detector rather than `combinedClickable`: that would make the whole row a click target
  * (a ripple over every line, and a TalkBack "double-tap to activate" that does nothing), and its long
  * press would race the chips' own.
@@ -54,6 +63,7 @@ internal fun Modifier.longPressAnywhere(onLongPress: (Offset) -> Boolean): Modif
     return pointerInput(Unit) {
         awaitEachGesture {
             val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            if (down.isConsumed) return@awaitEachGesture
             var letGo = false
             withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
                 while (!letGo) {
@@ -61,6 +71,7 @@ internal fun Modifier.longPressAnywhere(onLongPress: (Offset) -> Boolean): Modif
                     val change = event.changes.firstOrNull { it.id == down.id }
                     letGo = change == null || !change.pressed || event.changes.size > 1 ||
                         (change.position - down.position).getDistance() > viewConfiguration.touchSlop
+                    if (!letGo) letGo = awaitPointerEvent(PointerEventPass.Final).changes.any { it.isConsumed }
                 }
             }
             if (letGo || !current(down.position)) return@awaitEachGesture
