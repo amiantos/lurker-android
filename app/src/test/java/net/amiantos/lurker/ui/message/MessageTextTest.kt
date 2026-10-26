@@ -558,6 +558,17 @@ class MessageTextTest {
     }
 
     @Test
+    fun `a space under a hidden spoiler isn't the time's gap, and no space in a time can break`() {
+        val me = MessageText.renderCompactBody(
+            message("\u000301,01secret \u000F", type = EventType.Action, nick = "bob"), style,
+            trailingTime = "14:42", onToggleSpoiler = { },
+        )
+        assertTrue(MessageText.spoken(me).endsWith(" 14:42"))
+        val accent = MessageText.renderCompactBody(message(null, type = EventType.Join, nick = "bob"), style, trailingTime = "14:42 \u0301ss")
+        assertFalse(accent.text.substringAfter("joined").drop(1).contains(' '))
+    }
+
+    @Test
     fun `a trailing time is spoken without its word joiners`() {
         val line = MessageText.renderCompactBody(message("waves", type = EventType.Action, nick = "bob"), style, trailingTime = "14:41")
         assertEquals("* bob waves 14:41", MessageText.spoken(line))

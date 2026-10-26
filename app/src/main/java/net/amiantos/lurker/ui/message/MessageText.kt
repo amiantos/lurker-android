@@ -299,7 +299,9 @@ object MessageText {
         if (time.isNullOrEmpty()) return
         if (line.length == 0) return
         val gap = SpanStyle(letterSpacing = (-style.indentEm / 4).em)
-        if (line.string.endsWith(' ')) {
+        // Only a plain space: one under a hidden spoiler is replaced in speech along with the box,
+        // which would run the time into the announcement.
+        if (line.string.endsWith(' ') && !line.hidden(line.length - 1)) {
             line.style(TextRange(line.length - 1, line.length), gap)
         } else {
             line.append(" ", gap)
@@ -316,7 +318,8 @@ object MessageText {
             // Not beside a non-breaking space, which holds already.
             val last = unbreakable.lastOrNull()
             if (last != null && last != '\u00A0') unbreakable.append(WORD_JOINER)
-            unbreakable.append(cluster)
+            // A space a combining mark sits on is one cluster with it, and still a break.
+            unbreakable.append(cluster.replace(' ', '\u00A0'))
         }
         line.append(unbreakable.toString(), muted(style))
     }
