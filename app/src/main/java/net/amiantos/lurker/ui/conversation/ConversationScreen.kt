@@ -131,6 +131,7 @@ import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.BufferPlaceholder
+import net.amiantos.lurkerkit.model.CompactDensity
 import net.amiantos.lurkerkit.model.ConnectionBannerState
 import net.amiantos.lurkerkit.model.LinkPreview
 import net.amiantos.lurkerkit.model.Message
@@ -611,7 +612,8 @@ fun ConversationScreen(
     }
 
     val day = clock.value
-    val style = rememberMessageTextStyle()
+    // The density rides the style (lurker#1224), so a change made on the web redraws the rows.
+    val style = rememberMessageTextStyle(CompactDensity.of(inputs.settings))
     val haptics = LocalHapticFeedback.current
 
     // The message sheets — actions, reactions, Ignore (lurker-ios#60, #183).

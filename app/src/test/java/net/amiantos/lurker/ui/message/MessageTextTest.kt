@@ -11,8 +11,10 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import net.amiantos.lurker.ui.theme.LurkerColors
+import net.amiantos.lurkerkit.model.CompactDensity
 import net.amiantos.lurkerkit.model.ConsolidationSummary
 import net.amiantos.lurkerkit.model.ConsolidationSummary.Entry
 import net.amiantos.lurkerkit.model.ConsolidationSummary.IdentityGroup
@@ -330,8 +332,8 @@ class MessageTextTest {
     @Test
     fun `a message body sits one character in, first line included`() {
         val indent = body("hi").paragraphStyles.single().item.textIndent!!
-        assertEquals(style.indentSp.sp, indent.firstLine)
-        assertEquals(style.indentSp.sp, indent.restLine)
+        assertEquals(style.indentEm.em, indent.firstLine)
+        assertEquals(style.indentEm.em, indent.restLine)
     }
 
     @Test
@@ -373,10 +375,10 @@ class MessageTextTest {
     }
 
     @Test
-    fun `a relay source trails the name, faint`() {
+    fun `a relay source trails the name, in the time's grey`() {
         val name = MessageText.headerName(CompactHeader("alice", Color.Red, time = null, relaySource = "github"), style)
         assertEquals("alice github", name.text)
-        assertEquals(colors.fgFaint, name.styleAt(name.indexOf("github")).color)
+        assertEquals(colors.fgMuted, name.styleAt(name.indexOf("github")).color)
         // A plain nick is the body's weight too.
         assertNull(name.styleAt(0).fontWeight)
     }
@@ -505,9 +507,110 @@ class MessageTextTest {
     // MARK: - Times and markers
 
     @Test
-    fun `a header time is 24-hour minutes`() {
-        assertEquals("14:42", MessageText.compactHeaderTime(Instant.parse("2026-07-25T14:42:59Z"), ZoneOffset.UTC))
-        assertEquals("02:05", MessageText.compactHeaderTime(Instant.parse("2026-07-25T02:05:00Z"), ZoneOffset.UTC))
+    fun `a header-less row's time follows its text, muted, and moves as one piece`() {
+        val line = MessageText.renderCompactBody(message("waves", type = EventType.Action, nick = "bob"), style, trailingTime = "2026-07-24 14:41")
+        val time = line.text.substringAfter("waves ")
+        // A non-breaking space, and a word joiner between every other pair: nowhere to wrap inside.
+        assertEquals("2026-07-24\u00A014:41", time.replace("\u2060", ""))
+        assertFalse(time.contains(' '))
+        assertEquals("2\u20600\u20602\u20606\u2060-", time.take(9))
+        assertEquals(colors.fgMuted, line.styleAt(line.text.lastIndex).color)
+    }
+
+    @Test
+    fun `a time in a format with no spaces still can't break`() {
+        val line = MessageText.renderCompactBody(message(null, type = EventType.Join, nick = "bob"), style, trailingTime = "2026年07月24日")
+        val time = line.text.substringAfterLast(' ')
+        assertEquals("2026年07月24日", time.replace("\u2060", ""))
+        assertEquals("2026年07月24日".length * 2 - 1, time.length)
+    }
+
+    @Test
+    fun `a time keeps an accent or an emoji's selector on its character`() {
+        val line = MessageText.renderCompactBody(message(null, type = EventType.Join, nick = "bob"), style, trailingTime = "e\u0301 \u23F0\uFE0F")
+        val time = line.text.substringAfterLast(' ')
+        assertEquals("e\u0301\u00A0\u23F0\uFE0F", time)
+    }
+
+    @Test
+    fun `a line with no text left gets no time, and a trailing space isn't doubled`() {
+        // A nick-less error whose only text was an address its picture stands in for.
+        val error = MessageText.renderCompactBody(
+            message("https://x.test/a.png", type = EventType.Error, nick = null), style,
+            trailingTime = "14:41", hiddenUrls = setOf("https://x.test/a.png"),
+        )
+        assertEquals("", error.text.trim())
+        val me = MessageText.renderCompactBody(
+            message("https://x.test/a.png", type = EventType.Action, nick = "bob"), style,
+            trailingTime = "14:41", hiddenUrls = setOf("https://x.test/a.png"),
+        )
+        assertEquals("* bob 14:41", me.text.replace("\u2060", ""))
+    }
+
+    @Test
+    fun `only an ordinary space stands in for the gap, and painted spaces are text`() {
+        // A no-break space would glue the time to the last word, so a breakable one still follows it.
+        val nbsp = MessageText.renderCompactBody(message("hi\u00A0", type = EventType.Error, nick = null), style, trailingTime = "14:41")
+        assertTrue(nbsp.text.replace("\u2060", "").endsWith("hi\u00A0 14:41"))
+        // A colour bar: spaces on a background, drawn, so the row keeps its time.
+        val bar = MessageText.renderCompactBody(message("\u000300,04   \u0003", type = EventType.Error, nick = null), style, trailingTime = "14:41")
+        assertTrue(bar.text.replace("\u2060", "").endsWith("14:41"))
+    }
+
+    @Test
+    fun `a space under a hidden spoiler isn't the time's gap, and no space in a time can break`() {
+        val me = MessageText.renderCompactBody(
+            message("\u000301,01secret \u000F", type = EventType.Action, nick = "bob"), style,
+            trailingTime = "14:42", onToggleSpoiler = { },
+        )
+        assertTrue(MessageText.spoken(me).endsWith(" 14:42"))
+        val accent = MessageText.renderCompactBody(message(null, type = EventType.Join, nick = "bob"), style, trailingTime = "14:42 \u0301ss")
+        assertFalse(accent.text.substringAfter("joined").drop(1).contains(' '))
+    }
+
+    @Test
+    fun `a trailing time is spoken without its word joiners`() {
+        val line = MessageText.renderCompactBody(message("waves", type = EventType.Action, nick = "bob"), style, trailingTime = "14:41")
+        assertEquals("* bob waves 14:41", MessageText.spoken(line))
+    }
+
+    @Test
+    fun `no trailing time leaves the text as it was`() {
+        assertEquals(
+            MessageText.renderCompactBody(message("waves", type = EventType.Action, nick = "bob"), style).text,
+            MessageText.renderCompactBody(message("waves", type = EventType.Action, nick = "bob"), style, trailingTime = null).text,
+        )
+        assertEquals("* bob waves", MessageText.renderCompactBody(message("waves", type = EventType.Action, nick = "bob"), style).text)
+    }
+
+    @Test
+    fun `a consolidation carries its time after its text`() {
+        val summary = ConsolidationSummary(
+            groups = listOf(IdentityGroup(Kind.Joined, listOf(Entry.Nick("a")), hidden = 0)),
+            date = null, firstId = 1, lastId = 2,
+        )
+        assertTrue(MessageText.renderCompactConsolidation(summary, style, trailingTime = "14:41").text.endsWith(" 1\u20604\u2060:\u20604\u20601"))
+    }
+
+    @Test
+    fun `a message body is indented by the setting, narration keeps its own hang`() {
+        val wide = style.copy(density = CompactDensity.of(groupGap = 10, lineHeightPercent = 155, indent = 4))
+        val body = MessageText.renderCompactBody(message("hi"), wide).paragraphStyles.single().item.textIndent!!
+        assertEquals((wide.indentEm * 4).em, body.firstLine)
+        assertEquals((wide.indentEm * 4).em, body.restLine)
+        val me = MessageText.renderCompactBody(message("waves", type = EventType.Action, nick = "bob"), wide)
+            .paragraphStyles.single().item.textIndent!!
+        assertEquals(0.sp, me.firstLine)
+        assertEquals((wide.indentSp * 2).sp, me.restLine)
+        val flush = style.copy(density = CompactDensity.of(groupGap = 10, lineHeightPercent = 155, indent = 0))
+        assertEquals(0f, MessageText.renderCompactBody(message("hi"), flush).paragraphStyles.single().item.textIndent!!.firstLine.value)
+    }
+
+    @Test
+    fun `a reply's quote lines up with the body's indent`() {
+        val wide = style.copy(density = CompactDensity.of(groupGap = 10, lineHeightPercent = 155, indent = 3))
+        val quote = MessageText.renderReplyQuote(null, indented = true, style = wide)
+        assertEquals((wide.indentEm * 3).em, quote.paragraphStyles.single().item.textIndent!!.firstLine)
     }
 
     @Test
@@ -569,7 +672,7 @@ class MessageTextTest {
         val line = MessageText.renderReplyQuote(quote(), indented = true, style)
         assertEquals(FontStyle.Italic, line.styleAt(line.indexOf("hello")).fontStyle)
         assertEquals(MessageText.hashedColor("alice", style), line.styleAt(line.indexOf("alice")).color)
-        assertEquals(style.indentSp.sp, line.paragraphStyles.single().item.textIndent!!.firstLine)
+        assertEquals(style.indentEm.em, line.paragraphStyles.single().item.textIndent!!.firstLine)
     }
 
     @Test

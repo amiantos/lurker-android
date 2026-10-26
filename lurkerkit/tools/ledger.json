@@ -1,5 +1,5 @@
 {
-  "pin": "baad0069abb2fe0aed00a96b3b4b25680e1223aa",
+  "pin": "e34823ff75a3b6b12eab0f68ebdcde3dbc6c0689",
   "tranches": [
     {
       "id": "T1",
@@ -197,6 +197,15 @@
         "Model/StatusNotification.swift",
         "Model/StatusToast.swift"
       ]
+    },
+    {
+      "id": "S7",
+      "title": "Sync to lurker-ios e34823f",
+      "about": "lurker-ios#241 (lurker#1179, lurker#1224, lurker#1237), the compact layout's catch-up with the PWA: `TimestampFormat` (the web's `formatTimestamp` tokens, and a compact line's time with the date before it on another day) and `CompactDensity` (`look.message.compact.group_gap`, `line_height` and `indent`, clamped) are new. Both ported.",
+      "files": [
+        "Model/TimestampFormat.swift",
+        "Model/CompactDensity.swift"
+      ]
     }
   ],
   "notes": {
@@ -278,7 +287,9 @@
     "Commands/ColorMarkup.swift": "Cells, the bare head and `prefix` are grapheme clusters (`graphemeBoundaries`), as LurkerKit's `Character`s; a CRLF is one cell. `chatBody` alone builds its cells per UTF-16 unit, because `SpoilerMarkup.layout` must be read in the units `apply` walks — so it agrees with `apply` (and the web) where LurkerKit doesn't: a combining mark after a `|` or `\\`. `CommandParser` cuts by unit, so a `/` or a space wearing a mark is read differently by the two; Port note. `ColorSpan` is an immutable data class.",
     "Commands/TextEdit.swift": "Snaps to grapheme clusters where LurkerKit asks `rangeOfComposedCharacterSequence`, which ends between the halves of a CRLF and treats a regional indicator wearing a mark differently. Against the Swift, 122 of 4,000 generated edits fell elsewhere (115 at a CRLF), each giving the same text; these never cut a cluster. Returns `TextEdit.Difference` (`TextRange` for `NSRange`).",
     "Model/StatusNotification.swift": "`id` is a `UUID` minted per instance, as in the Swift; the data class compares every field, which is the same answer as LurkerKit's `==` on `id` alone. `cameOnline(frame, before, now)` is internal, as the Swift's is. `sound(settings)` / `sound(kind, settings)` take the settings as a plain parameter (the Swift's `in:` label).",
-    "Model/StatusToast.swift": "`StatusToastQueue` is case 3 (a struct whose mutators return values): a plain mutable class with `private set` on `active` and `waiting`, one owner (a surface's presenter), never published. `presentNext` returns a `Presented(toast, hold: Duration)` for the Swift's named tuple."
+    "Model/StatusToast.swift": "`StatusToastQueue` is case 3 (a struct whose mutators return values): a plain mutable class with `private set` on `active` and `waiting`, one owner (a surface's presenter), never published. `presentNext` returns a `Presented(toast, hold: Duration)` for the Swift's named tuple.",
+    "Model/TimestampFormat.swift": "LurkerKit's `calendar` is `zone`, a `ZoneId`: `java.time` is always ISO, so there is no calendar to pin Gregorian, and a `ZoneId.systemDefault()` default is read per call, which follows a zone change as the autoupdating zone does. Walks UTF-16 units, where the Swift walks scalars; the tokens are ASCII, so the output is the same.",
+    "Model/CompactDensity.swift": "The clamping initialisers are `of(groupGap, lineHeightPercent, indent)` and `of(settings)`: a data class's constructor can't clamp, so it (and `copy`) is private and `of` is the only way in."
   },
   "testNotes": {
     "NotificationTapTests.swift": {
@@ -333,6 +344,9 @@
     },
     "WebPushTestEncryptor.swift": {
       "note": "Test support for `WebPushCryptoTests`; lurker-android#80's `WebPushTestEncrypt.kt` is its twin."
+    },
+    "TimestampFormatTests.swift": {
+      "note": "`testTheDefaultCalendarIsGregorian` checks that the default zone path prints the Gregorian year; there is no calendar identifier to assert."
     }
   },
   "partial": {}

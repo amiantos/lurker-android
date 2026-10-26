@@ -120,6 +120,9 @@ internal class StyledBody : AttributedBody {
 
     override fun ink(index: Int): Boolean = marks.any { it.kind === Kind.Ink && index >= it.start && index < it.end }
 
+    /** Whether [index] is under a still-hidden spoiler, whose text speech replaces with its announcement. */
+    fun hidden(index: Int): Boolean = marks.any { it.kind is Kind.Hidden && index >= it.start && index < it.end }
+
     override fun inkRanges(): List<TextRange> =
         marks.filter { it.kind === Kind.Ink }.map { TextRange(it.start, it.end) }
 
