@@ -143,6 +143,12 @@ internal data class CompactMetrics(
      * scales with the font as iOS's scales with Dynamic Type (`CompactSpacing.blockGap`).
      */
     val blockGap: Dp,
+    /**
+     * The air a marker keeps above and below its text inside its own row: the web's 6px divider
+     * padding, in sp like [blockGap] (`CompactSpacing.markerPadding`). Fixed, not a density: the
+     * setting moves the gap *around* a marker (lurker#1238), never the marker itself.
+     */
+    val markerPadding: Dp,
 ) {
     /** The share of [blockGap] a block keeps inside its own wash, at each end (`compactWashPadding`). */
     val wash: Dp get() = blockGap / 3
@@ -172,9 +178,6 @@ internal data class CompactMetrics(
         /** Air above and below a message's attachments (`CompactCell.showAttachments`). */
         val attachmentsTop: Dp = 6.dp
         val attachmentsBottom: Dp = 8.dp
-
-        /** A marker's breathing room — iOS's default cell margins around one line. */
-        val markerVertical: Dp = 10.dp
     }
 }
 
@@ -182,7 +185,7 @@ internal data class CompactMetrics(
 internal fun rememberCompactMetrics(compact: CompactDensity = CompactDensity.standard): CompactMetrics {
     val density = LocalDensity.current
     return remember(compact, density) {
-        CompactMetrics(blockGap = with(density) { compact.groupGap.sp.toDp() })
+        with(density) { CompactMetrics(blockGap = compact.groupGap.sp.toDp(), markerPadding = 6.sp.toDp()) }
     }
 }
 
@@ -192,7 +195,7 @@ internal fun rememberCompactMetrics(compact: CompactDensity = CompactDensity.sta
 @Composable
 fun MessageListRow(row: MessageRow, index: Int, context: MessageListContext, modifier: Modifier = Modifier) {
     when (val plan = MessageListLayout.plan(row, index, context)) {
-        is RowPlan.Marker -> MarkerRow(plan, modifier)
+        is RowPlan.Marker -> MarkerRow(plan, rememberCompactMetrics(context.style.density), modifier)
         is RowPlan.Compact -> CompactRow(plan, context, modifier)
     }
 }
@@ -201,15 +204,25 @@ fun MessageListRow(row: MessageRow, index: Int, context: MessageListContext, mod
  * A centred marker row. Set in the system face, not the log's: it isn't a line of the log.
  *
  * ⚠ One font size, the app's rule — `bodyMedium`, where iOS draws these a size down (`caption1`).
+ *
+ * A marker is a block of its own: a cluster boundary, as the web's compact layout treats a divider
+ * (lurker#1238). So it takes the wash a block opens with above its text, and the rest of the block gap
+ * below it, the way any block's last row does ([CompactRow]). The row above a marker always ends its
+ * block and the row below always starts one (a divider breaks a run), so the marker sits one gap from
+ * each neighbour, and two markers in a row sit one gap apart, not two.
  */
 @Composable
-private fun MarkerRow(plan: RowPlan.Marker, modifier: Modifier = Modifier) {
+private fun MarkerRow(plan: RowPlan.Marker, metrics: CompactMetrics, modifier: Modifier = Modifier) {
     val colors = LurkerTheme.colors
     Text(
         plan.text,
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = CompactMetrics.side, vertical = CompactMetrics.markerVertical),
+            .padding(horizontal = CompactMetrics.side)
+            .padding(
+                top = metrics.markerPadding + metrics.wash,
+                bottom = metrics.markerPadding + metrics.blockGap - metrics.wash,
+            ),
         style = MaterialTheme.typography.bodyMedium,
         color = when (plan.tone) {
             MarkerTone.Unread -> colors.badText
