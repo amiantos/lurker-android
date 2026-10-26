@@ -26,6 +26,7 @@ import net.amiantos.lurkerkit.model.HighlightItem
 import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.ReplyQuote
+import net.amiantos.lurkerkit.model.TimestampFormat
 import net.amiantos.lurkerkit.rendering.IRCFormatting
 import net.amiantos.lurkerkit.store.ChatState
 import java.time.Instant
@@ -186,9 +187,10 @@ object FeedModel {
      * One row, as iOS's `cellForRowAt` builds it.
      *
      * Every row is its own block — they come from different buffers and hours — so each carries a header
-     * with its time, as a run's first line does in the message list. No nick for a `/me` or an activity line, which print their actor
-     * inside the sentence; the header stays, carrying the time alone, since the section header gives
-     * only the day.
+     * with its time, as a run's first line does in the message list. No header for a `/me` or an
+     * activity line, which print their actor inside the sentence: their time follows their text, as in
+     * the list (lurker#1237). Every row carries a time, but never the date, which the section header
+     * already gives. A reaction row is headed whatever its line, since its body is the reaction.
      *
      * No matched wash: in Activity every row matched (a monotone wall), and in Bookmarks it would claim
      * a mention that isn't what put the row there. And no live links ([inert]): a tap anywhere on the
@@ -207,7 +209,8 @@ object FeedModel {
             item.message
         }
         val name = if (line.type.isBubble) MessageText.caption(line, networkName) else null
-        val time = line.date?.let { MessageText.compactHeaderTime(it, zone) }
+        val time = line.date?.let { TimestampFormat.compact(it, state.settings, withDate = false, zone = zone) }
+        val headed = name != null || reaction != null
         val shown = if (reaction == null) {
             Replies.presenting(
                 listOf(line),
@@ -220,9 +223,13 @@ object FeedModel {
         } else {
             line
         }
-        val rendered = if (reaction != null) reactionBody(reaction, style) else MessageText.renderCompactBody(shown, style)
+        val rendered = if (reaction != null) {
+            reactionBody(reaction, style)
+        } else {
+            MessageText.renderCompactBody(shown, style, trailingTime = if (headed) null else time, settings = state.settings)
+        }
         val indentsBody = shown.type != EventType.Action
-        val header = if (name == null && time == null) {
+        val header = if (!headed || (name == null && time == null)) {
             null
         } else {
             CompactHeader(
@@ -253,7 +260,7 @@ object FeedModel {
             // the hiding — "on “he was a ghost”" would print the secret of your own line.
             val line = reaction.lineText?.let { SpoilerSafeText.of(it).shown } ?: ""
             withStyle(SpanStyle(color = style.colors.fgMuted)) { append(" on “$line”") }
-            val indent = style.indentSp.sp
+            val indent = style.bodyIndentSp.sp
             addStyle(ParagraphStyle(textIndent = TextIndent(firstLine = indent, restLine = indent)), 0, length)
         }
 
@@ -291,7 +298,7 @@ object FeedModel {
                 append(Replies.excerpt(safe.shown))
             }
             if (indented) {
-                val indent = style.indentSp.sp
+                val indent = style.bodyIndentSp.sp
                 addStyle(ParagraphStyle(textIndent = TextIndent(firstLine = indent, restLine = indent)), 0, length)
             }
         }

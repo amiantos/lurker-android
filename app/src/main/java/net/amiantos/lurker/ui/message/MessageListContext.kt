@@ -16,7 +16,9 @@ import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.ReplyQuote
 import net.amiantos.lurkerkit.model.RunPosition
 import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.model.TimestampFormat
 import net.amiantos.lurkerkit.rendering.NickHighlighter
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.Locale
@@ -223,6 +225,12 @@ sealed interface RowPlan {
         /** False for a header-less narration line (a `/me`), whose quote starts flush as the line does. */
         val indentsBody: Boolean = true,
         val reactions: ReactionChips? = null,
+        /**
+         * The time after the body's text, for a row with no header to carry it — a `/me`, a join, a
+         * collapsed run, a line with nothing to call it (lurker#1237). Null on a headed row, a run's
+         * continuation, and wherever the format hides the time.
+         */
+        val trailingTime: String? = null,
     ) : RowPlan
 
     /** What a compact row's body is made from. */
@@ -266,6 +274,14 @@ object MessageListLayout {
                     highlighted = row.message.matched,
                     reply = replyLine(row.message, row.position, index, context),
                     reactions = reactions(row.message, context),
+                    // A line with nothing to call it — a nick-less error, server text before its
+                    // network resolves — has no header to carry its time, at the head of its run or
+                    // after it, so the time follows the text as on any header-less row.
+                    trailingTime = if (header == null && MessageText.caption(row.message, context.networkName(row.message)) == null) {
+                        time(row.message.date, context)
+                    } else {
+                        null
+                    },
                 )
             }
             is MessageRow.Line -> RowPlan.Compact(
@@ -279,12 +295,15 @@ object MessageListLayout {
                 // does too.
                 indentsBody = false,
                 reactions = reactions(row.message, context),
+                // No header to carry its time, so the time follows the text (lurker#1237).
+                trailingTime = time(row.message.date, context),
             )
             is MessageRow.Consolidated -> RowPlan.Compact(
                 content = RowPlan.Content.Summary(row.summary),
                 header = null,
                 startsBlock = startsBlock(index, context),
                 endsBlock = endsBlock(index, context),
+                trailingTime = time(row.summary.date, context),
             )
             is MessageRow.Typing -> RowPlan.Compact(
                 content = RowPlan.Content.Typists(row.nicks),
@@ -302,6 +321,22 @@ object MessageListLayout {
                 RowPlan.Marker(MessageText.clearedLabel(row.at, context.zone, context.locale), MarkerTone.Muted)
             is MessageRow.AwayDivider -> RowPlan.Marker(MessageText.awayLabel(row.awayMessage), MarkerTone.Muted)
             is MessageRow.BackDivider -> RowPlan.Marker(MessageText.backLabel(row.awayAt, row.at), MarkerTone.Muted)
+        }
+
+    /**
+     * A compact line's time: `look.buffer.time_format_compact`, with the date before it on a line from
+     * a day other than [MessageListContext.today] — the screen's day, advanced at midnight, so a
+     * redraw past midnight dates yesterday's lines. Null when the format hides it, or the line has no
+     * clock.
+     */
+    fun time(date: Instant?, context: MessageListContext): String? =
+        date?.let {
+            TimestampFormat.compact(
+                it,
+                context.settings,
+                now = context.today.atStartOfDay(context.zone).toInstant(),
+                zone = context.zone,
+            )
         }
 
     /**
@@ -324,7 +359,7 @@ object MessageListLayout {
         return CompactHeader(
             nick = name,
             color = MessageText.captionColor(message, networkName, context.style),
-            time = message.date?.let { MessageText.compactHeaderTime(it, context.zone) },
+            time = time(message.date, context),
             // Only when `caption` actually used it: it prefixes a nick and nothing else. ⚠ Asked by
             // building the caption without it, never by `name.startsWith(prefix)`: a network's own
             // symbol can be any character (lurker-ios#191), and with PREFIX `(ov)-+` a notice's

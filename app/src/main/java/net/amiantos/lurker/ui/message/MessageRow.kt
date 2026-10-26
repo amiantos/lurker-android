@@ -50,6 +50,7 @@ import net.amiantos.lurker.ui.media.PreviewPlan
 import net.amiantos.lurker.ui.media.PreviewUpdates
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
+import net.amiantos.lurkerkit.model.CompactDensity
 import net.amiantos.lurkerkit.model.ConsolidationSummary
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Message
@@ -61,20 +62,22 @@ import net.amiantos.lurkerkit.rendering.NickHighlighter
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
-import kotlin.math.ceil
 
 /*
  * One row of the compact message list, as lurker-ios's `CompactCell` and `MessageListMarker` draw it:
  *
- *     alice                      14:42
+ *     alice 14:42
  *      morning — did the deploy land?
  *      and is the changelog updated?
- *     bob
+ *     bob joined 14:43
+ *     bob 14:43
  *      yeah, ten minutes ago
  *
- * The PWA's compact layout: a header with the nick and the time at the trailing edge opens each
- * author run, and the run's later lines carry no time. A run lasts while the same author keeps
- * talking within `look.message.collapse_authors_window`, whatever the minute.
+ * The PWA's compact layout: a header with the nick and then its time opens each author run, and the
+ * run's later lines carry no time. A run lasts while the same author keeps talking within
+ * `look.message.collapse_authors_window`, whatever the minute. A header-less row — a `/me`, a join, a
+ * collapsed run — carries its time after its text. Nothing sits at the trailing edge (lurker#1237).
+ * How far apart it all sits is `look.message.compact.*` (lurker#1224), on `MessageTextStyle.density`.
  *
  * What to draw is `MessageListLayout.plan`'s decision; this file only draws it.
  */
@@ -83,42 +86,61 @@ import kotlin.math.ceil
  * The compact face: the monospaced system font at the app's one text size — a fixed-width log, the
  * way irssi and weechat look. `bodyMedium`, the buffer list's size (`rosterTextStyle`), so the list
  * and the log beside it read as one surface. lurker-ios's `MessageRenderer.compactFont`.
+ *
+ * Its line height is `look.message.compact.line_height`, a percentage of the font size as the web's
+ * CSS reads it — the leading Compose splits above and below each line, which is the gap iOS spends
+ * between wrapped lines and around each row (`CompactSpacing.lineGap`).
  */
 @Composable
-fun compactTextStyle(): TextStyle =
-    MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace, color = LurkerTheme.colors.fg)
+fun compactTextStyle(density: CompactDensity = CompactDensity.standard): TextStyle {
+    val base = MaterialTheme.typography.bodyMedium
+    return base.copy(
+        fontFamily = FontFamily.Monospace,
+        color = LurkerTheme.colors.fg,
+        lineHeight = (base.fontSize.value * density.lineHeightPercent / 100f).sp,
+    )
+}
 
 /**
- * The renderer's inputs for this screen: the scheme's colours, and the compact face measured — one
+ * The renderer's inputs for this screen: the scheme's colours, the compact face measured — one
  * character of it is the indent everything hangs by, and it moves with the font scale, so it is
- * measured rather than assumed. iOS's `compactMetrics`, cached there per content size category;
- * remembered here per style and density.
+ * measured rather than assumed — and the density the screen's settings give ([compact], the
+ * registry's for a surface they don't reach). iOS's `compactMetrics`, cached there per content size
+ * category; remembered here per style and density.
  */
 @Composable
-fun rememberMessageTextStyle(): MessageTextStyle {
+fun rememberMessageTextStyle(compact: CompactDensity = CompactDensity.standard): MessageTextStyle {
     val colors = LurkerTheme.colors
-    val textStyle = compactTextStyle()
+    val textStyle = compactTextStyle(compact)
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
-    return remember(colors, textStyle, density) {
+    return remember(colors, textStyle, density, compact) {
         val width = measurer.measure(" ", textStyle).size.width
         with(density) {
-            MessageTextStyle(colors = colors, fontSizeSp = textStyle.fontSize.value, indentSp = width.toSp().value)
+            MessageTextStyle(
+                colors = colors,
+                fontSizeSp = textStyle.fontSize.value,
+                indentSp = width.toSp().value,
+                density = compact,
+            )
         }
     }
 }
 
 /**
- * The vertical rhythm, point for dp from `CompactCell` and `MessageRenderer`'s compact constants.
+ * The vertical rhythm, point for dp from `CompactCell` and `MessageRenderer.CompactSpacing`.
  *
- * The line gap iOS spends at each end of a row (`compactLineGap / 2`) is already inside a Compose
- * text's line height — `bodyMedium`'s 20sp centres its glyphs with the leading split above and below
- * — so two stacked rows are exactly one wrapped line apart, which is the rhythm that constant exists
- * to keep. What's left to add is what iOS adds on top of it.
+ * The line gap iOS spends at each end of a row (`lineGap / 2`) is already inside a Compose text's
+ * line height — [compactTextStyle] centres its glyphs with the leading split above and below — so two
+ * stacked rows are exactly one wrapped line apart, which is the rhythm that gap exists to keep.
+ * What's left to add is what iOS adds on top of it.
  */
 @Immutable
 internal data class CompactMetrics(
-    /** The gap after the last row of an author block: three quarters of a line (`compactBlockGap`). */
+    /**
+     * The gap after the last row of an author block: `look.message.compact.group_gap`, in sp so it
+     * scales with the font as iOS's scales with Dynamic Type (`CompactSpacing.blockGap`).
+     */
     val blockGap: Dp,
 ) {
     /** The share of [blockGap] a block keeps inside its own wash, at each end (`compactWashPadding`). */
@@ -129,8 +151,8 @@ internal data class CompactMetrics(
         val side: Dp = 20.dp
 
         /**
-         * What a header's gap adds over a body line's (`compactHeaderGap` 4 against the line gap 3):
-         * a name and the words under it are less alike than two body lines are.
+         * What a header's gap adds over a body line's (`CompactSpacing.headerGap`, the line gap plus
+         * one): a name and the words under it are less alike than two body lines are.
          */
         val headerGap: Dp = 1.dp
 
@@ -156,11 +178,10 @@ internal data class CompactMetrics(
 }
 
 @Composable
-internal fun rememberCompactMetrics(textStyle: TextStyle = compactTextStyle()): CompactMetrics {
+internal fun rememberCompactMetrics(compact: CompactDensity = CompactDensity.standard): CompactMetrics {
     val density = LocalDensity.current
-    return remember(textStyle, density) {
-        val line = with(density) { textStyle.lineHeight.toDp() }
-        CompactMetrics(blockGap = ceil(line.value * 0.75f).dp)
+    return remember(compact, density) {
+        CompactMetrics(blockGap = with(density) { compact.groupGap.sp.toDp() })
     }
 }
 
@@ -219,8 +240,8 @@ private fun MarkerRow(plan: RowPlan.Marker, modifier: Modifier = Modifier) {
 private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modifier: Modifier = Modifier) {
     val style = context.style
     val colors = style.colors
-    val textStyle = compactTextStyle()
-    val metrics = rememberCompactMetrics(textStyle)
+    val textStyle = compactTextStyle(style.density)
+    val metrics = rememberCompactMetrics(style.density)
     val content = plan.content
     val message = (content as? RowPlan.Content.Of)?.message
     val revealed = message?.let(context.revealedSpoilers) ?: emptySet()
@@ -237,10 +258,11 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
         if (message == null || previews == null) PreviewPlan.None else previews.plan(message)
     }
     val body: AnnotatedString = when (content) {
-        is RowPlan.Content.Of -> remember(content.message, revealed, context.highlighter, context.settings, style, previewPlan.hidden) {
+        is RowPlan.Content.Of -> remember(content.message, revealed, context.highlighter, context.settings, style, previewPlan.hidden, plan.trailingTime) {
             MessageText.renderCompactBody(
                 content.message,
                 style = style,
+                trailingTime = plan.trailingTime,
                 settings = context.settings,
                 highlighter = context.highlighter,
                 revealed = revealed,
@@ -248,8 +270,8 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                 onToggleSpoiler = { ordinal -> context.onToggleSpoiler(content.message, ordinal) },
             )
         }
-        is RowPlan.Content.Summary -> remember(content.summary, style) {
-            MessageText.renderCompactConsolidation(content.summary, style)
+        is RowPlan.Content.Summary -> remember(content.summary, style, plan.trailingTime) {
+            MessageText.renderCompactConsolidation(content.summary, style, plan.trailingTime)
         }
         is RowPlan.Content.Typists -> remember(content.nicks, style) {
             MessageText.renderCompactTyping(content.nicks, style) ?: AnnotatedString("")
@@ -290,6 +312,12 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
         if (actions.isNotEmpty()) customActions = actions
     }
     val hasBody = body.isNotEmpty()
+    // What the attachments and chips line up with: the body's setting under a header, the narration's
+    // own one-character hang on a header-less line (a `/me`), whose words start flush and which the
+    // setting leaves alone.
+    val attachedIndent = with(LocalDensity.current) {
+        (if (plan.indentsBody) style.bodyIndentSp else style.indentSp).sp.toDp()
+    }
     val onLongPress = context.onLongPress
     val targets = remember { PressTargets() }
     val pressable = if (onLongPress == null) {
@@ -349,10 +377,9 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                     inlineContent = if (content is RowPlan.Content.Typists) typingGlyph(colors.fgMuted) else emptyMap(),
                 )
             }
-            // Link previews and inline media (`MessageAttachmentsView`), one character in, as the body
-            // sits under its author — on a `/me` too, as iOS indents them. Air above and below, so a
-            // picture doesn't read as belonging to the next author's line; inside the wash, since it
-            // belongs to this message.
+            // Link previews and inline media (`MessageAttachmentsView`), lined up with the words above
+            // them (`attachedIndent`). Air above and below, so a picture doesn't read as belonging to
+            // the next author's line; inside the wash, since it belongs to this message.
             if (previews != null && previewPlan.resolved.isNotEmpty()) {
                 MessageAttachments(
                     previews = previewPlan.resolved,
@@ -362,7 +389,7 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                     onLinkActions = onLongPress?.let { press -> { url -> press(RowPress.Link(url)) } },
                     onPlaced = { url, coordinates -> targets.attachments[url] = coordinates },
                     modifier = Modifier.padding(
-                        start = with(LocalDensity.current) { style.indentSp.sp.toDp() },
+                        start = attachedIndent,
                         top = CompactMetrics.attachmentsTop,
                         bottom = CompactMetrics.attachmentsBottom,
                     ),
@@ -376,10 +403,10 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                     textStyle = textStyle,
                     onToggle = { value -> context.reactions?.onToggle?.invoke(message, value) },
                     onOpen = context.reactions?.let { reactions -> { reactions.onOpen(message) } },
-                    // Under the body, one character in, as the body sits under its author. Placed
-                    // before the padding, so a long press in the padding still counts as on the chips.
+                    // Under the body, lined up with its words. Placed before the padding, so a long
+                    // press in the padding still counts as on the chips.
                     modifier = Modifier.onPlaced { targets.chips = it }.padding(
-                        start = with(LocalDensity.current) { style.indentSp.sp.toDp() },
+                        start = attachedIndent,
                         top = CompactMetrics.reactionTop,
                         bottom = CompactMetrics.reactionBottom,
                     ),
@@ -390,24 +417,35 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
 }
 
 /**
- * The author line: the name (with its rank glyph and relay source) on the leading edge, the time on
- * the trailing one. The name truncates before the clock does: a long nick is recoverable from context,
- * a half-drawn time is just wrong.
+ * The author line: the name (with its rank glyph and relay source), then its time, as Slack and
+ * Discord place it — nothing at the trailing edge (lurker#1237). The feed draws its rows' headers
+ * with this too.
+ *
+ * The name truncates before the clock does: a long nick is recoverable from context, a half-drawn time
+ * is just wrong. A `Row` measures the unweighted time first, so it always gets its width; the name,
+ * weighted without filling, takes what's left and no more. The time may wrap only when it alone is
+ * wider than the row — an older line's `2026-10-20 14:42` at the largest font scales — which beats
+ * running off the edge. Three quarters of a character apart, the web's gap.
  */
 @Composable
-private fun HeaderLine(header: CompactHeader, style: MessageTextStyle, textStyle: TextStyle, modifier: Modifier) {
+internal fun HeaderLine(header: CompactHeader, style: MessageTextStyle, textStyle: TextStyle, modifier: Modifier = Modifier) {
     val name = remember(header, style) { MessageText.headerName(header, style) }
-    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            name,
-            modifier = Modifier.weight(1f).alignByBaseline(),
-            style = textStyle,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+    val gap = with(LocalDensity.current) { (style.indentSp * 0.75f).sp.toDp() }
+    Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
+        // None when there's no name to show (a reaction to a `/me` in the feed), so the gap doesn't
+        // push the time off the leading edge.
+        if (name.isNotEmpty()) {
+            Text(
+                name,
+                modifier = Modifier.weight(1f, fill = false).alignByBaseline(),
+                style = textStyle,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
         val time = header.time
         if (time != null) {
-            Text(time, modifier = Modifier.alignByBaseline(), style = textStyle, color = style.colors.fgMuted, maxLines = 1)
+            Text(time, modifier = Modifier.alignByBaseline(), style = textStyle, color = style.colors.fgMuted)
         }
     }
 }

@@ -20,6 +20,7 @@ import androidx.compose.ui.text.style.TextIndent
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.sp
 import net.amiantos.lurker.ui.theme.LurkerColors
+import net.amiantos.lurkerkit.model.CompactDensity
 import net.amiantos.lurkerkit.model.ConsolidationSummary
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Message
@@ -49,12 +50,14 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * What the renderer draws with: the scheme's colours, and the compact face's two measurements.
- * lurker-ios's `UITraitCollection` + `Palette`, as the inputs `MessageRenderer` takes — a plain
- * value, so every function below is pure and runs in a JVM test.
+ * What the renderer draws with: the scheme's colours, the compact face's two measurements, and the
+ * density (`look.message.compact.*`, lurker#1224). lurker-ios's `UITraitCollection` + `Palette` +
+ * `CompactSpacing`, as the inputs `MessageRenderer` takes — a plain value, so every function below is
+ * pure and runs in a JVM test.
  *
- * Built once per screen from the theme and the measured face (`rememberMessageTextStyle`); the
- * defaults are the 14sp `bodyMedium` a phone gets at the default font scale, for tests and previews.
+ * Built once per screen from the theme, the measured face and the settings
+ * (`rememberMessageTextStyle`); the defaults are the 14sp `bodyMedium` a phone gets at the default
+ * font scale and the registry's density, for tests and previews.
  */
 @Immutable
 data class MessageTextStyle(
@@ -62,12 +65,21 @@ data class MessageTextStyle(
     /** The compact face's size, in sp — the one text size. */
     val fontSizeSp: Float = 14f,
     /**
-     * One character of the monospaced face, in sp — iOS's `compactIndent`: how far a body sits in
-     * from its author, and how far a wrapped narration line hangs. Measured, not guessed, by the
-     * screen; 0.6em is what a monospaced face's advance almost always is.
+     * One character of the monospaced face, in sp — iOS's `compactIndent`: the unit a body's indent
+     * is counted in ([bodyIndentSp]), and how far a wrapped narration line hangs. Measured, not
+     * guessed, by the screen; 0.6em is what a monospaced face's advance almost always is.
      */
     val indentSp: Float = fontSizeSp * 0.6f,
+    /** How tightly the rows sit — the settings' units; [bodyIndentSp] and `MessageRow` turn them into sp and dp. */
+    val density: CompactDensity = CompactDensity.standard,
 ) {
+    /**
+     * How far a message body sits in from its author: `look.message.compact.indent` characters
+     * (iOS's `CompactSpacing.bodyIndent`). Narration keeps its own one-character hang, as the web's
+     * setting applies only to message bodies.
+     */
+    val bodyIndentSp: Float get() = indentSp * density.indent
+
     /**
      * The typing line's keyboard glyph, wide. iOS measures its symbol (about two and a half
      * characters at the default size); this one is a fixed slice of the font size, so it tracks the
@@ -162,9 +174,10 @@ object MessageText {
      * The name itself is the body's weight, as the web and lurker-ios draw it. The glyph's bold is
      * the exception (iOS and Android; the web leaves it at body weight).
      *
-     * The source (#277) is unbracketed and `fgFaint`, a tier below the timestamp at the other end of
-     * the row: a hint, not a field. Last on the line on purpose — the name truncates from the tail, so
-     * under width pressure the provenance goes before the speaker does.
+     * The source (#277) is unbracketed and in the timestamp's `fgMuted`, as the web draws it: it sits
+     * between the name and the time, and reads as part of the grey after the name — a hint, not a
+     * field. Last in the name on purpose — the name truncates from the tail, so under width pressure
+     * the provenance goes before the speaker does.
      */
     fun headerName(header: CompactHeader, style: MessageTextStyle): AnnotatedString = buildAnnotatedString {
         val mark = header.modeMark
@@ -180,18 +193,21 @@ object MessageText {
         }
         val source = header.relaySource
         if (!source.isNullOrEmpty()) {
-            withStyle(SpanStyle(color = style.colors.fgFaint)) { append(" $source") }
+            withStyle(SpanStyle(color = style.colors.fgMuted)) { append(" $source") }
         }
     }
 
     // MARK: - Compact rows
 
     /**
-     * The body of a compact row — the text alone, with no time and no author.
+     * The body of a compact row — the text, with no author.
      *
-     * Those are the row's (`MessageRow` draws the header), which is what lets several messages from
-     * one person stack under a single nick. Same mIRC colours, same auto-linking, same nick colouring
-     * inside the body as the web.
+     * The author is the row's (`MessageRow` draws the header), which is what lets several messages
+     * from one person stack under a single nick. Same mIRC colours, same auto-linking, same nick
+     * colouring inside the body as the web.
+     *
+     * [trailingTime] is for a row with no header to carry its time — a `/me`, a join, an error: the
+     * time follows the text, as the web's compact layout has it (lurker#1237).
      *
      * @param revealed which of this message's spoilers the reader has opened, by ordinal.
      * @param hiddenUrls the addresses a link preview stands in for, taken out of the text — the row's
@@ -201,6 +217,7 @@ object MessageText {
     fun renderCompactBody(
         message: Message,
         style: MessageTextStyle,
+        trailingTime: String? = null,
         settings: Settings = Settings(),
         highlighter: NickHighlighter? = null,
         revealed: Set<Int> = emptySet(),
@@ -213,6 +230,7 @@ object MessageText {
             val line = StyledBody()
             line.append("* ${message.nick ?: "*"} ", SpanStyle(color = color))
             line.append(body(message, style, fallback = color, highlighter, revealed, hiddenUrls))
+            appendCompactTime(trailingTime, line, style)
             // Two, to clear the `* ` this line opens with.
             return finish(line, style, flushFirstLine = true, indentCharacters = 2, onToggleSpoiler = onToggleSpoiler)
         }
@@ -220,29 +238,62 @@ object MessageText {
             // No arrow column. "alice joined" already says which direction it went, and the
             // narration starts flush with the nicks above it, so arrows would be an extra column of
             // punctuation buying nothing.
-            return finish(activity(message, style, settings, revealed), style, flushFirstLine = true, onToggleSpoiler = onToggleSpoiler)
+            val line = activity(message, style, settings, revealed)
+            appendCompactTime(trailingTime, line, style)
+            return finish(line, style, flushFirstLine = true, onToggleSpoiler = onToggleSpoiler)
         }
         // `fg`, explicitly: `body` stamps a foreground on every run, so this fallback IS the log's
         // primary text colour.
-        return finish(
-            body(message, style, fallback = style.colors.fg, highlighter, revealed, hiddenUrls),
-            style,
-            flushFirstLine = false,
-            onToggleSpoiler = onToggleSpoiler,
-        )
+        val line = body(message, style, fallback = style.colors.fg, highlighter, revealed, hiddenUrls)
+        appendCompactTime(trailingTime, line, style)
+        // A headed body is indented by the setting; an error, which is header-less but not narration,
+        // sits under it the same way.
+        return finish(line, style, flushFirstLine = false, onToggleSpoiler = onToggleSpoiler)
     }
 
     /**
      * A collapsed run — "alice, bob and 3 others joined; dave left". Nicks keep their colours; the
-     * categories and connectives are muted. Header-less, like the activity lines it stands for.
+     * categories and connectives are muted. Header-less, like the activity lines it stands for, with
+     * its time after its text.
      */
-    fun renderCompactConsolidation(summary: ConsolidationSummary, style: MessageTextStyle): AnnotatedString {
+    fun renderCompactConsolidation(
+        summary: ConsolidationSummary,
+        style: MessageTextStyle,
+        trailingTime: String? = null,
+    ): AnnotatedString {
         val line = StyledBody()
         summary.groups.forEachIndexed { index, group ->
             if (index > 0) line.append("; ", muted(style))
             identityClause(group, style, line)
         }
+        appendCompactTime(trailingTime, line, style)
         return finish(line, style, flushFirstLine = true, onToggleSpoiler = null)
+    }
+
+    /**
+     * A header-less row's time, after its text in the muted grey (lurker#1237).
+     *
+     * Three quarters of a character in, the web's gap: a space tightened by a quarter. The space is an
+     * ordinary one so a long line can wrap the time to the next row, and the time itself can't break,
+     * as the web's `white-space: nowrap` has it: its spaces are non-breaking and a word joiner sits
+     * between every other pair of characters, so "2026-10-20 14:42" — or a format with no spaces to
+     * protect, like `YYYY年MM月DD日` — moves as one piece.
+     */
+    private fun appendCompactTime(time: String?, line: StyledBody, style: MessageTextStyle) {
+        if (time.isNullOrEmpty()) return
+        line.append(" ", SpanStyle(letterSpacing = (-style.indentSp / 4).sp))
+        val unbreakable = StringBuilder()
+        for (char in time) {
+            if (char == ' ') {
+                unbreakable.append('\u00A0')
+                continue
+            }
+            val last = unbreakable.lastOrNull()
+            // Not inside a surrogate pair, and not beside a non-breaking space, which holds already.
+            if (last != null && last != '\u00A0' && !char.isLowSurrogate()) unbreakable.append('\u2060')
+            unbreakable.append(char)
+        }
+        line.append(unbreakable.toString(), muted(style))
     }
 
     /**
@@ -287,18 +338,6 @@ object MessageText {
             if (!inline) addStyle(ParagraphStyle(textIndent = TextIndent(firstLine = 0.sp, restLine = indent.sp)), 0, length)
         }
     }
-
-    /**
-     * `14:42` for a compact header.
-     *
-     * Minutes, not seconds: the stamp speaks for a whole run. Fixed rather than read from
-     * `look.buffer.time_format_compact`, whose default this matches. 24-hour through the root
-     * locale, as iOS uses POSIX, since `HH` in some locales still comes out in other digits.
-     */
-    fun compactHeaderTime(instant: Instant, zone: ZoneId = ZoneId.systemDefault()): String =
-        headerTimeFormatter.withZone(zone).format(instant)
-
-    private val headerTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT)
 
     // MARK: - Markers
 
@@ -390,8 +429,8 @@ object MessageText {
      * nothing to quote it says so.
      *
      * The arm is upright and lifted a little: in an italic line a slanted corner stops lining up, and
-     * on the baseline it sits below the text's middle. [indented] lines it up with a body that sits
-     * one character in; a header-less narration line's quote starts flush, as the line does.
+     * on the baseline it sits below the text's middle. [indented] lines it up with a body, which sits
+     * in by the indent setting; a header-less narration line's quote starts flush, as the line does.
      */
     fun renderReplyQuote(quote: ReplyQuote?, indented: Boolean, style: MessageTextStyle): AnnotatedString =
         buildAnnotatedString {
@@ -416,7 +455,7 @@ object MessageText {
                 }
             }
             if (indented) {
-                val indent = style.indentSp.sp
+                val indent = style.bodyIndentSp.sp
                 addStyle(ParagraphStyle(textIndent = TextIndent(firstLine = indent, restLine = indent)), 0, length)
             }
         }
@@ -618,14 +657,17 @@ object MessageText {
     }
 
     /**
-     * Indent and seal a line: a message body sits under its author throughout; narration that names
-     * its own actor — a `/me`, a join, a collapsed run — starts flush, since it *is* the nick line,
-     * and only its wrapped continuations tuck in. [indentCharacters] is two for a `/me`, whose `* `
-     * prefix is two characters wide. iOS's `spaced`.
+     * Indent and seal a line: a message body sits under its author throughout, by
+     * `look.message.compact.indent` ([MessageTextStyle.bodyIndentSp]); narration that names its own
+     * actor — a `/me`, a join, a collapsed run — starts flush, since it *is* the nick line, and only
+     * its wrapped continuations tuck in, by its own hang: [indentCharacters] characters, two for a
+     * `/me`, whose `* ` prefix is two wide. The setting leaves that hang alone, as the web's applies
+     * only to message bodies. iOS's `spaced`.
      *
-     * The line spacing iOS sets here (`compactLineGap`) is the text style's line height on Android:
-     * `bodyMedium`'s 20sp already puts a wrapped line the same distance from the next as one message
-     * is from the next, which is the rhythm that constant exists to keep.
+     * The line spacing iOS sets here (`CompactSpacing.lineGap`) is the text style's line height on
+     * Android (`compactTextStyle`, from `look.message.compact.line_height`): it puts a wrapped line the
+     * same distance from the next as one message is from the next, which is the rhythm the gap exists
+     * to keep.
      */
     private fun finish(
         line: StyledBody,
@@ -634,8 +676,12 @@ object MessageText {
         indentCharacters: Int = 1,
         onToggleSpoiler: ((Int) -> Unit)?,
     ): AnnotatedString {
-        val indent = (style.indentSp * indentCharacters).sp
-        val paragraph = ParagraphStyle(textIndent = TextIndent(firstLine = if (flushFirstLine) 0.sp else indent, restLine = indent))
+        val paragraph = if (flushFirstLine) {
+            ParagraphStyle(textIndent = TextIndent(firstLine = 0.sp, restLine = (style.indentSp * indentCharacters).sp))
+        } else {
+            val indent = style.bodyIndentSp.sp
+            ParagraphStyle(textIndent = TextIndent(firstLine = indent, restLine = indent))
+        }
         return line.toAnnotatedString(paragraph, linkStyles(style), onToggleSpoiler)
     }
 

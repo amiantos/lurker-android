@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import net.amiantos.lurker.ui.conversation.rememberDayClock
 import net.amiantos.lurker.ui.message.CompactMetrics
+import net.amiantos.lurker.ui.message.HeaderLine
 import net.amiantos.lurker.ui.message.MessageListLayout
 import net.amiantos.lurker.ui.message.MessageText
 import net.amiantos.lurker.ui.message.MessageTextStyle
@@ -72,6 +73,7 @@ import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.PageExit
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.theme.LurkerTheme
+import net.amiantos.lurkerkit.model.CompactDensity
 import net.amiantos.lurkerkit.model.FeedPaging
 import net.amiantos.lurkerkit.model.HighlightItem
 import net.amiantos.lurkerkit.session.ChatViewModel
@@ -132,7 +134,8 @@ internal fun FeedList(
     announcesStates: Boolean = true,
 ) {
     val snapshot = state.feed.snapshot
-    val style = rememberMessageTextStyle()
+    // The density as the settings stand when the feed draws; the feed doesn't follow live state.
+    val style = rememberMessageTextStyle(CompactDensity.of(model.state.settings))
     val context = LocalContext.current
     // "Today" and "Yesterday" move at midnight (and with the zone), so the headers are rebuilt on the
     // conversation's day clock — the rows themselves come from the cache, so that's a regroup only.
@@ -167,6 +170,7 @@ internal fun FeedList(
         onRemove = onRemove,
         listState = listState,
         modifier = modifier,
+        style = style,
     )
     val notice = state.closedNotice
     if (notice != null) {
@@ -199,6 +203,8 @@ internal fun FeedListContent(
     onReload: () -> Unit = {},
     /** Whether a settled placeholder is read out when it lands — not for Search (see `StateView`). */
     announcesStates: Boolean = true,
+    /** What the rows were rendered with, so they're drawn with the same density (lurker#1224). */
+    style: MessageTextStyle = rememberMessageTextStyle(),
 ) {
     val colors = LurkerTheme.colors
     PullToRefreshBox(
@@ -218,9 +224,9 @@ internal fun FeedListContent(
                         // `reloadData` re-displays the cells on screen.
                         LaunchedEffect(row.key, index) { currentOnShown(index) }
                         if (onRemove == null) {
-                            FeedRowView(row, onClick = { onSelect(row.item) })
+                            FeedRowView(row, style, onClick = { onSelect(row.item) })
                         } else {
-                            SwipeToRemove(row, onSelect = onSelect, onRemove = onRemove)
+                            SwipeToRemove(row, style, onSelect = onSelect, onRemove = onRemove)
                         }
                     }
                 }
@@ -295,11 +301,10 @@ private fun FeedSectionHeader(section: FeedSection) {
  * conversation", and [removeAction] — a bookmark's swipe — is a custom action beside it.
  */
 @Composable
-internal fun FeedRowView(row: FeedRow, onClick: () -> Unit, removeAction: (() -> Unit)? = null) {
-    val style = rememberMessageTextStyle()
+internal fun FeedRowView(row: FeedRow, style: MessageTextStyle, onClick: () -> Unit, removeAction: (() -> Unit)? = null) {
     val colors = style.colors
-    val textStyle = compactTextStyle()
-    val metrics = rememberCompactMetrics(textStyle)
+    val textStyle = compactTextStyle(style.density)
+    val metrics = rememberCompactMetrics(style.density)
     val header = row.header
     val reply = row.reply
     // Named apart from the semantics' own `onClick`, which the block below also calls.
@@ -339,7 +344,7 @@ internal fun FeedRowView(row: FeedRow, onClick: () -> Unit, removeAction: (() ->
                 .padding(horizontal = CompactMetrics.side)
                 .padding(top = metrics.wash, bottom = metrics.wash + CompactMetrics.washBottomNudge),
         ) {
-            if (header != null) FeedHeaderLine(row, style, textStyle)
+            if (header != null) HeaderLine(header, style, textStyle)
             if (reply != null) {
                 Text(
                     reply.shown,
@@ -365,18 +370,6 @@ internal fun FeedRowView(row: FeedRow, onClick: () -> Unit, removeAction: (() ->
     }
 }
 
-/** The name (its colour, a relay source after it) leading, the time trailing; the name truncates first. */
-@Composable
-private fun FeedHeaderLine(row: FeedRow, style: MessageTextStyle, textStyle: TextStyle) {
-    val header = row.header ?: return
-    val name = remember(header, style) { MessageText.headerName(header, style) }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(name, modifier = Modifier.weight(1f).alignByBaseline(), style = textStyle, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        val time = header.time
-        if (time != null) Text(time, modifier = Modifier.alignByBaseline(), style = textStyle, color = style.colors.fgMuted, maxLines = 1)
-    }
-}
-
 /**
  * A bookmark row with iOS's trailing swipe: a full swipe from the end removes it. Half the width is the
  * line — far enough that a scroll drifting sideways doesn't unsave anything. When the verb couldn't
@@ -386,7 +379,7 @@ private fun FeedHeaderLine(row: FeedRow, style: MessageTextStyle, textStyle: Tex
  * swiped away.
  */
 @Composable
-private fun SwipeToRemove(row: FeedRow, onSelect: (HighlightItem) -> Unit, onRemove: (HighlightItem) -> Boolean) {
+private fun SwipeToRemove(row: FeedRow, style: MessageTextStyle, onSelect: (HighlightItem) -> Unit, onRemove: (HighlightItem) -> Boolean) {
     val state = remember {
         SwipeToDismissBoxState(SwipeToDismissBoxValue.Settled, positionalThreshold = { distance -> distance * 0.5f })
     }
@@ -427,7 +420,7 @@ private fun SwipeToRemove(row: FeedRow, onSelect: (HighlightItem) -> Unit, onRem
             }
         },
     ) {
-        FeedRowView(row, onClick = { onSelect(row.item) }, removeAction = { remove() })
+        FeedRowView(row, style, onClick = { onSelect(row.item) }, removeAction = { remove() })
     }
 }
 

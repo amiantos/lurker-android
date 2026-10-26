@@ -17,6 +17,9 @@ import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.Network
+import net.amiantos.lurkerkit.model.SettingValue
+import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.model.TimestampFormat
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurker.ui.message.MessageText
 import net.amiantos.lurkerkit.model.Replies
@@ -123,11 +126,24 @@ class FeedModelTest {
 
     @Test
     fun aMeLineKeepsItsTimeButNotASecondNick() {
+        // No header to name alice twice: the time follows the text, as in the list (lurker#1237).
         val row = FeedModel.row(item(1, type = EventType.Action, text = "waves"), state, style, zone)
-        assertEquals("", row.header?.nick)
-        assertEquals("14:41", row.header?.time)
+        assertNull(row.header)
         assertFalse(row.indentsBody)
-        assertEquals("* alice waves", row.body.text)
+        assertEquals("* alice waves 14:41", row.body.text.replace("\u2060", ""))
+    }
+
+    @Test
+    fun aRowFromAnotherDayCarriesNoDateUnderItsDayHeader() {
+        val row = FeedModel.row(item(1, at = now.minusSeconds(86_400 * 3)), state, style, zone)
+        assertEquals("14:41", row.header?.time)
+    }
+
+    @Test
+    fun aRowFollowsTheCompactTimeFormat() {
+        val settings = Settings(registry = emptyMap(), values = mapOf(TimestampFormat.compactTimeKey to SettingValue.String("h:mm a")))
+        val row = FeedModel.row(item(1), state.copy(settings = settings), style, zone)
+        assertEquals("2:41 pm", row.header?.time)
     }
 
     @Test

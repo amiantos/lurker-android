@@ -12,6 +12,9 @@ import net.amiantos.lurkerkit.model.MessageRow
 import net.amiantos.lurkerkit.model.MessageRows
 import net.amiantos.lurkerkit.model.ReplyContext
 import net.amiantos.lurkerkit.model.RunPosition
+import net.amiantos.lurkerkit.model.SettingValue
+import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.model.TimestampFormat
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -50,11 +53,21 @@ class MessageListLayoutTest {
         MessageRows.build(messages.toList(), dividerAfterId = null, hasMoreOlder = true, zone = ZoneOffset.UTC)
             .filter { it !is MessageRow.DateDivider }
 
-    private fun context(rows: List<MessageRow>, modePrefixes: Map<String, MemberPrefix.Mark> = emptyMap()) =
-        MessageListContext.over(rows, style = style, modePrefixes = modePrefixes, zone = ZoneOffset.UTC, today = LocalDate.of(2026, 7, 25))
+    private fun context(
+        rows: List<MessageRow>,
+        modePrefixes: Map<String, MemberPrefix.Mark> = emptyMap(),
+        settings: Settings = Settings(),
+    ) = MessageListContext.over(
+        rows, style = style, modePrefixes = modePrefixes, settings = settings, zone = ZoneOffset.UTC,
+        today = LocalDate.of(2026, 7, 25),
+    )
 
-    private fun plans(rows: List<MessageRow>, modePrefixes: Map<String, MemberPrefix.Mark> = emptyMap()): List<RowPlan> {
-        val context = context(rows, modePrefixes)
+    private fun plans(
+        rows: List<MessageRow>,
+        modePrefixes: Map<String, MemberPrefix.Mark> = emptyMap(),
+        settings: Settings = Settings(),
+    ): List<RowPlan> {
+        val context = context(rows, modePrefixes, settings)
         return rows.mapIndexed { index, row -> MessageListLayout.plan(row, index, context) }
     }
 
@@ -124,6 +137,54 @@ class MessageListLayoutTest {
     fun `server text with nothing to call it has no header`() {
         val plans = plans(rows(line(null, 0, type = EventType.Motd)))
         assertNull(plans[0].header())
+    }
+
+    // MARK: - Times (lurker#1179, lurker#1237)
+
+    private fun RowPlan.trailing() = (this as RowPlan.Compact).trailingTime
+
+    private fun compactSettings(vararg values: Pair<String, String>) =
+        Settings(registry = emptyMap(), values = values.associate { (key, value) -> key to SettingValue.String(value) })
+
+    @Test
+    fun `a header-less row carries its time after its text, a headed run none`() {
+        val plans = plans(rows(line("alice", 0), line("alice", 20), line("bob", 30, type = EventType.Action)))
+        assertNull(plans[0].trailing())
+        assertNull(plans[1].trailing())
+        assertEquals("14:41", plans[2].trailing())
+    }
+
+    @Test
+    fun `a line with nothing to call it keeps its time on every row of its run`() {
+        val plans = plans(rows(line(null, 0, type = EventType.Error), line(null, 10, type = EventType.Error)))
+        assertNull(plans[0].header())
+        assertNull(plans[1].header())
+        assertEquals("14:41", plans[0].trailing())
+        assertEquals("14:41", plans[1].trailing())
+    }
+
+    @Test
+    fun `the time follows the compact time format`() {
+        val plans = plans(rows(line("alice", 0), line("bob", 5, type = EventType.Action)), settings = compactSettings(TimestampFormat.compactTimeKey to "h:mm a"))
+        assertEquals("2:41 pm", plans[0].header()?.time)
+        assertEquals("2:41 pm", plans[1].trailing())
+    }
+
+    @Test
+    fun `a line from another day puts the date first, today's doesn't`() {
+        val plans = plans(rows(line("alice", -86_400), line("bob", 0)))
+        assertEquals("2026-07-24 14:41", plans[0].header()?.time)
+        assertEquals("14:41", plans[1].header()?.time)
+        val custom = plans(rows(line("alice", -86_400)), settings = compactSettings(TimestampFormat.compactDateKey to "MM/DD"))
+        assertEquals("07/24 14:41", custom[0].header()?.time)
+    }
+
+    @Test
+    fun `an empty time format hides the time everywhere`() {
+        val plans = plans(rows(line("alice", -86_400), line("bob", 5, type = EventType.Action)), settings = compactSettings(TimestampFormat.compactTimeKey to ""))
+        assertEquals("alice", plans[0].header()?.nick)
+        assertNull(plans[0].header()?.time)
+        assertNull(plans[1].trailing())
     }
 
     // MARK: - Blocks
