@@ -23,8 +23,11 @@ import java.io.IOException
  * (`playableMediaURL`) or a server-minted media address admit, nothing cleartext reaches a public
  * host from here. All three ask `LocalNetworking` the same question, so they can't disagree.
  *
- * An application interceptor, not a network one: it runs before the cache, so a refused address
- * is never looked up in it, and before any connection is made.
+ * Installed as an application interceptor AND a network interceptor. The first runs once per call,
+ * before the cache, so a refused address is never looked up in it and no connection is made; the
+ * second runs once per hop, which is the only place a redirect's follow-up passes — OkHttp builds
+ * it below the application interceptors, so an `https://` answer of `302 Location: http://…` to a
+ * public host would otherwise be followed in the clear, Bearer header and all on a same-host hop.
  */
 internal object CleartextPolicy : Interceptor {
     /** Whether a request to [url] may go out: HTTPS anywhere, plain http only to the local network. */

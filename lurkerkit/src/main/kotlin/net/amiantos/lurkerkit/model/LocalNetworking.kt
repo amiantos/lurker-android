@@ -34,6 +34,18 @@ internal object LocalNetworking {
         if (host == "localhost") return true
         // An IPv6 literal, handed over without its brackets (as `HttpUrl.host` does).
         if (host.contains(":")) return isLocalIPv6(host)
+        // Port-only. ⚠⚠ A host made only of numbers is an address in SOME notation, and the
+        // resolver's notation is `inet_aton`'s, not this file's: `010.0.0.1` is 8.0.0.1 (octal),
+        // `134744072` and `0x8080808` are 8.8.8.8, `127.1` is 127.0.0.1. Read here as a decimal
+        // quad or as a "single-label name", any of them was admitted — and the socket then opened
+        // to a public host in the clear. On iOS ATS judges the address the socket actually dials;
+        // here nothing does, so only a strict dotted-decimal quad, no leading zeros, is an address
+        // at all, and every other numeric spelling is refused whatever it might mean.
+        val labels = host.split(".")
+        if (labels.all(::isNumericLabel)) {
+            if (labels.size != 4 || labels.any { it.length > 1 && it[0] == '0' }) return false
+            return isLocalIPv4(host)
+        }
         if (host.endsWith(".local")) return true
         if (isLocalIPv4(host)) return true
         // A single-label name — `box`, not `box.example.com`. Last, so a dotted quad has already
@@ -59,6 +71,15 @@ internal object LocalNetworking {
             first == 172 && second in 16..31 -> true
             else -> false
         }
+    }
+
+    /** A label `inet_aton` reads as a number: decimal or octal digits, or `0x` hex. */
+    private fun isNumericLabel(label: String): Boolean {
+        if (label.isEmpty()) return false
+        if (label.startsWith("0x") || label.startsWith("0X")) {
+            return label.length > 2 && label.drop(2).all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }
+        }
+        return label.all { it in '0'..'9' }
     }
 
     /** Loopback, unique-local (fc00::/7) and link-local (fe80::/10). */

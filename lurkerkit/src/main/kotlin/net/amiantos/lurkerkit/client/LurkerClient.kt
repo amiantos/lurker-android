@@ -2627,11 +2627,15 @@ internal class LurkerClient(
          *
          * ⚠⚠ `CleartextPolicy` is installed HERE and nowhere else, so that every client built from
          * this one by `newBuilder()` — the media session included — inherits it. On iOS the OS
-         * refuses cleartext to a public host; on Android this interceptor is what does.
+         * refuses cleartext to a public host; on Android this interceptor is what does. Installed
+         * TWICE, on purpose: an application interceptor runs once per call, before the cache, and a
+         * network interceptor runs once per hop — a redirect's follow-up is built below the
+         * application interceptors and would otherwise be followed to `http://` in the clear.
          */
         internal fun bearerOnlyConfiguration(): OkHttpClient =
             OkHttpClient.Builder()
                 .addInterceptor(CleartextPolicy)
+                .addNetworkInterceptor(CleartextPolicy)
                 .cookieJar(CookieJar.NO_COOKIES)
                 .connectTimeout(Duration.ofSeconds(60))
                 .readTimeout(Duration.ofSeconds(60))

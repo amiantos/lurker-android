@@ -10,8 +10,9 @@ import android.util.Base64
 import net.amiantos.lurkerkit.session.SecureStorage
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
-import java.security.GeneralSecurityException
+import java.security.InvalidAlgorithmParameterException
 import java.security.KeyStore
+import java.security.UnrecoverableEntryException
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -55,33 +56,32 @@ class KeystoreSecureStorage(
         val stored = prefs.getString(account, null) ?: return null
         val plain = try {
             decrypt(stored)
-        } catch (e: AEADBadTagException) {
-            // The blob no longer decrypts under the key that exists — a Keystore reset gave the
-            // alias a new key, or the ciphertext was corrupted. It never will: drop it.
+        } catch (e: Exception) {
             key = null
+            // ⚠ Only a blob that will NEVER decrypt is dropped. Anything else is "unreadable NOW" —
+            // a `KeyStoreException` or `ProviderException` while the Keystore daemon restarts, an
+            // `IOException` loading it — and used to delete the blob, and with it the session,
+            // the revokes still owed to a server, and a sign-in out in the browser. Those answer
+            // "nothing readable" and leave the blob for the next read.
+            if (!neverDecrypts(e)) return null
             null
-        } catch (e: IllegalArgumentException) {
-            // Not base64, or not `iv:ciphertext`: not a blob this class wrote. Dropped the same way.
-            key = null
-            null
-        } catch (e: GeneralSecurityException) {
-            // ⚠ Anything else is "unreadable NOW", not "unreadable": a `KeyStoreException` or
-            // `ProviderException` while the Keystore daemon is restarting, or the key is briefly
-            // unavailable, used to delete the blob — and with it the session, the revokes still
-            // owed to a server, and a sign-in out in the browser. Answer "nothing readable" and
-            // leave the blob for the next read.
-            key = null
-            return null
-        } catch (e: RuntimeException) {
-            key = null
-            return null
         }
         if (plain == null) {
+            // Undecryptable for good — the key changed under it, or it isn't a blob this class
+            // wrote — so drop it and start clean.
             delete(account)
             return null
         }
         return plain
     }
+
+    /**
+     * Whether [error] says the blob can never decrypt: the tag fails under the key that exists (a
+     * Keystore reset gave the alias a new key, or the ciphertext is corrupt), the text isn't
+     * base64, or the IV isn't one this class wrote.
+     */
+    private fun neverDecrypts(error: Exception): Boolean =
+        error is AEADBadTagException || error is IllegalArgumentException || error is InvalidAlgorithmParameterException
 
     override fun write(account: String, data: ByteString) {
         runCatching {
@@ -110,13 +110,17 @@ class KeystoreSecureStorage(
     private fun secretKey(): SecretKey {
         key?.let { return it }
         val keystore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
-        val existing = runCatching { (keystore.getEntry(keyAlias, null) as? KeyStore.SecretKeyEntry)?.secretKey }
-            .getOrElse {
-                // An alias that exists but cannot be used (keystore reset or corruption): drop
-                // it, or every save would fail silently for the rest of the install.
-                runCatching { keystore.deleteEntry(keyAlias) }
-                null
-            }
+        val existing = try {
+            (keystore.getEntry(keyAlias, null) as? KeyStore.SecretKeyEntry)?.secretKey
+        } catch (e: UnrecoverableEntryException) {
+            // An alias that exists but cannot be used (keystore reset or corruption): drop it, or
+            // every save would fail silently for the rest of the install. ⚠ Only THAT: a
+            // `KeyStoreException` while the daemon is restarting used to drop the alias too, and
+            // the fresh key then failed the blob's tag, so a transient fault deleted the session.
+            // It propagates instead, and `read` keeps the blob for a later try.
+            runCatching { keystore.deleteEntry(keyAlias) }
+            null
+        }
         existing?.let { key = it; return it }
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
         generator.init(

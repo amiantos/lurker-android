@@ -133,6 +133,12 @@ class MainActivity : ComponentActivity() {
             IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
         }
         val acceptable = streams.filter { ShareUris.isAcceptable(it.scheme, it.authority, packageName) }
+        if (acceptable.size < streams.size) {
+            // Said, not swallowed: an app that still shares `file://` paths (older file managers)
+            // would otherwise bring Lurker forward with no picker and no word why.
+            val refused = streams.size - acceptable.size
+            app.events.send(AppEvent.Notice(if (refused == 1) "Lurker can't accept that file" else "Lurker can't accept those files"))
+        }
         val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
         app.uploads.shares.receive(SharePayload.of(acceptable.map(Uri::toString), text))
         setIntent(Intent(this, MainActivity::class.java).setAction(Intent.ACTION_MAIN))

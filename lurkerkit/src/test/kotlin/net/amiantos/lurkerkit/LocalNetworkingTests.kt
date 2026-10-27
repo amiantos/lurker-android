@@ -77,4 +77,27 @@ class LocalNetworkingTests {
         assertFalse(permits("10.0.0.999"))
         assertFalse(permits(""))
     }
+
+    // Port-only:
+
+    /**
+     * ⚠⚠ The resolver reads numbers `inet_aton`'s way, not this file's: `010.0.0.1` is 8.0.0.1,
+     * `134744072` and `0x8080808` are 8.8.8.8, `127.1` is 127.0.0.1. Every numeric spelling but a
+     * strict dotted-decimal quad is refused, because what it names is not what this file would
+     * read, and on this platform nothing judges the address the socket actually dials.
+     */
+    @Test
+    fun testOnlyAStrictDottedDecimalQuadIsAnAddress() {
+        assertTrue(permits("10.0.0.1"))
+        assertTrue(permits("127.0.0.1"))
+        for (host in listOf(
+            "010.0.0.1", "0177.0.0.1", "10.000.0.1", "134744072", "0x8080808", "0x7f.0.0.1", "127.1",
+            "10.0.1", "2130706433", "0", "0x0a000001", "08.0.0.1",
+        )) {
+            assertFalse(permits(host), "$host is a number the resolver reads its own way")
+        }
+        // A label with a letter in it that isn't hex is a name, as it always was.
+        assertTrue(permits("box2"))
+        assertTrue(permits("2box"))
+    }
 }

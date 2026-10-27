@@ -145,7 +145,6 @@ class ServerAddressTests {
             "http://a.b@c.d@localhost",
             "http://localhost:",
             "http://[::1]",
-            "http://010.000.000.004",
             "http://box.local/path?q=1#f",
             "http://localhost/a b",
             "http://localhost#frag",
@@ -161,6 +160,8 @@ class ServerAddressTests {
             "http://256.1.1.1",
             // A well-formed literal, but a public one: not the local network.
             "http://001.002.003.004",
+            // Leading zeros: `inet_aton` reads octal, so this is not the private 10.0.0.4 it looks like.
+            "http://010.000.000.004",
             "http://1.2.3",
             "http://1.2.3.",
             // A trailing dot makes it a qualified name, not a `.local` one.

@@ -41,6 +41,23 @@ class CleartextPolicyTests {
     }
 
     /**
+     * ⚠⚠ On the network layer too, or a redirect escapes it: OkHttp builds a follow-up below the
+     * application interceptors, so an `https://` reply of `302 Location: http://cdn.example/…`
+     * would be followed in the clear. A network interceptor sees every hop. (Pinned structurally:
+     * a hop needs a real connection, which these tests don't make.)
+     */
+    @Test
+    fun testTheKitsClientRefusesPublicCleartextOnEveryHop() {
+        val client = LurkerClient.bearerOnlyConfiguration()
+        assertTrue(client.interceptors.contains(CleartextPolicy))
+        assertTrue(client.networkInterceptors.contains(CleartextPolicy))
+        // And a client derived from it keeps both.
+        val derived = client.newBuilder().build()
+        assertTrue(derived.interceptors.contains(CleartextPolicy))
+        assertTrue(derived.networkInterceptors.contains(CleartextPolicy))
+    }
+
+    /**
      * Installed on `bearerOnlyConfiguration`, ahead of anything added later — so a client built
      * from it by `newBuilder()` refuses a public cleartext address before it reaches the network
      * (here, the canned answer), and lets a private one through to it.

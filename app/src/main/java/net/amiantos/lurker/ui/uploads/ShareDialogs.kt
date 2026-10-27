@@ -3,9 +3,6 @@
 
 package net.amiantos.lurker.ui.uploads
 
-import android.content.Context
-import android.net.Uri
-import android.provider.OpenableColumns
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -70,7 +67,7 @@ fun SharePickerDialog(model: ChatViewModel, share: SharePayload, onPick: (Buffer
     // app that cares to send one. The providers' names, read off the main thread; the grant that
     // came with the intent is still live. "unnamed file" until they arrive, never nothing.
     val names by produceState<List<String?>>(initialValue = share.streams.map { null }, share) {
-        value = withContext(Dispatchers.IO) { share.streams.map { displayName(context, it.toUri()) } }
+        value = withContext(Dispatchers.IO) { share.streams.map { providerDisplayName(context.contentResolver, it.toUri()) } }
     }
     val flow = remember(model) {
         model.statePublisher
@@ -113,16 +110,6 @@ private fun ShareSummaryLines(files: String?, text: String?) {
     }
     HorizontalDivider()
 }
-
-/** The provider's name for a shared item, or null when it has none to give. */
-private fun displayName(context: Context, uri: Uri): String? =
-    try {
-        context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) cursor.getString(0) else null
-        }
-    } catch (_: RuntimeException) {
-        null
-    }
 
 @Composable
 private fun SharePickerList(

@@ -158,16 +158,38 @@ class BrowserSignIn {
         }
 
         /**
-         * The `state` a redirect carries, or null when it carries none. Compared as written: a
-         * genuine `state` is `OAuth.randomString`'s base64url, which no browser percent-encodes,
-         * and one that reads differently is not this attempt's whether decoding would help or not.
+         * The `state` a redirect carries, or null when it carries none. Read the way the kit's
+         * `OAuth.callback` reads the same redirect — `&`-separated items split at the first `=`,
+         * percent-decoded, a `+` left as a `+` — so the two can't disagree about whose redirect
+         * it is: a page that spells `abc_def` as `abc%5Fdef` is still this attempt's.
          */
         fun stateOf(callback: String): String? {
             val query = callback.substringAfter('?', missingDelimiterValue = "").substringBefore('#')
             if (query.isEmpty()) return null
             return query.split('&').firstOrNull { it.substringBefore('=') == "state" }?.let { item ->
-                if (item.contains('=')) item.substringAfter('=') else null
+                if (item.contains('=')) percentDecoded(item.substringAfter('=')) else null
             }
+        }
+
+        /** `%XX` runs decoded as UTF-8; anything malformed is left as written. */
+        private fun percentDecoded(text: String): String {
+            if (!text.contains('%')) return text
+            val bytes = java.io.ByteArrayOutputStream()
+            var i = 0
+            while (i < text.length) {
+                val c = text[i]
+                if (c == '%' && i + 2 < text.length) {
+                    val value = text.substring(i + 1, i + 3).toIntOrNull(16)
+                    if (value != null) {
+                        bytes.write(value)
+                        i += 3
+                        continue
+                    }
+                }
+                bytes.write(c.toString().toByteArray(Charsets.UTF_8))
+                i += 1
+            }
+            return bytes.toByteArray().toString(Charsets.UTF_8)
         }
     }
 }

@@ -124,6 +124,12 @@ class BrowserSignInTest {
         assertNull(BrowserSignIn.stateOf("chat.lurker:/oauth"))
         // A name that merely starts with `state` is not it.
         assertNull(BrowserSignIn.stateOf("chat.lurker:/oauth?stateful=1"))
+        // Read as the kit reads it: percent-decoded, `+` kept, a malformed escape left alone.
+        assertEquals("abc_def", BrowserSignIn.stateOf("chat.lurker:/oauth?state=abc%5Fdef&code=x"))
+        assertEquals("a+b", BrowserSignIn.stateOf("chat.lurker:/oauth?state=a+b"))
+        assertEquals("a%zz", BrowserSignIn.stateOf("chat.lurker:/oauth?state=a%zz"))
+        assertEquals("a%", BrowserSignIn.stateOf("chat.lurker:/oauth?state=a%"))
+        assertEquals("\u00e9", BrowserSignIn.stateOf("chat.lurker:/oauth?state=%C3%A9"))
     }
 
     /**
