@@ -55,6 +55,23 @@ class AttachmentNamingTest {
         assertEquals("text/plain", named.mime)
     }
 
+    /**
+     * ⚠ The staged copy is named from the provider's display name, which says whatever it likes:
+     * letters and digits only there, or nothing. The uploaded filename and the claim are untouched.
+     */
+    @Test
+    fun theStagedExtensionIsLettersAndDigitsOrNothing() {
+        assertEquals("", name("evil.a/b", null).extension)
+        assertEquals("evil.a/b", name("evil.a/b", null).filename)
+        assertEquals("", name("notes.tar.gz..", null).extension)
+        assertEquals("", name("x.abcdefghijklmnopq", null).extension)
+        assertEquals("", name("x.j p g", null).extension)
+        assertEquals("abcdefghijklmnop", name("x.abcdefghijklmnop", null).extension)
+        assertEquals("HEIC", name("IMG.HEIC", null).extension)
+        // Inferred from the provider's type when the name has none: already a table entry.
+        assertEquals("jpg", name("1000001234", "image/jpeg").extension)
+    }
+
     @Test
     fun aCharsetNeverRidesTheClaim() {
         val named = name("notes", "text/plain; charset=utf-8")

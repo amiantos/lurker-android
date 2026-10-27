@@ -1,0 +1,74 @@
+// Copyright (c) 2026 Brad Root
+// SPDX-License-Identifier: MPL-2.0
+
+package net.amiantos.lurkerkit
+
+import net.amiantos.lurkerkit.client.CleartextPolicy
+import net.amiantos.lurkerkit.client.LurkerClient
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import java.io.IOException
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+// Port-only: the interceptor that refuses cleartext to a public host on every client the kit
+// builds. On iOS App Transport Security does this; on Android the network security config permits
+// cleartext wholesale (it cannot say "private addresses only"), so this is the policy.
+
+class CleartextPolicyTests {
+
+    @Test
+    fun testHTTPSIsPermittedAnywhere() {
+        assertTrue(CleartextPolicy.permits("https://app.lurker.chat/api/x".toHttpUrl()))
+        assertTrue(CleartextPolicy.permits("https://203.0.113.5/api/x".toHttpUrl()))
+    }
+
+    @Test
+    fun testPlainHTTPIsPermittedOnlyToTheLocalNetwork() {
+        for (url in listOf("http://192.168.1.2/x", "http://10.0.0.5:8010/x", "http://box.local/x", "http://localhost:8010/x", "http://[::1]/x")) {
+            assertTrue(CleartextPolicy.permits(url.toHttpUrl()), url)
+        }
+        for (url in listOf("http://cdn.example.com/x", "http://8.8.8.8/x", "http://203.0.113.5:8010/x", "http://[2001:db8::1]/x")) {
+            assertFalse(CleartextPolicy.permits(url.toHttpUrl()), url)
+        }
+    }
+
+    /**
+     * Installed on `bearerOnlyConfiguration`, ahead of anything added later — so a client built
+     * from it by `newBuilder()` refuses a public cleartext address before it reaches the network
+     * (here, the canned answer), and lets a private one through to it.
+     */
+    @Test
+    fun testTheKitsClientRefusesPublicCleartextBeforeTheNetwork() {
+        val reached = mutableListOf<String>()
+        val client: OkHttpClient = LurkerClient.bearerOnlyConfiguration().newBuilder()
+            .addInterceptor { chain ->
+                reached += chain.request().url.toString()
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(200)
+                    .message("canned")
+                    .body("ok".toResponseBody(null))
+                    .build()
+            }
+            .build()
+
+        val refused = assertFailsWith<IOException> {
+            client.newCall(Request.Builder().url("http://203.0.113.5/api/session").build()).execute()
+        }
+        assertEquals("Plain http is only allowed to a private address (203.0.113.5).", refused.message)
+        assertTrue(reached.isEmpty())
+
+        client.newCall(Request.Builder().url("http://192.168.1.2/api/session").build()).execute().use { assertEquals(200, it.code) }
+        client.newCall(Request.Builder().url("https://203.0.113.5/api/session").build()).execute().use { assertEquals(200, it.code) }
+        assertEquals(listOf("http://192.168.1.2/api/session", "https://203.0.113.5/api/session"), reached)
+    }
+}

@@ -112,6 +112,61 @@ class BrowserSignInTest {
         assertEquals("chat.lurker:/oauth?code=second", second.await())
     }
 
+    // MARK: - Whose redirect it is
+
+    @Test
+    fun theStateIsReadOffTheRedirect() {
+        assertEquals("xyz", BrowserSignIn.stateOf("chat.lurker:/oauth?code=abc&state=xyz"))
+        assertEquals("xyz", BrowserSignIn.stateOf("chat.lurker:/oauth?state=xyz&code=abc#frag"))
+        assertEquals("", BrowserSignIn.stateOf("chat.lurker:/oauth?state=&code=abc"))
+        assertNull(BrowserSignIn.stateOf("chat.lurker:/oauth?code=abc"))
+        assertNull(BrowserSignIn.stateOf("chat.lurker:/oauth?state"))
+        assertNull(BrowserSignIn.stateOf("chat.lurker:/oauth"))
+        // A name that merely starts with `state` is not it.
+        assertNull(BrowserSignIn.stateOf("chat.lurker:/oauth?stateful=1"))
+    }
+
+    /**
+     * ⚠⚠ Any app can fire `chat.lurker:/oauth?state=x&code=y` at the exported activity while the
+     * tab is up. Taken, it ended the attempt with a redirect the kit then refused, and the genuine
+     * one arrived to nothing waiting. A redirect without this attempt's `state` is not taken, and
+     * the attempt keeps waiting for the one that carries it.
+     */
+    @Test
+    fun aRedirectWithAnotherStateIsNotTaken() = runTest {
+        val waiter = RedirectWaiter()
+        val answer = async(start = CoroutineStart.UNDISPATCHED) { waiter.await(state = "xyz") { true } }
+        assertFalse(waiter.redirected("chat.lurker:/oauth?code=bogus&state=other"))
+        assertFalse(waiter.redirected("chat.lurker:/oauth?code=bogus"))
+        assertTrue(waiter.waiting.value)
+        assertFalse(answer.isCompleted)
+        assertTrue(waiter.redirected("chat.lurker:/oauth?code=abc&state=xyz"))
+        assertEquals("chat.lurker:/oauth?code=abc&state=xyz", answer.await())
+        assertFalse(waiter.waiting.value)
+    }
+
+    /** A page that went out without a `state` (none ever does) takes the first redirect, as before. */
+    @Test
+    fun aPageWithoutAStateTakesAnyRedirect() = runTest {
+        val waiter = RedirectWaiter()
+        val answer = async(start = CoroutineStart.UNDISPATCHED) { waiter.await(state = null) { true } }
+        assertTrue(waiter.redirected("chat.lurker:/oauth?code=abc&state=whatever"))
+        assertEquals("chat.lurker:/oauth?code=abc&state=whatever", answer.await())
+    }
+
+    /** The expected `state` belongs to the attempt: a cancel forgets it, and the next attempt brings its own. */
+    @Test
+    fun theExpectedStateDoesNotOutliveItsAttempt() = runTest {
+        val waiter = RedirectWaiter()
+        val first = async(start = CoroutineStart.UNDISPATCHED) { waiter.await(state = "one") { true } }
+        waiter.cancel()
+        assertNull(first.await())
+        val second = async(start = CoroutineStart.UNDISPATCHED) { waiter.await(state = "two") { true } }
+        assertFalse(waiter.redirected("chat.lurker:/oauth?code=abc&state=one"))
+        assertTrue(waiter.redirected("chat.lurker:/oauth?code=abc&state=two"))
+        assertEquals("chat.lurker:/oauth?code=abc&state=two", second.await())
+    }
+
     @Test
     fun aCancelledAttemptLeavesNothingWaiting() = runTest {
         val waiter = RedirectWaiter()

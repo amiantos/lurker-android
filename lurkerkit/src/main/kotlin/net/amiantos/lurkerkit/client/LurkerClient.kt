@@ -2624,9 +2624,14 @@ internal class LurkerClient(
          * Port note: OkHttp's default jar is already `NO_COOKIES`; it is stated anyway. The
          * timeouts are `URLSessionConfiguration.default`'s 60 s, which the notes in this file
          * count on ("the session's 60s default"), where OkHttp's own default is 10 s.
+         *
+         * ⚠⚠ `CleartextPolicy` is installed HERE and nowhere else, so that every client built from
+         * this one by `newBuilder()` — the media session included — inherits it. On iOS the OS
+         * refuses cleartext to a public host; on Android this interceptor is what does.
          */
         internal fun bearerOnlyConfiguration(): OkHttpClient =
             OkHttpClient.Builder()
+                .addInterceptor(CleartextPolicy)
                 .cookieJar(CookieJar.NO_COOKIES)
                 .connectTimeout(Duration.ofSeconds(60))
                 .readTimeout(Duration.ofSeconds(60))
@@ -3046,6 +3051,13 @@ internal class LurkerClient(
             if (scheme != null) {
                 if (scheme != "https" && scheme != "http") return null
                 val absolute = path.toHttpUrlOrNull() ?: return null
+                // ⚠⚠ The same cleartext rule `playableMediaURL` applies, asked of the same
+                // `LocalNetworking`: a server (or the bucket it is configured with) that mints a
+                // plain-http address on a public host must not have inline images, thumbnails and
+                // avatar tiles fetched in the clear on render, with no tap. `CleartextPolicy` on the
+                // client would refuse the request anyway; refusing it here keeps the verdict a
+                // `null` the loader latches rather than an `IOException` it retries.
+                if (scheme == "http" && !LocalNetworking.permitsCleartext(host = absolute.host)) return null
                 return Request.Builder().url(absolute).build()
             }
             // ⚠⚠ The relative branch must be genuinely relative TO THE ROOT, or the concatenation

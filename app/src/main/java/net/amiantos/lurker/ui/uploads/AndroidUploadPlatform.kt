@@ -70,6 +70,11 @@ class AndroidUploadPlatform(
     override suspend fun stage(source: AttachmentSource.Content): StageResult =
         withOwnedFiles(Dispatchers.IO) { claim ->
             val uri = source.uri.toUri()
+            // ⚠⚠ A `content://` address only. A share's address is another app's choice (`ShareUris`,
+            // which has already refused anything else at the door); the pickers' and the camera's are
+            // `content://` by construction. `openInputStream` would open a `file://` path directly, as
+            // this app — the confused-deputy read this whole check exists to refuse.
+            if (uri.scheme != "content") return@withOwnedFiles StageResult.Failed("Couldn't read the file.")
             val resolver = context.contentResolver
             val named = AttachmentNaming.name(
                 displayName = displayName(uri),
@@ -80,8 +85,23 @@ class AndroidUploadPlatform(
             val stem = "lurker-attach-${UUID.randomUUID()}"
             val dest = claim(File(directory, if (named.extension.isEmpty()) stem else "$stem.${named.extension}"))
             try {
-                val input = resolver.openInputStream(uri) ?: return@withOwnedFiles StageResult.Failed("Couldn't read the file.")
-                input.use { stream ->
+                // The descriptor, not a stream, so WHAT was opened can be checked before it is read:
+                // a provider — this app's own camera `FileProvider`, or a hostile one — may hand back
+                // a descriptor onto a file inside this app's private data. `/proc/self/fd/<fd>` names
+                // it; anything under the data directory but the camera's scratch is refused. A pipe
+                // (a cloud provider streaming a download) or a socket canonicalises to `pipe:[…]`,
+                // which is nowhere near it. Read through the asset descriptor, as `openInputStream`
+                // does, so an item that is a region of a larger file (an offset and a length) still
+                // reads as the item.
+                val asset = resolver.openAssetFileDescriptor(uri, "r")
+                    ?: return@withOwnedFiles StageResult.Failed("Couldn't read the file.")
+                val opened = runCatching { File("/proc/self/fd/${asset.parcelFileDescriptor.fd}").canonicalPath }.getOrNull()
+                if (opened == null || isPrivate(opened)) {
+                    asset.close()
+                    return@withOwnedFiles StageResult.Failed("Couldn't read the file.")
+                }
+                // Owns the descriptor from here: closing the stream closes it.
+                asset.createInputStream().use { stream ->
                     FileOutputStream(dest).use { out ->
                         val chunk = ByteArray(1 shl 16)
                         while (true) {
@@ -103,6 +123,18 @@ class AndroidUploadPlatform(
             }
             StageResult.Staged(Picked(dest, named.filename, named.mime, named.isVideo))
         }
+
+    /**
+     * Whether a canonical path is inside this app's private data — the data directory under either of
+     * its names (`/data/user/0/<pkg>` and `/data/data/<pkg>` are the same place) — other than the
+     * camera's own scratch directory, which the app's `FileProvider` legitimately serves (`file_paths.xml`).
+     */
+    private fun isPrivate(canonicalPath: String): Boolean {
+        val camera = File(context.cacheDir, "camera").canonicalPath + File.separator
+        if (canonicalPath.startsWith(camera)) return false
+        val roots = listOfNotNull(context.dataDir, context.applicationInfo.dataDir?.let(::File))
+        return roots.any { root -> canonicalPath.startsWith(root.canonicalPath + File.separator) }
+    }
 
     private fun displayName(uri: Uri): String? =
         try {

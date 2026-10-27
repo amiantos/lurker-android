@@ -97,6 +97,21 @@ class PreviewMediaRequestTests {
         }
     }
 
+    /**
+     * ⚠⚠ The same cleartext rule `playableMediaURL` applies. An absolute address is the server's
+     * (or its bucket's) to mint, and inline images, thumbnails and avatar tiles are fetched on
+     * render with no tap — so a plain-http address on a public host is refused here, as a verdict
+     * the loader latches, rather than sent in the clear.
+     */
+    @Test
+    fun testPlainHTTPAbsoluteUrlIsRefusedUnlessTheHostIsLocal() {
+        assertNull(request("http://cdn.example.com/previews/abc"))
+        assertNull(request("http://203.0.113.5/previews/abc"))
+        assertEquals("http://192.168.1.2/previews/abc", request("http://192.168.1.2/previews/abc")?.url?.toString())
+        assertEquals("http://box.local/previews/abc", request("http://box.local/previews/abc")?.url?.toString())
+        assertEquals("https://cdn.example.com/previews/abc", request("https://cdn.example.com/previews/abc")?.url?.toString())
+    }
+
     @Test
     fun testProxyPathStillNeedsATokenButAnAbsoluteUrlDoesNot() {
         // A signed-out client cannot fetch from the proxy — there is no header to send — but a

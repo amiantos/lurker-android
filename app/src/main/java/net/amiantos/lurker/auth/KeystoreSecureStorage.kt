@@ -10,7 +10,9 @@ import android.util.Base64
 import net.amiantos.lurkerkit.session.SecureStorage
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
+import java.security.GeneralSecurityException
 import java.security.KeyStore
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -51,9 +53,30 @@ class KeystoreSecureStorage(
 
     override fun read(account: String): ByteString? {
         val stored = prefs.getString(account, null) ?: return null
-        val plain = runCatching { decrypt(stored) }.getOrElse { key = null; null }
+        val plain = try {
+            decrypt(stored)
+        } catch (e: AEADBadTagException) {
+            // The blob no longer decrypts under the key that exists — a Keystore reset gave the
+            // alias a new key, or the ciphertext was corrupted. It never will: drop it.
+            key = null
+            null
+        } catch (e: IllegalArgumentException) {
+            // Not base64, or not `iv:ciphertext`: not a blob this class wrote. Dropped the same way.
+            key = null
+            null
+        } catch (e: GeneralSecurityException) {
+            // ⚠ Anything else is "unreadable NOW", not "unreadable": a `KeyStoreException` or
+            // `ProviderException` while the Keystore daemon is restarting, or the key is briefly
+            // unavailable, used to delete the blob — and with it the session, the revokes still
+            // owed to a server, and a sign-in out in the browser. Answer "nothing readable" and
+            // leave the blob for the next read.
+            key = null
+            return null
+        } catch (e: RuntimeException) {
+            key = null
+            return null
+        }
         if (plain == null) {
-            // Undecryptable (key invalidated or corrupted) — drop it and start clean.
             delete(account)
             return null
         }
@@ -77,10 +100,13 @@ class KeystoreSecureStorage(
 
     /**
      * The key, fetched once: every Keystore call is a binder round-trip, and the first reads
-     * happen on the main thread during the view model's init.
+     * happen on the main thread during the view model's init. Fetched under a lock, because the
+     * relayed-push keys (`RelayPushKeys`) read theirs from FCM's worker thread while the main
+     * thread may be generating the same alias.
      */
     private var key: SecretKey? = null
 
+    @Synchronized
     private fun secretKey(): SecretKey {
         key?.let { return it }
         val keystore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
@@ -114,6 +140,7 @@ class KeystoreSecureStorage(
         return "${b64(cipher.iv)}:${b64(ciphertext)}"
     }
 
+    /** Null for a blob that isn't `iv:ciphertext` at all; throws for one that is but won't decrypt. */
     private fun decrypt(stored: String): ByteString? {
         val parts = stored.split(":")
         if (parts.size != 2) return null

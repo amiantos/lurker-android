@@ -10,18 +10,22 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 /**
  * The transport policy for a typed-in server address (lurker-ios#29).
  *
- * HTTPS everywhere, except the host classes Apple defines as local: unqualified single-label
- * names (`localhost`, `xerxes`), `.local` names, and IP-address literals. On iOS this mirrors
- * the `NSAllowsLocalNetworking` exception to App Transport Security rather than inventing its
- * own definition (e.g. "private ranges only"), so that the sign-in check and what the OS will
- * actually permit can't drift apart: everything allowed here is loadable, and everything
- * blocked here fails with our copy instead of an error from deep inside the HTTP stack.
+ * HTTPS everywhere, except the local network: `localhost` and other single-label names, `.local`
+ * names, and the private, link-local and loopback address ranges. ⚠⚠ ONE definition of "local",
+ * `LocalNetworking.permitsCleartext` — the same one that gates clip playback and, on this
+ * platform, every request the HTTP client sends (`CleartextPolicy`). This used to carry its own
+ * copy of Apple's `NSAllowsLocalNetworking` host classes, which admit ANY IP literal, public ones
+ * included; on iOS the OS backstopped that (ATS refuses cleartext to a public address whatever the
+ * app asks), and on Android nothing did, so `http://203.0.113.5` sent the bearer token across the
+ * internet in the clear. The two definitions had drifted apart exactly as the comment here said
+ * they must not, and the fix is for there to be only one.
  *
  * Port note: Android has no such class of host. Its network security config permits cleartext
  * per named domain or for everything, so an app that lets a self-hoster reach a LAN box over
- * plain http has to permit cleartext wholesale — which makes this function the policy itself
- * on this platform, not a mirror of one the OS enforces. The definition is kept identical to
- * iOS's so the same address is accepted or refused on both, with the same copy.
+ * plain http has to permit cleartext wholesale — which makes this gate, together with
+ * `CleartextPolicy` on the client, the policy itself on this platform, not a mirror of one the
+ * OS enforces. The definition is kept identical to iOS's so the same address is accepted or
+ * refused on both, with the same copy.
  *
  * Self-signed HTTPS is deliberately not handled — supporting it means a per-server trust
  * prompt, which is a feature, not ship-readiness. A self-hoster on a LAN uses plain http
@@ -59,7 +63,7 @@ object ServerAddress {
             components.scheme == "http" && isLocalHost(host) -> loadable(normalized)
             components.scheme == "http" ->
                 "That server needs HTTPS — plain http:// only works for local " +
-                    "addresses (an IP, a .local name, or a single-word host like localhost)."
+                    "addresses (a private IP, a .local name, or a single-word host like localhost)."
             else -> "Server URLs start with https:// (or http:// for a local server)."
         }
     }
@@ -75,39 +79,11 @@ object ServerAddress {
         if (normalized.toHttpUrlOrNull() != null) null else "That server URL doesn't look right."
 
     /**
-     * Apple's three "local" host classes, verbatim from the `NSAllowsLocalNetworking`
-     * documentation: unqualified domains, `.local` domains, and IP addresses.
+     * The local network, by `LocalNetworking`'s one definition: single-label names, `.local`
+     * names, and the private, link-local and loopback ranges — never a public address. The
+     * brackets of an IPv6 literal are already stripped, as `LocalNetworking` expects.
      */
-    private fun isLocalHost(host: String): Boolean {
-        val lower = host.lowercase()
-        if (lower.endsWith(".local")) return true
-        if (!lower.contains(".")) return true // unqualified: localhost, xerxes, …
-        return isIPLiteral(lower)
-    }
-
-    /**
-     * IPv6 is any host with a colon — the brackets are already stripped, and a colon can't
-     * appear in a hostname. IPv4 is exactly four in-range octets; near-misses like
-     * `999.1.1.1` are hostnames to ATS too (and dead ones), so they fall through to the HTTPS
-     * requirement rather than getting the carve-out.
-     */
-    private fun isIPLiteral(host: String): Boolean {
-        if (host.contains(":")) return true
-        val octets = host.split(".")
-        return octets.size == 4 && octets.all { octet ->
-            octet.isNotEmpty() && octet.all { it in '0'..'9' } && isUInt8(octet)
-        }
-    }
-
-    /** Whether a run of ASCII digits is a value 0...255, however many leading zeros it has. */
-    private fun isUInt8(digits: String): Boolean {
-        var value = 0
-        for (digit in digits) {
-            value = value * 10 + (digit - '0')
-            if (value > 255) return false
-        }
-        return true
-    }
+    private fun isLocalHost(host: String): Boolean = LocalNetworking.permitsCleartext(host)
 
     /**
      * The two parts of a URL this policy reads, as Foundation's `URLComponents` reports them.

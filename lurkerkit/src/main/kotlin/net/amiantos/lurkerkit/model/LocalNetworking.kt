@@ -19,9 +19,10 @@ package net.amiantos.lurkerkit.model
  * are included on the same reasoning. Anything else — a name with a dot in it, a public
  * address — is a public cleartext load and is refused.
  *
- * Port note: this is the rule only. What makes it true on iOS is the plist key; on Android
- * the matching capability is the app's network security config, which lives in `:app` and
- * which nothing here checks.
+ * Port note: this is the rule only. What makes it true on iOS is the plist key. On Android the
+ * network security config permits cleartext wholesale (it cannot say "private addresses only"),
+ * so what makes it true is the kit itself: `ServerAddress` asks this at sign-in and restore, and
+ * `CleartextPolicy` asks it of every request the kit's HTTP clients send.
  */
 internal object LocalNetworking {
 

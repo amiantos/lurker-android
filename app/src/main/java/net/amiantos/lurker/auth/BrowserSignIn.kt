@@ -76,16 +76,19 @@ class BrowserSignIn {
     /** The address the page redirected to, or null when the tab closed without one. */
     suspend fun authorize(page: HttpUrl): String? {
         noticeSubject.value = null
-        return waiter.await { open(page) }
+        // The attempt's `state`, which the page carries out and the redirect carries back
+        // (`OAuth.authorizeURL`): only a redirect that brings it is this attempt's answer.
+        return waiter.await(state = page.queryParameter("state")) { open(page) }
     }
 
     /** An intent's data reached the activity; taken if it is this sign-in's redirect. */
     fun onRedirect(data: String?) {
         val callback = callbackFrom(data) ?: return
         if (!waiter.redirected(callback)) {
-            // Nothing waiting: the process died while the tab was up (or the user cancelled
-            // first). The kit kept the attempt and decides which.
-            Log.i(TAG, "sign-in redirect arrived with no sign-in waiting; resuming from what was saved")
+            // Nothing waiting for THIS redirect: the process died while the tab was up (or the
+            // user cancelled first) — or an attempt is waiting, and this isn't its answer. The
+            // kit kept the attempt and decides which; an attempt still waiting keeps waiting.
+            Log.i(TAG, "sign-in redirect arrived with no sign-in waiting for it; resuming from what was saved")
             onOrphanRedirect(callback)
         }
     }
@@ -153,28 +156,55 @@ class BrowserSignIn {
             val path = rest.substringBefore('?').substringBefore('#')
             return if (path == redirectPath) data else null
         }
+
+        /**
+         * The `state` a redirect carries, or null when it carries none. Compared as written: a
+         * genuine `state` is `OAuth.randomString`'s base64url, which no browser percent-encodes,
+         * and one that reads differently is not this attempt's whether decoding would help or not.
+         */
+        fun stateOf(callback: String): String? {
+            val query = callback.substringAfter('?', missingDelimiterValue = "").substringBefore('#')
+            if (query.isEmpty()) return null
+            return query.split('&').firstOrNull { it.substringBefore('=') == "state" }?.let { item ->
+                if (item.contains('=')) item.substringAfter('=') else null
+            }
+        }
     }
 }
 
 /**
- * The one sign-in attempt in flight, and how it ends: with the redirect, or with null when the
+ * The one sign-in attempt in flight, and how it ends: with ITS redirect, or with null when the
  * user cancels. Android-free, so the ordering below is tested on the JVM.
  *
  * One attempt at a time: a second [await] ends the first with null before it starts.
+ *
+ * ⚠ Only the attempt's own redirect ends it. `chat.lurker:` is a scheme any installed app can
+ * fire at the exported activity, and any app can register for it too; a redirect whose `state`
+ * isn't the one the page went out with used to complete the attempt all the same — the kit then
+ * rejected it, cleared the saved attempt, and the genuine redirect arrived to nothing waiting. So
+ * a foreign redirect is not taken, and the attempt keeps waiting for the real one. (The kit
+ * compares `state` again before anything is exchanged; this only decides what the attempt hears.)
  */
 internal class RedirectWaiter {
     private var pending: CompletableDeferred<String?>? = null
+
+    /** The `state` the current attempt's page carries, when it carries one. */
+    private var expectedState: String? = null
 
     private val waitingSubject = MutableStateFlow(false)
 
     /** Whether the current attempt's page went up and it's waiting on the redirect. */
     val waiting: StateFlow<Boolean> = waitingSubject.asStateFlow()
 
-    /** Run [show] (true when the page went up) and wait for the attempt's answer. */
-    suspend fun await(show: () -> Boolean): String? {
+    /**
+     * Run [show] (true when the page went up) and wait for the attempt's answer: a redirect
+     * carrying [state] — or any redirect, when the page carries none.
+     */
+    suspend fun await(state: String? = null, show: () -> Boolean): String? {
         finish(null)
         val attempt = CompletableDeferred<String?>()
         pending = attempt
+        expectedState = state
         try {
             if (!show()) finish(null) else if (pending === attempt) waitingSubject.value = true
             return attempt.await()
@@ -182,14 +212,20 @@ internal class RedirectWaiter {
             // A cancelled caller leaves nothing behind for a later redirect to find.
             if (pending === attempt) {
                 pending = null
+                expectedState = null
                 waitingSubject.value = false
             }
         }
     }
 
-    /** The redirect arrived. False when no attempt was waiting for it. */
+    /**
+     * A redirect arrived. False when no attempt was waiting for it — none at all, or one whose
+     * `state` this redirect doesn't carry, which goes on waiting.
+     */
     fun redirected(callback: String): Boolean {
         if (pending == null) return false
+        val expected = expectedState
+        if (expected != null && BrowserSignIn.stateOf(callback) != expected) return false
         finish(callback)
         return true
     }
@@ -202,6 +238,7 @@ internal class RedirectWaiter {
     private fun finish(answer: String?) {
         val attempt = pending ?: return
         pending = null
+        expectedState = null
         waitingSubject.value = false
         attempt.complete(answer)
     }

@@ -2658,6 +2658,10 @@ class ChatViewModel(
         // field still prefills from preferences, so the address stays visible to fix.
         val reason = ServerAddress.rejection(ServerAddress.normalize(saved.server))
         if (reason != null) {
+            // ⚠ Not owed a revoke (lurker-ios#218): the revoke could only travel over the transport
+            // the policy just refused — `CleartextPolicy` would refuse it too — so it would retry
+            // for thirty days and never land. The token stays live on that server until it expires
+            // or the user ends it from a client that can reach it.
             sessions.clear()
             statusSubject.value = reason
             sessionSubject.value = SessionState.LoggedOut
