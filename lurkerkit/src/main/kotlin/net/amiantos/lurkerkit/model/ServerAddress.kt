@@ -60,7 +60,7 @@ object ServerAddress {
         if (components == null || host.isNullOrEmpty()) return "That server URL doesn't look right."
         return when {
             components.scheme == "https" -> loadable(normalized)
-            components.scheme == "http" && isLocalHost(host) -> loadable(normalized)
+            components.scheme == "http" && isLocalHost(canonicalHost(normalized) ?: host) -> loadable(normalized)
             components.scheme == "http" ->
                 "That server needs HTTPS — plain http:// only works for local " +
                     "addresses (a private IP, a .local name, or a single-word host like localhost)."
@@ -84,6 +84,14 @@ object ServerAddress {
      * brackets of an IPv6 literal are already stripped, as `LocalNetworking` expects.
      */
     private fun isLocalHost(host: String): Boolean = LocalNetworking.permitsCleartext(host)
+
+    /**
+     * Port-only: the host as OkHttp will spell it, which is what `CleartextPolicy` and the
+     * playback gate judge — `[0:0:0:0:0:0:0:1]` is `::1` to it. Judged here in the same spelling,
+     * or an address the interceptor would let through is refused at the door. Null for an address
+     * OkHttp can't read, which `loadable` refuses anyway.
+     */
+    private fun canonicalHost(normalized: String): String? = normalized.toHttpUrlOrNull()?.host
 
     /**
      * The two parts of a URL this policy reads, as Foundation's `URLComponents` reports them.

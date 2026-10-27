@@ -28,6 +28,8 @@ import java.io.IOException
  * second runs once per hop, which is the only place a redirect's follow-up passes — OkHttp builds
  * it below the application interceptors, so an `https://` answer of `302 Location: http://…` to a
  * public host would otherwise be followed in the clear, Bearer header and all on a same-host hop.
+ * ⚠ Neither layer sees a WebSocket's follow-up (OkHttp runs no network interceptors for a socket
+ * call), so the socket's client follows no redirects at all — `LurkerClient.socketConfiguration`.
  */
 internal object CleartextPolicy : Interceptor {
     /** Whether a request to [url] may go out: HTTPS anywhere, plain http only to the local network. */

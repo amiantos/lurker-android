@@ -70,6 +70,10 @@ class ServerAddressTests {
         assertNull(ServerAddress.rejection("http://[fe80::1]:8010"))
         assertNull(ServerAddress.rejection("http://[::1]:8010"))
         assertNull(ServerAddress.rejection("http://box.local"))
+        // Port-only: judged in OkHttp's spelling, which is the one the interceptor sees.
+        assertNull(ServerAddress.rejection("http://[0:0:0:0:0:0:0:1]:8010"))
+        assertNull(ServerAddress.rejection("http://[FE80::1]:8010"))
+        assertNull(ServerAddress.rejection("http://[fd00:0:0:0:0:0:0:1]"))
     }
 
     /**

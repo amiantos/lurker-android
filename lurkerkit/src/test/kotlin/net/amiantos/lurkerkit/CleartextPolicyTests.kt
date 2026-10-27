@@ -58,6 +58,21 @@ class CleartextPolicyTests {
     }
 
     /**
+     * ⚠⚠ The one call neither layer covers: OkHttp runs no network interceptors for a WebSocket,
+     * and the application interceptors see only its first request. So the socket's client follows
+     * no redirect, and a `/ws` answered with `302 Location: http://…` ends as that status rather
+     * than as an upgrade in the clear. (Structural, as above: an upgrade needs a real server.)
+     */
+    @Test
+    fun testTheSocketsClientFollowsNoRedirects() {
+        val socket = LurkerClient.socketConfiguration(LurkerClient.bearerOnlyConfiguration())
+        assertFalse(socket.followRedirects)
+        assertFalse(socket.followSslRedirects)
+        // Everything else about the base client, the policy included, carries over.
+        assertTrue(socket.interceptors.contains(CleartextPolicy))
+    }
+
+    /**
      * Installed on `bearerOnlyConfiguration`, ahead of anything added later — so a client built
      * from it by `newBuilder()` refuses a public cleartext address before it reaches the network
      * (here, the canned answer), and lets a private one through to it.

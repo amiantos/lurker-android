@@ -137,6 +137,9 @@ internal class LurkerClient(
 ) {
     private val session: OkHttpClient = httpClient
 
+    /** The socket's client: [session] with redirects off — see [socketConfiguration]. */
+    private val socketSession: OkHttpClient = socketConfiguration(httpClient)
+
     /** Preview bytes only, so its cache can be purged on sign-out without touching API state. */
     private val mediaSession: OkHttpClient
     private var baseURL = ""
@@ -764,7 +767,7 @@ internal class LurkerClient(
         // Port note: OkHttp starts connecting the moment the socket is made — there is no
         // separate `resume()`. Its callbacks reach this client only through `scope`, so none
         // can land before the two lines below have run.
-        val task = session.newWebSocket(request, SocketListener())
+        val task = socketSession.newWebSocket(request, SocketListener())
         socket = task
         socketEnded = false
         socketGeneration += 1
@@ -2640,6 +2643,22 @@ internal class LurkerClient(
                 .connectTimeout(Duration.ofSeconds(60))
                 .readTimeout(Duration.ofSeconds(60))
                 .writeTimeout(Duration.ofSeconds(60))
+                .build()
+
+        /**
+         * The client the WebSocket upgrade goes through: [base] with redirects off.
+         *
+         * ⚠⚠ Port-only, and the reason is `CleartextPolicy`'s one blind spot: OkHttp runs NO
+         * network interceptors for a WebSocket call, and the application interceptors see only
+         * the first request — so a `/ws` answered with `302 Location: http://…` to a public host
+         * would be followed by the upgrade in the clear, with neither layer asked. The Lurker
+         * server never redirects its socket, so nothing is lost by refusing to follow one: the
+         * 3xx surfaces as the upgrade's status (`onFailure`), as a 426 or 401 does.
+         */
+        internal fun socketConfiguration(base: OkHttpClient): OkHttpClient =
+            base.newBuilder()
+                .followRedirects(false)
+                .followSslRedirects(false)
                 .build()
 
         /**

@@ -19,9 +19,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -65,9 +67,12 @@ fun SharePickerDialog(model: ChatViewModel, share: SharePayload, onPick: (Buffer
     val context = LocalContext.current
     // What is being shared, named: the pick is the only consent step, and a share arrives from any
     // app that cares to send one. The providers' names, read off the main thread; the grant that
-    // came with the intent is still live. "unnamed file" until they arrive, never nothing.
-    val names by produceState<List<String?>>(initialValue = share.streams.map { null }, share) {
-        value = withContext(Dispatchers.IO) { share.streams.map { providerDisplayName(context.contentResolver, it.toUri()) } }
+    // came with the intent is still live. "unnamed file" until they arrive, never nothing — and
+    // ⚠ never the PREVIOUS share's names: a second share replaces the first while this is up, and
+    // the names are keyed to the payload, so a slow provider shows blanks, not the old files.
+    var names by remember(share) { mutableStateOf<List<String?>>(share.streams.map { null }) }
+    LaunchedEffect(share) {
+        names = withContext(Dispatchers.IO) { share.streams.map { providerDisplayName(context.contentResolver, it.toUri()) } }
     }
     val flow = remember(model) {
         model.statePublisher
