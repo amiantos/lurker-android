@@ -191,7 +191,10 @@ object MemberListModel {
             null -> null
         }
         return buildString {
-            append(row.nick)
+            // The shown name (lurker#1203), and the nick after it when they differ — the identity is
+            // worth hearing once, as the web puts it in the row's hover title.
+            append(row.label)
+            if (row.label != row.nick) append(", ").append(row.nick)
             if (rank != null) append(", ").append(rank)
             if (row.away) append(", away")
         }

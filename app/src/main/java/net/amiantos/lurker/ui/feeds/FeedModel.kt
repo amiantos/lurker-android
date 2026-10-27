@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.sp
 import net.amiantos.lurker.ui.actions.SpoilerSafeText
 import net.amiantos.lurker.ui.message.CompactHeader
 import net.amiantos.lurker.ui.message.MessageText
+import net.amiantos.lurker.ui.message.MessageListLayout
 import net.amiantos.lurker.ui.message.MessageTextStyle
 import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.FeedReaction
@@ -227,7 +228,7 @@ object FeedModel {
         // the quote, the raw one in the head. Never for a relayed line's bridged speaker, who isn't a
         // network nick, and never for a notice's `-nick-`.
         val names: (String) -> String? = { state.plainDisplayName(networkId = item.networkId, nick = it) }
-        val displayName = if (line.relayBot == null && line.type.isBubble && line.type != EventType.Notice) {
+        val displayName = if (line.relayBot == null && MessageListLayout.isPerson(line)) {
             line.nick?.let { state.displayName(networkId = item.networkId, nick = it) }
         } else {
             null
@@ -302,8 +303,7 @@ object FeedModel {
             withStyle(SpanStyle(color = fg, fontStyle = FontStyle.Italic)) {
                 append(open)
                 // The shown name (lurker#1203); a relayed quote's nick is a bridged speaker and keeps its spelling.
-                val nick = if (quote.relayBot == null) names?.invoke(quote.nick) ?: quote.nick else quote.nick
-                withStyle(SpanStyle(color = MessageText.nickColor(quote.nick, quote.isSelf, style))) { append(nick) }
+                withStyle(SpanStyle(color = MessageText.nickColor(quote.nick, quote.isSelf, style))) { append(MessageText.quotedName(quote, names)) }
                 append("$close ")
                 val source = quote.relaySource
                 if (!source.isNullOrEmpty()) append("[$source] ")
@@ -314,7 +314,7 @@ object FeedModel {
                 addStyle(ParagraphStyle(textIndent = TextIndent(firstLine = indent, restLine = indent)), 0, length)
             }
         }
-        return FeedReply(shown, "In reply to ${quote.nick}: ${Replies.excerpt(safe.spoken)}")
+        return FeedReply(shown, "In reply to ${MessageText.quotedName(quote, names)}: ${Replies.excerpt(safe.spoken)}")
     }
 
     /** The list's lift on the quote's arm (`MessageText`'s, 18% of the size). */

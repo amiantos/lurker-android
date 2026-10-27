@@ -556,7 +556,7 @@ private fun ReplyQuoteLine(
     val quote = reply.quote
     val jump = reply.onJump
     val text = remember(quote, indented, style, namesKey) { MessageText.renderReplyQuote(quote, indented, style, reply.names) }
-    val spoken = MessageText.spokenReplyQuote(quote)
+    val spoken = MessageText.spokenReplyQuote(quote, reply.names)
     val tap = if (quote != null && jump != null) ({ jump(quote) }) else null
     Text(
         text,

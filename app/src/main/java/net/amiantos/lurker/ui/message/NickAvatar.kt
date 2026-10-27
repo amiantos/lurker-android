@@ -151,6 +151,18 @@ object AvatarColumn {
     /** Where the hairline runs, from the side margin. */
     fun hairline(size: Dp): Dp = size + gutterPadding
 
+    /**
+     * The tile's side from measurements already in dp: the web's `min(2.25em, 2lh)` at phone width
+     * and `min(2.7em, 2lh)` wider. ⚠ The em is taken of the font size AFTER its sp→dp conversion, and
+     * the line height is converted on its own: Android 14's nonlinear font scaling makes that
+     * conversion a curve, so converting `2.25 × 14sp` is not 2.25 times converting `14sp` at a large
+     * scale (at 200%, about two thirds of it). Whole dp, so the hairline beside it lands on the grid.
+     */
+    fun size(fontDp: Dp, lineHeightDp: Dp, wide: Boolean): Dp {
+        val em = if (wide) 2.7f else 2.25f
+        return minOf(fontDp * em, lineHeightDp * 2).value.toInt().dp
+    }
+
     /** The web's two inks: `rgba(255,255,255,0.85)` and `rgba(28,26,30,0.85)`. */
     fun ink(ink: AvatarInk): Color =
         when (ink) {
@@ -172,9 +184,11 @@ fun rememberAvatarSize(style: MessageTextStyle): Dp {
     val wide = with(density) { LocalWindowInfo.current.containerSize.width.toDp() } >= 600.dp
     return remember(style, density, wide) {
         with(density) {
-            val em = if (wide) 2.7f else 2.25f
-            val twoLines = 2 * style.fontSizeSp * style.density.lineHeightPercent / 100f
-            minOf(em * style.fontSizeSp, twoLines).sp.toDp().value.toInt().dp
+            AvatarColumn.size(
+                fontDp = style.fontSizeSp.sp.toDp(),
+                lineHeightDp = (style.fontSizeSp * style.density.lineHeightPercent / 100f).sp.toDp(),
+                wide = wide,
+            )
         }
     }
 }

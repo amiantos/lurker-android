@@ -29,6 +29,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import net.amiantos.lurkerkit.model.NickCompletion
+import net.amiantos.lurkerkit.model.UserMetadata
+import net.amiantos.lurkerkit.model.UserMetadataSet
 import org.junit.Test
 import java.time.Instant
 import net.amiantos.lurkerkit.model.PrefixMode
@@ -435,5 +437,19 @@ class ComposerModelTest {
         assertEquals("amiantos", chip.value)
         assertEquals("Insert amiantos, Brad Root", chip.accessibility)
         assertEquals(Suggestion("alice", "alice", Suggestion.Kind.Nick, "Insert alice"), Suggestion.nick("alice"))
+    }
+
+    @Test
+    fun `the chips' sources move with the metadata set and the display-name setting`() {
+        val members = listOf(Member(nick = "alice"))
+        val base = CandidateSources(members, IgnoreSet.empty, emptyMap(), selfNick = "me", speakers = null)
+        val renamed = CandidateSources(
+            members, IgnoreSet.empty, emptyMap(), "me", null,
+            userMetadata = UserMetadataSet(mapOf(1 to mapOf("alice" to UserMetadata(displayName = "Wonderland")))),
+        )
+        val off = CandidateSources(members, IgnoreSet.empty, emptyMap(), "me", null, displayNames = false)
+        assertFalse(CandidateSources.same(base, renamed))
+        assertFalse(CandidateSources.same(base, off))
+        assertTrue(CandidateSources.same(renamed, CandidateSources(members, IgnoreSet.empty, emptyMap(), "me", null, userMetadata = renamed.userMetadata)))
     }
 }

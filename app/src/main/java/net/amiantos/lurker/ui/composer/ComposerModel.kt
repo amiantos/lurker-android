@@ -20,6 +20,7 @@ import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.MemberPrefix
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.NickCompletion
+import net.amiantos.lurkerkit.model.UserMetadataSet
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.FriendPresence
@@ -242,6 +243,9 @@ internal class CandidateSources(
     val buffers: Map<String, Buffer>,
     val selfNick: String?,
     val speakers: SpeakerMap?,
+    /** The names the chips match and show (lurker#1203): the set by identity, the setting by value. */
+    val userMetadata: UserMetadataSet = UserMetadataSet.empty,
+    val displayNames: Boolean = true,
 ) {
     companion object {
         fun of(state: ChatState, key: BufferKey) = CandidateSources(
@@ -250,11 +254,14 @@ internal class CandidateSources(
             ignores = state.ignores,
             buffers = state.buffers,
             selfNick = key.networkId?.let { state.networks[it]?.nick },
+            userMetadata = state.userMetadata,
+            displayNames = state.settings.bool(ChatState.displayNamesKey, default = true),
         )
 
         fun same(old: CandidateSources, new: CandidateSources): Boolean =
             old.members === new.members && old.ignores === new.ignores && old.buffers === new.buffers &&
-                old.selfNick == new.selfNick && old.speakers === new.speakers
+                old.selfNick == new.selfNick && old.speakers === new.speakers &&
+                old.userMetadata === new.userMetadata && old.displayNames == new.displayNames
     }
 }
 

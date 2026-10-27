@@ -533,8 +533,7 @@ object MessageText {
                     append(open)
                     // The shown name (lurker#1203), plain inside the brackets; a relayed quote's nick is
                     // a bridged speaker and keeps its spelling.
-                    val shown = if (quote.relayBot == null) names?.invoke(quote.nick) ?: quote.nick else quote.nick
-                    withStyle(SpanStyle(color = nickColor(quote.nick, quote.isSelf, style))) { append(shown) }
+                    withStyle(SpanStyle(color = nickColor(quote.nick, quote.isSelf, style))) { append(quotedName(quote, names)) }
                     append("$close ")
                     val source = quote.relaySource
                     if (!source.isNullOrEmpty()) append("[$source] ")
@@ -548,10 +547,14 @@ object MessageText {
         }
 
     /** What TalkBack says for a reply's quote. */
-    fun spokenReplyQuote(quote: ReplyQuote?): String {
+    fun spokenReplyQuote(quote: ReplyQuote?, names: ((String) -> String?)? = null): String {
         if (quote == null) return "In reply to a message that's unavailable"
-        return "In reply to ${quote.nick}: ${Replies.excerpt(quote.text)}"
+        return "In reply to ${quotedName(quote, names)}: ${Replies.excerpt(quote.text)}"
     }
+
+    /** The quoted nick as the quote prints it: its shown name (lurker#1203), a relayed speaker's own spelling. */
+    fun quotedName(quote: ReplyQuote, names: ((String) -> String?)?): String =
+        if (quote.relayBot == null) names?.invoke(quote.nick) ?: quote.nick else quote.nick
 
     /** iOS lifts the arm by 18% of the point size, as the web nudges it up 3px. */
     private const val REPLY_ARM_LIFT = 0.18f

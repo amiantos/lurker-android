@@ -350,4 +350,16 @@ class MessageListLayoutTest {
         assertTrue(tile.isPerson)
         assertFalse(tile.copy(mark = AvatarMark.Notice).isPerson)
     }
+
+    @Test
+    fun `the tile is an em of the converted font size, capped at two converted lines`() {
+        // 14sp at 1x: 2.25em = 31.5, two lines at 155% = 43.4 → 31.
+        assertEquals(31.dp, AvatarColumn.size(fontDp = 14.dp, lineHeightDp = 21.7.dp, wide = false))
+        assertEquals(37.dp, AvatarColumn.size(fontDp = 14.dp, lineHeightDp = 21.7.dp, wide = true))
+        // A tight line height caps it: two lines at 100% = 28.
+        assertEquals(28.dp, AvatarColumn.size(fontDp = 14.dp, lineHeightDp = 14.dp, wide = false))
+        // Android 14 at 200%: 14sp converts to ~26dp while 31.5sp would convert to ~39dp; the em is
+        // taken of the converted size, so the tile keeps its proportion to the text.
+        assertEquals(58.dp, AvatarColumn.size(fontDp = 26.dp, lineHeightDp = 40.3.dp, wide = false))
+    }
 }

@@ -169,4 +169,10 @@ class MemberListModelTest {
         assertEquals(listOf("zed"), MemberListModel.filter(rows, "aard").map { it.nick })
         assertEquals(listOf("zed"), MemberListModel.filter(rows, "ZED").map { it.nick })
     }
+
+    @Test
+    fun talkBackHearsTheShownNameAndThenTheNickWhenTheyDiffer() {
+        assertEquals("Wonderland Alice, alice, operator", MemberListModel.accessibilityLabel(MemberRow("alice", MemberPrefix.Mark("@", MemberPrefix.Tier.Op), away = false, label = "Wonderland Alice")))
+        assertEquals("alice, away", MemberListModel.accessibilityLabel(MemberRow("alice", null, away = true)))
+    }
 }
