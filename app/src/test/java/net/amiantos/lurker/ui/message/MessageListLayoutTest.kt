@@ -20,6 +20,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import net.amiantos.lurker.ui.media.MediaSource
+import net.amiantos.lurkerkit.model.AvatarInk
 import org.junit.Test
 import java.time.Instant
 import java.time.LocalDate
@@ -312,5 +316,38 @@ class MessageListLayoutTest {
         val relayed = CompactHeader("alice", style.colors.fg, time = null, relaySource = "github")
         assertEquals("alice from github, hello", MessageListLayout.spokenRow(relayed, AnnotatedString("hello")).text)
         assertEquals("hello", MessageListLayout.spokenRow(null, AnnotatedString("hello")).text)
+    }
+
+    // MARK: - Display names and avatars (lurker#1203)
+
+    @Test
+    fun `a head wears the display name, a relayed or notice head keeps its nick, and the nick stays the identity`() {
+        val rows = rows(line("alice", 0), line("bridge", 10, relayBot = true), line("ChanServ", 20, type = EventType.Notice))
+        val context = MessageListContext.over(
+            rows, style = style, zone = ZoneOffset.UTC, today = LocalDate.of(2026, 7, 25),
+            displayName = { nick -> if (nick == "alice") "\u000304Wonderland\u0003 Alice" else "Named $nick" },
+        )
+        val plans = rows.mapIndexed { index, row -> MessageListLayout.plan(row, index, context) }
+        assertEquals("\u000304Wonderland\u0003 Alice", plans[0].header()?.displayName)
+        assertEquals("alice", plans[0].header()?.nick)
+        assertEquals("Wonderland Alice", plans[0].header()?.spokenNick)
+        assertNull(plans[1].header()?.displayName)
+        assertNull(plans[2].header()?.displayName)
+    }
+
+    @Test
+    fun `a headed row draws a tile and its continuation keeps only the gutter`() {
+        val rows = rows(line("alice", 0), line("alice", 10), line("alice", 15, type = EventType.Action))
+        val tile = AvatarSpec("alice", Color.Red, imagePath = null, tilePath = null, letter = "A", ink = AvatarInk.Dark, mark = null)
+        val context = MessageListContext.over(
+            rows, style = style, zone = ZoneOffset.UTC, today = LocalDate.of(2026, 7, 25),
+            avatars = AvatarContext(size = 36.dp, media = MediaSource.None, spec = { tile }, onTap = {}),
+        )
+        val plans = rows.mapIndexed { index, row -> MessageListLayout.plan(row, index, context) as RowPlan.Compact }
+        assertEquals(tile, plans[0].avatar)
+        assertNull(plans[1].avatar)
+        assertNull(plans[2].avatar)
+        assertTrue(tile.isPerson)
+        assertFalse(tile.copy(mark = AvatarMark.Notice).isPerson)
     }
 }

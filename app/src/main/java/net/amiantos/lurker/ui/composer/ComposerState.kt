@@ -500,18 +500,23 @@ internal class ComposerState(
      * Who a nick query offers here: the status row's ten, or every match for Tab to cycle through, as
      * the web's does. One call, so the two can't disagree about who's here.
      */
-    private fun nickCandidates(query: String, limit: Int = ComposerModel.NICK_LIMIT): List<String> {
+    private fun nickCandidates(query: String, limit: Int = ComposerModel.NICK_LIMIT): List<NickCompletion.Candidate> {
         val state = model.state
-        return NickCompletion.candidates(
+        val networkId = key.networkId
+        // With the display name each wears or matched on (lurker#1203), for the chip. The name source
+        // is the store's `plainDisplayName`, which answers null when the setting is off — so the
+        // matcher is the old nick-only one then, as on the web. The nick is what a pick inserts.
+        return NickCompletion.rows(
             speakers = state.speakers[key.id] ?: SpeakerMap(),
             members = state.visibleMembers(key),
-            selfNick = key.networkId?.let { state.networks[it]?.nick },
+            selfNick = networkId?.let { state.networks[it]?.nick },
             query = query,
             isChannel = kind == BufferKind.Channel,
             limit = limit,
             ignores = state.ignores,
-            networkId = key.networkId,
+            networkId = networkId,
             channel = key.target,
+            displayName = { state.plainDisplayName(networkId = networkId, nick = it) },
         )
     }
 
@@ -837,7 +842,7 @@ internal class ComposerState(
             val fresh = TabCompletion.begin(
                 text = text,
                 caret = caret,
-                nicks = { query -> nickCandidates(query, limit = Int.MAX_VALUE) },
+                nicks = { query -> nickCandidates(query, limit = Int.MAX_VALUE).map { it.nick } },
                 channels = { ComposerModel.tabChannels(model.state.buffers.values, key.networkId, key) },
                 punctuation = punctuation,
             )

@@ -101,6 +101,10 @@ import net.amiantos.lurker.ui.feeds.AppView
 import net.amiantos.lurker.ui.feeds.ConversationViewsActions
 import net.amiantos.lurker.ui.composer.rememberComposerState
 import net.amiantos.lurker.ui.media.MediaSource
+import net.amiantos.lurkerkit.model.AvatarSets
+import net.amiantos.lurker.ui.message.rememberAvatarSize
+import net.amiantos.lurker.ui.message.AvatarSpec
+import net.amiantos.lurker.ui.message.AvatarContext
 import net.amiantos.lurker.ui.media.PreviewContext
 import net.amiantos.lurker.ui.media.PreviewToggles
 import net.amiantos.lurker.ui.shell.NoticeHost
@@ -616,8 +620,47 @@ fun ConversationScreen(
     }
 
     val day = clock.value
-    // The density rides the style (lurker#1224), so a change made on the web redraws the rows.
-    val style = rememberMessageTextStyle(CompactDensity.of(inputs.settings))
+    // The density rides the style (lurker#1224), so a change made on the web redraws the rows. Under
+    // the avatar column the gutter is the body indent (lurker#607) — this list's rule, taken here
+    // where the column is drawn; the feed shares the density and has no column.
+    val avatarsOn = CompactDensity.avatarsOn(inputs.settings)
+    val style = rememberMessageTextStyle(CompactDensity.of(inputs.settings).let { if (avatarsOn) it.flushBodies else it })
+    // The tile sets are REST-fed and beside the store (lurker#607): a manifest read or a set uploaded
+    // on the web is a redraw the inputs can't see, so they're collected on their own.
+    val avatarSets by model.avatarSetsPublisher.collectAsStateWithLifecycle(initialValue = model.avatarSets)
+    // Ungated on the instance's previews flag, unlike [media]: the bundled and uploaded tiles exist
+    // without previews, and a metadata avatar's path is null when the server can't serve one.
+    val avatarMedia = remember(model) { MediaSource(fetch = { path -> model.proxiedMedia(path) }, playable = { _, _ -> null }) }
+    val avatarSize = rememberAvatarSize(style)
+    val avatars = if (!avatarsOn) {
+        null
+    } else {
+        remember(avatarSets, inputs, style, avatarSize, avatarMedia) {
+            // The active set and the colour's stop characters once per build, not per row: the
+            // resolution walks every set.
+            val active = avatarSets.active(inputs.settings)
+            val stopChars = AvatarSets.stopChars(inputs.settings)
+            AvatarContext(
+                size = avatarSize,
+                media = avatarMedia,
+                spec = { message ->
+                    AvatarSpec.of(
+                        message, networkId = key.networkId, state = inputs.names, active = active, stopChars = stopChars,
+                        networkName = ConversationModel.networkName(message, key, inputs.networks), style = style,
+                    )
+                },
+                // A tap on a tile opens the profile (lurker#1203) — the one-tap "who is this"; the
+                // row's long press keeps the actions. The web's tile opens its nick menu, which the
+                // apps don't have. On a re-attributed relay line the profile is the bridge's, as the
+                // action sheet's is: the bot is the only real IRC entity in the line.
+                onTap = { message ->
+                    val who = message.relayBot ?: message.nick
+                    val networkId = key.networkId
+                    if (!who.isNullOrEmpty() && networkId != null) onShowProfile(networkId, who)
+                },
+            )
+        }
+    }
     val haptics = LocalHapticFeedback.current
 
     // The message sheets — actions, reactions, Ignore (lurker-ios#60, #183).
@@ -643,10 +686,13 @@ fun ConversationScreen(
     // Which previews draw: both settings and the instance's flag (`PreviewToggles`). A preview landing
     // doesn't come through here — each row reads its own URLs' versions (`PreviewUpdates`).
     val previewToggles = PreviewToggles.resolve(instanceHasPreviews, inputs.settings)
-    val context = remember(rows, inputs, highlighter, style, day, actions, keyboard, focusManager, haptics, previewToggles, media, openMedia) {
+    val context = remember(rows, inputs, highlighter, style, day, actions, keyboard, focusManager, haptics, previewToggles, media, openMedia, avatars) {
         MessageListContext(
             style = style,
             networkName = { message -> ConversationModel.networkName(message, key, inputs.networks) },
+            displayName = { nick -> inputs.names.displayName(networkId = key.networkId, nick = nick) },
+            plainName = { nick -> inputs.names.plainDisplayName(networkId = key.networkId, nick = nick) },
+            avatars = avatars,
             highlighter = highlighter,
             modePrefixes = inputs.modePrefixes,
             settings = inputs.settings,

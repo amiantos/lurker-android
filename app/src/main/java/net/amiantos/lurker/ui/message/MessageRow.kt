@@ -18,6 +18,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
@@ -289,7 +292,7 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
         if (message == null || previews == null) PreviewPlan.None else previews.plan(message)
     }
     val body: AnnotatedString = when (content) {
-        is RowPlan.Content.Of -> remember(content.message, revealed, context.highlighter, context.settings, style, previewPlan.hidden, plan.trailingTime) {
+        is RowPlan.Content.Of -> remember(content.message, revealed, context.highlighter, context.settings, style, previewPlan.hidden, plan.trailingTime, context) {
             MessageText.renderCompactBody(
                 content.message,
                 style = style,
@@ -299,10 +302,11 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                 revealed = revealed,
                 hiddenUrls = previewPlan.hidden,
                 onToggleSpoiler = { ordinal -> context.onToggleSpoiler(content.message, ordinal) },
+                names = context.plainName,
             )
         }
-        is RowPlan.Content.Summary -> remember(content.summary, style, plan.trailingTime) {
-            MessageText.renderCompactConsolidation(content.summary, style, plan.trailingTime)
+        is RowPlan.Content.Summary -> remember(content.summary, style, plan.trailingTime, context) {
+            MessageText.renderCompactConsolidation(content.summary, style, plan.trailingTime, context.plainName)
         }
         is RowPlan.Content.Typists -> remember(content.nicks, style) {
             MessageText.renderCompactTyping(content.nicks, style) ?: AnnotatedString("")
@@ -365,18 +369,42 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
             }
     }
 
+    // The avatar column (lurker#607). Every row takes the gutter while avatars are on — continuations
+    // and narration too, so bodies stay on one edge — and only a run's first row draws a tile, centred
+    // on its head and first body line, the two lines a short message's wash covers. The tile at the
+    // side margin where the text otherwise starts, the web's `--space-4`, a hairline, then `--space-5`
+    // before the text. The hairline runs the row's whole height, gaps included, so the cells abutting
+    // make it one line — on the row rather than the list, so a washed row doesn't cut it.
+    val avatars = context.avatars
+    val gutter = if (avatars != null) AvatarColumn.gutter(avatars.size) else 0.dp
+    val hairline = colors.border
+    val lineHeightDp = with(LocalDensity.current) { textStyle.lineHeight.toDp() }
     Column(
         modifier
             .then(pressable)
             .fillMaxWidth()
             .padding(bottom = if (plan.endsBlock) metrics.blockGap - metrics.wash * 2 else 0.dp),
     ) {
-        Column(
+        Box(
             Modifier
                 .fillMaxWidth()
                 // No zebra: the author header marks where a block starts. Only a matched rule paints.
                 .background(if (plan.highlighted) colors.highlightBubble else Color.Transparent)
-                .padding(horizontal = CompactMetrics.side)
+                .then(
+                    if (avatars == null) {
+                        Modifier
+                    } else {
+                        Modifier.drawBehind {
+                            val x = (CompactMetrics.side + AvatarColumn.hairline(avatars.size)).toPx()
+                            drawLine(hairline, start = Offset(x, 0f), end = Offset(x, size.height), strokeWidth = 1.dp.toPx())
+                        }
+                    },
+                ),
+        ) {
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = CompactMetrics.side + gutter, end = CompactMetrics.side)
                 .padding(
                     top = if (plan.startsBlock) metrics.wash else 0.dp,
                     bottom = if (plan.endsBlock) metrics.wash + CompactMetrics.washBottomNudge else 0.dp,
@@ -384,7 +412,7 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
         ) {
             val header = plan.header
             if (header != null) {
-                HeaderLine(header, style, textStyle, if (hasBody) Modifier.clearAndSetSemantics {} else semantics)
+                HeaderLine(header, style, textStyle, if (hasBody) Modifier.clearAndSetSemantics {} else semantics, emphasized = avatars != null)
             }
             val reply = plan.reply
             if (reply != null) {
@@ -447,6 +475,23 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                 )
             }
         }
+        val tile = plan.avatar
+        if (avatars != null && tile != null) {
+            // Centred on the head and the first body line: past the wash, each line is one line height
+            // and the two sit a header gap apart; the tile is never taller than the two together.
+            val headAndFirstLine = lineHeightDp * 2 + CompactMetrics.headerGap
+            val top = (if (plan.startsBlock) metrics.wash else 0.dp) + ((headAndFirstLine - avatars.size) / 2).coerceAtLeast(0.dp)
+            NickAvatarTile(
+                spec = tile,
+                size = avatars.size,
+                media = avatars.media,
+                // A placeholder tile — a notice's megaphone, the server's rack — isn't a person, so a
+                // tap on it falls through to the row as the web lets it.
+                onTap = if (tile.isPerson && message != null) ({ avatars.onTap(message) }) else null,
+                modifier = Modifier.padding(start = CompactMetrics.side, top = top),
+            )
+        }
+        }
     }
 }
 
@@ -462,8 +507,15 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
  * running off the edge. Three quarters of a character apart, the web's gap.
  */
 @Composable
-internal fun HeaderLine(header: CompactHeader, style: MessageTextStyle, textStyle: TextStyle, modifier: Modifier = Modifier) {
-    val name = remember(header, style) { MessageText.headerName(header, style) }
+internal fun HeaderLine(
+    header: CompactHeader,
+    style: MessageTextStyle,
+    textStyle: TextStyle,
+    modifier: Modifier = Modifier,
+    /** Bold, beside the avatar gutter (lurker#607) — see `MessageText.headerName`. */
+    emphasized: Boolean = false,
+) {
+    val name = remember(header, style, emphasized) { MessageText.headerName(header, style, emphasized) }
     val gap = with(LocalDensity.current) { (textStyle.fontSize.toPx() * style.indentEm * 0.75f).toDp() }
     Row(modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
         // None when there's no name to show (a reaction to a `/me` in the feed), so the gap doesn't
@@ -500,7 +552,7 @@ private fun ReplyQuoteLine(
 ) {
     val quote = reply.quote
     val jump = reply.onJump
-    val text = remember(quote, indented, style) { MessageText.renderReplyQuote(quote, indented, style) }
+    val text = remember(quote, indented, style, reply.names) { MessageText.renderReplyQuote(quote, indented, style, reply.names) }
     val spoken = MessageText.spokenReplyQuote(quote)
     val tap = if (quote != null && jump != null) ({ jump(quote) }) else null
     Text(

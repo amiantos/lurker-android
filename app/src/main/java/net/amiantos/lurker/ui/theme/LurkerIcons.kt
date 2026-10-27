@@ -505,6 +505,18 @@ object LurkerIcons {
         )
     }
 
+    /** A notice's avatar tile — iOS's `megaphone.fill` (`campaign`), lurker#1203. */
+    val Campaign: ImageVector by lazy {
+        icon(
+            "Campaign",
+            "M18,11v2h4v-2h-4z" +
+                "M16,17.61c0.96,0.71 2.21,1.65 3.2,2.39 0.4,-0.53 0.8,-1.07 1.2,-1.6 -0.99,-0.74 -2.24,-1.68 -3.2,-2.4 -0.4,0.54 -0.8,1.08 -1.2,1.61z" +
+                "M20.4,5.6c-0.4,-0.53 -0.8,-1.07 -1.2,-1.6 -0.99,0.74 -2.24,1.68 -3.2,2.4 0.4,0.53 0.8,1.07 1.2,1.6 0.96,-0.72 2.21,-1.65 3.2,-2.4z" +
+                "M4,9c-1.1,0 -2,0.9 -2,2v2c0,1.1 0.9,2 2,2h1v4h2v-4h1l5,3V6L8,9H4z" +
+                "M15.5,12c0,-1.33 -0.58,-2.53 -1.5,-3.35v6.69c0.92,-0.81 1.5,-2.01 1.5,-3.34z",
+        )
+    }
+
     /** An empty server log — iOS's `server.rack` (`dns`). */
     val Dns: ImageVector by lazy {
         icon(

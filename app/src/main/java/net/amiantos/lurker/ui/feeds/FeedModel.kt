@@ -223,10 +223,19 @@ object FeedModel {
         } else {
             line
         }
+        // Display names (lurker#1203) on the row's own network: the plain form inside the sentence and
+        // the quote, the raw one in the head. Never for a relayed line's bridged speaker, who isn't a
+        // network nick, and never for a notice's `-nick-`.
+        val names: (String) -> String? = { state.plainDisplayName(networkId = item.networkId, nick = it) }
+        val displayName = if (line.relayBot == null && line.type.isBubble && line.type != EventType.Notice) {
+            line.nick?.let { state.displayName(networkId = item.networkId, nick = it) }
+        } else {
+            null
+        }
         val rendered = if (reaction != null) {
             reactionBody(reaction, style)
         } else {
-            MessageText.renderCompactBody(shown, style, trailingTime = if (headed) null else time, settings = state.settings)
+            MessageText.renderCompactBody(shown, style, trailingTime = if (headed) null else time, settings = state.settings, names = names)
         }
         val indentsBody = shown.type != EventType.Action
         val header = if (!headed || (name == null && time == null)) {
@@ -237,6 +246,7 @@ object FeedModel {
                 color = MessageText.captionColor(line, networkName, style),
                 time = time,
                 relaySource = line.relaySource,
+                displayName = displayName,
             )
         }
         return FeedRow(
@@ -244,7 +254,7 @@ object FeedModel {
             header = header,
             body = inert(rendered),
             spokenBody = if (reaction != null) reactionSpoken(reaction) else MessageText.spoken(unrevealable(rendered)),
-            reply = if (shown.replyTo == null) null else replyQuote(shown.replyQuote, indentsBody, style),
+            reply = if (shown.replyTo == null) null else replyQuote(shown.replyQuote, indentsBody, style, names),
             indentsBody = indentsBody,
         )
     }
@@ -278,7 +288,7 @@ object FeedModel {
      * box's text, so a quoted spoiler would be printed above the reply — and read to TalkBack — in a
      * feed whose rows offer no way to have opened it.
      */
-    fun replyQuote(quote: ReplyQuote?, indented: Boolean, style: MessageTextStyle): FeedReply {
+    fun replyQuote(quote: ReplyQuote?, indented: Boolean, style: MessageTextStyle, names: ((String) -> String?)? = null): FeedReply {
         if (quote == null) return FeedReply(MessageText.renderReplyQuote(null, indented, style), MessageText.spokenReplyQuote(null))
         val safe = SpoilerSafeText.of(quote.text)
         val shown = buildAnnotatedString {
@@ -291,7 +301,9 @@ object FeedModel {
             }
             withStyle(SpanStyle(color = fg, fontStyle = FontStyle.Italic)) {
                 append(open)
-                withStyle(SpanStyle(color = MessageText.nickColor(quote.nick, quote.isSelf, style))) { append(quote.nick) }
+                // The shown name (lurker#1203); a relayed quote's nick is a bridged speaker and keeps its spelling.
+                val nick = if (quote.relayBot == null) names?.invoke(quote.nick) ?: quote.nick else quote.nick
+                withStyle(SpanStyle(color = MessageText.nickColor(quote.nick, quote.isSelf, style))) { append(nick) }
                 append("$close ")
                 val source = quote.relaySource
                 if (!source.isNullOrEmpty()) append("[$source] ")

@@ -90,7 +90,18 @@ internal data class Suggestion(val title: String, val value: String, val kind: K
         /** Shown and inserted verbatim. */
         fun channel(name: String) = Suggestion(name, name, Kind.Channel, "Channel $name")
 
-        fun nick(nick: String) = Suggestion(nick, nick, Kind.Nick, "Insert $nick")
+        /**
+         * With a display name (lurker#1203) the chip says both — the name you recognise and the nick a
+         * pick inserts, as the web's picker shows the name with the nick in a badge. A chip reading only
+         * "Brad Root" that types `amiantos` would be a chip that lies about its tap.
+         */
+        fun nick(nick: String, displayName: String? = null) =
+            Suggestion(
+                if (displayName != null) "$displayName · $nick" else nick,
+                nick,
+                Kind.Nick,
+                if (displayName != null) "Insert $nick, $displayName" else "Insert $nick",
+            )
     }
 }
 
@@ -314,12 +325,12 @@ internal object ComposerModel {
     fun suggestions(
         completion: Completion?,
         channels: (query: String) -> List<String>,
-        nicks: (query: String) -> List<String>,
+        nicks: (query: String) -> List<NickCompletion.Candidate>,
     ): List<Suggestion> = when (completion) {
         is Completion.Command -> CommandRegistry.matching(completion.query).map(Suggestion::command)
         is Completion.ChannelArg -> channels(completion.query).map(Suggestion::channel)
-        is Completion.NickArg -> nicks(completion.query).map(Suggestion::nick)
-        is Completion.Mention -> nicks(completion.query).map(Suggestion::nick)
+        is Completion.NickArg -> nicks(completion.query).map { Suggestion.nick(it.nick, it.displayName) }
+        is Completion.Mention -> nicks(completion.query).map { Suggestion.nick(it.nick, it.displayName) }
         null -> emptyList()
     }
 

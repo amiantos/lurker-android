@@ -34,6 +34,9 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -140,9 +143,14 @@ internal fun FeedList(
     // "Today" and "Yesterday" move at midnight (and with the zone), so the headers are rebuilt on the
     // conversation's day clock — the rows themselves come from the cache, so that's a regroup only.
     val day by rememberDayClock()
+    // The rows read the store as they're rendered, so a display name that changes while the feed is
+    // open (a profile edit, the setting) would show on the rows rendered since and not on the ones
+    // already drawn (lurker#1203). The set is only ever replaced, so its identity is the signal.
+    val metadataFlow = remember(model) { model.statePublisher.map { it.userMetadata }.distinctUntilChanged { a, b -> a === b } }
+    val metadata by metadataFlow.collectAsStateWithLifecycle(initialValue = model.state.userMetadata)
     // Rendered once per row for the life of an answer: dropped when a new first page lands or the face
     // changes, the moments a row's rendering can change (`FeedRowCache`).
-    val cache = remember(snapshot.epoch, style, day.zone) {
+    val cache = remember(snapshot.epoch, style, day.zone, metadata) {
         FeedRowCache { item -> FeedModel.row(item, model.state, style, day.zone) }
     }
     // Built when the rows change, against the state as it stands then — see `FeedModel.sections`.

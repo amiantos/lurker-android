@@ -17,6 +17,8 @@ import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NetworkAbbreviation
 import net.amiantos.lurkerkit.model.PresenceState
+import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.model.UserMetadataSet
 import net.amiantos.lurkerkit.model.StatusLight
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
@@ -142,6 +144,11 @@ data class Row(
      * from, and this gates a WRITE.
      */
     val isFriend: Boolean = false,
+    /**
+     * The peer's display name on a DM row (lurker#1203), or null to print the target. Set where the
+     * row is built (`peerLabel`), compared with the row like [presence].
+     */
+    val label: String? = null,
     /**
      * Whether an ignore rule mutes this buffer's plain-unread signal (lurker #359). Carried on the
      * row — and therefore compared with it — so muting or unmuting from another device redraws
@@ -356,6 +363,12 @@ class BufferListInputs private constructor(
      * draft has no entry), so a key here is a buffer with a draft — the kit's `hasDraft`.
      */
     val draftedKeys: Set<String>,
+    /**
+     * A DM row prints its peer's display name (lurker#1203), which changes with a profile and with
+     * the setting — neither moves anything else here. The set by identity, the settings by value.
+     */
+    val userMetadata: UserMetadataSet,
+    val settings: Settings,
 ) {
     /**
      * The kit's `ChatState` holding only these fields, so its helpers — `rowPresence`, `buffer`,
@@ -374,6 +387,8 @@ class BufferListInputs private constructor(
             peerPresence = peerPresence,
             pinned = pinned,
             ignores = ignores,
+            userMetadata = userMetadata,
+            settings = settings,
         )
     }
 
@@ -396,6 +411,8 @@ class BufferListInputs private constructor(
                 ignores = state.ignores,
                 pinned = state.pinned,
                 draftedKeys = state.drafts.keys,
+                userMetadata = state.userMetadata,
+                settings = state.settings,
             )
 
         /** Whether the list would draw [a] and [b] identically. See each field for why it's here. */
@@ -412,7 +429,9 @@ class BufferListInputs private constructor(
                 a.peerPresence == b.peerPresence &&
                 a.ignores === b.ignores &&
                 a.pinned == b.pinned &&
-                a.draftedKeys == b.draftedKeys
+                a.draftedKeys == b.draftedKeys &&
+                a.userMetadata === b.userMetadata &&
+                a.settings == b.settings
     }
 }
 
@@ -698,6 +717,7 @@ object BufferListModel {
                 networkName = inputs.networks[entry.networkId]?.displayName,
                 presence = inputs.state.rowPresence(networkId = entry.networkId, nick = entry.target),
                 isFriend = true,
+                label = peerLabel(buffer, inputs),
                 muted = isMuted(buffer, inputs),
                 hasDraft = inputs.hasDraft(buffer.key),
             )
@@ -787,10 +807,25 @@ object BufferListModel {
             buffer = buffer,
             networkName = null,
             presence = peerPresence(buffer, inputs),
+            label = peerLabel(buffer, inputs),
             muted = isMuted(buffer, inputs),
             parted = inputs.state.isParted(buffer.key),
             hasDraft = inputs.hasDraft(buffer.key),
         )
+
+    /**
+     * A DM peer's display name (lurker#1203), plain, or null for anything that isn't a DM or a peer
+     * without one. The row's key, order and presence stay on the target — the nick is the identity;
+     * this is only what's written.
+     */
+    internal fun peerLabel(buffer: Buffer, inputs: BufferListInputs): String? {
+        val networkId = buffer.networkId
+        if (buffer.kind != BufferKind.Dm || networkId == null) return null
+        return inputs.state.plainDisplayName(networkId = networkId, nick = buffer.target)
+    }
+
+    /** What a row prints: the peer's display name on a DM, else the buffer's own name. */
+    fun printedName(row: Row): String = row.label ?: row.buffer.displayName()
 
     /**
      * A DM's peer presence, null for anything that isn't a DM (lurker-ios#167). Every DM row reads
@@ -825,14 +860,17 @@ object BufferListModel {
      */
     internal fun addNetworkHints(abbreviations: Map<Int, String>, rows: List<Row>): List<Row> {
         if (abbreviations.size <= 1) return rows
+        // Counted on what the row PRINTS — a DM's display name where it has one (lurker#1203) — since
+        // two friends on two networks with one display name collide on screen whatever their nicks are.
+        fun printed(row: Row) = (row.label ?: row.buffer.target).lowercase()
         val counts = HashMap<String, Int>()
-        for (row in rows) counts.merge(row.buffer.target.lowercase(), 1, Int::plus)
+        for (row in rows) counts.merge(printed(row), 1, Int::plus)
         val hinted = counts.filterValues { it > 1 }.keys
         if (hinted.isEmpty()) return rows
         return rows.map { row ->
             val networkId = row.buffer.networkId
             val abbreviation = networkId?.let { abbreviations[it] }
-            if (row.buffer.target.lowercase() in hinted && abbreviation != null) row.copy(networkHint = abbreviation) else row
+            if (printed(row) in hinted && abbreviation != null) row.copy(networkHint = abbreviation) else row
         }
     }
 
@@ -977,7 +1015,7 @@ object BufferListModel {
      * The network name is the full one (Friends and Favorites rows), never the short hint.
      */
     fun rowDescription(row: Row): String {
-        val name = row.buffer.displayName()
+        val name = printedName(row)
         val summary = StringBuilder(row.networkName?.let { "$name, $it" } ?: name)
         if (row.parted) summary.append(", not joined")
         val presence = row.presence

@@ -26,6 +26,7 @@ import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.model.SpeakerMap
 import net.amiantos.lurkerkit.model.TagSupport
+import net.amiantos.lurkerkit.model.UserMetadataSet
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
 import java.time.Instant
@@ -82,9 +83,21 @@ internal class ConversationInputs(
     val modePrefixes: Map<String, MemberPrefix.Mark>,
     /** Who the in-body nick colouring looks for — see `ConversationModel.highlighterNicks`. */
     val highlighterNicks: List<String>,
+    /**
+     * Every nick's IRCv3 metadata (lurker#1203): display names in the heads, narration and quotes,
+     * avatars in the column. Compared by identity — the set is only ever replaced (see `UserMetadataSet`).
+     */
+    val userMetadata: UserMetadataSet = UserMetadataSet.empty,
 ) {
     /** Your nick on this buffer's network, or null where there is none (the system buffer). */
     val ownNick: String? get() = key.networkId?.let { networks[it]?.nick }
+
+    /**
+     * The kit's `ChatState` holding only what the name rules read, so `displayName`,
+     * `plainDisplayName` and the tile's lookups are the kit's logic over exactly what was compared.
+     * Built on first use, once per frame that got through.
+     */
+    val names: ChatState by lazy { ChatState(settings = settings, userMetadata = userMetadata) }
 
     /** The chips for one line — `ChatState.reactionGroups`, over the map this frame carried. */
     fun reactionGroups(messageId: Long): List<ReactionGroup> {
@@ -108,7 +121,8 @@ internal class ConversationInputs(
                 old.reactionsRevision == new.reactionsRevision &&
                 old.support == new.support &&
                 old.modePrefixes == new.modePrefixes &&
-                old.highlighterNicks == new.highlighterNicks
+                old.highlighterNicks == new.highlighterNicks &&
+                old.userMetadata === new.userMetadata
     }
 }
 
@@ -161,6 +175,7 @@ internal class ConversationProjector(private val key: BufferKey, private val kin
             support = state.tagSupport(networkId = key.networkId),
             modePrefixes = modePrefixes,
             highlighterNicks = highlighterNicks,
+            userMetadata = state.userMetadata,
         )
     }
 }
