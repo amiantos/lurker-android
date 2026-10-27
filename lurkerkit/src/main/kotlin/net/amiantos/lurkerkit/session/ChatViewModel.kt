@@ -39,6 +39,8 @@ import net.amiantos.lurkerkit.push.PushRoute
 import net.amiantos.lurkerkit.push.RelayPush
 import net.amiantos.lurkerkit.commands.CommandParser
 import net.amiantos.lurkerkit.commands.ParsedInput
+import net.amiantos.lurkerkit.model.AvatarSetManifest
+import net.amiantos.lurkerkit.model.AvatarSets
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
@@ -565,6 +567,11 @@ class ChatViewModel(
         // moves the disk work off main — see `purgeMedia`, started at the same point in the teardown.
         purgeMedia()
         features = InstanceFeatures()
+        // The departing account's sets, for the same reason as `features` (lurker#607) — and a read
+        // of them still out, which would otherwise land in the next account's session.
+        avatarSetsSubject.value = AvatarSets.none
+        uploadedSetReads.supersedeInFlight()
+        manifestReads.supersedeInFlight()
         lastPreviewToggles = null
         store.reset()
         // ⚠ The correlator holds the TEXT of every unanswered send, so it is account data and
@@ -1020,6 +1027,53 @@ class ChatViewModel(
      */
     var features: InstanceFeatures = InstanceFeatures()
         private set
+
+    /**
+     * Which avatar tile sets exist (lurker#607, Mobile lurker#1203): the bundled sets' counts
+     * from their manifests, the account's uploaded sets from `GET /api/avatar-sets`. REST-fed,
+     * so it lives here rather than in `ChatState`; read again on every connect snapshot and on
+     * `avatar-sets-changed`. The pointer itself (`look.avatars.set`) is in `state.settings`.
+     */
+    val avatarSets: AvatarSets get() = avatarSetsSubject.value
+    val avatarSetsPublisher: SharedFlow<AvatarSets> get() = avatarSetsSubject.flow
+    private val avatarSetsSubject = CurrentValueSubject(AvatarSets.none)
+    /**
+     * One ticket per answer, not per refresh: a refresh whose list GET failed must not
+     * outrank an older one whose list arrived late, and the manifests are read on their own.
+     */
+    private val uploadedSetReads = NewestAnswer()
+    private val manifestReads = NewestAnswer()
+
+    /**
+     * Re-read the uploaded sets and every bundled manifest. The manifests too, every time: a
+     * deploy that re-cuts a set changes its count without changing its URL, and a deploy is what
+     * drops the socket — the same reason `/api/config` is read on every reconnect. Three small
+     * revalidating GETs. A failed read keeps the last answer — one 502 must not blank every tile.
+     *
+     * Port note: the tickets are taken before the task is launched, as the Swift takes them before
+     * its `Task`, and the body runs through `scope.task` like `loadConfig()` — nothing of it runs
+     * before this returns, even under `Dispatchers.Main.immediate`.
+     */
+    private fun refreshAvatarSets() {
+        val uploadedRead = uploadedSetReads.start()
+        val manifestRead = manifestReads.start()
+        scope.task {
+            val uploaded = client.fetchAvatarSets()
+            val manifests = LinkedHashMap<String, AvatarSetManifest>()
+            for (id in AvatarSets.builtinTileSetIds) {
+                client.fetchAvatarManifest(setId = id)?.let { manifests[id] = it }
+            }
+            if (session != SessionState.LoggedIn) return@task
+            var next = avatarSetsSubject.value
+            // A failed read consumes no ticket: the answer it didn't get may still come from an
+            // older refresh, and that answer is newer than nothing.
+            if (manifests.isNotEmpty() && manifestReads.accept(manifestRead)) {
+                next = next.copy(manifests = next.manifests + manifests)
+            }
+            if (uploaded != null && uploadedSetReads.accept(uploadedRead)) next = next.copy(uploaded = uploaded)
+            if (next != avatarSetsSubject.value) avatarSetsSubject.value = next
+        }
+    }
 
     /**
      * The size to compress media to before uploading — the server's advertised cap when it
@@ -2965,8 +3019,13 @@ class ChatViewModel(
                     )?.let { onNotify?.invoke(it) }
                 }
             }
-            is ServerFrame.Snapshot ->
+            is ServerFrame.Snapshot -> {
                 channelEventsSubject.tryEmit(ChannelEvent.Resynced)
+                // Like `/api/config`, re-read on every connect: a set uploaded or deleted on the web
+                // while this socket was down sent its `avatar-sets-changed` to nobody here.
+                refreshAvatarSets()
+            }
+            is ServerFrame.AvatarSetsChanged -> refreshAvatarSets()
             is ServerFrame.PeerPresence ->
                 if (cameOnline != null) onNotify?.invoke(cameOnline)
             is ServerFrame.Invited -> {
@@ -3139,6 +3198,11 @@ class ChatViewModel(
         // work off main (`purgeMedia`).
         purgeMedia()
         features = InstanceFeatures()
+        // The departing account's sets, for the same reason as `features` (lurker#607) — and a read
+        // of them still out, which would otherwise land in the next account's session.
+        avatarSetsSubject.value = AvatarSets.none
+        uploadedSetReads.supersedeInFlight()
+        manifestReads.supersedeInFlight()
         lastPreviewToggles = null
         store.reset()
         // ⚠ The correlator holds the TEXT of every unanswered send, so it is account data and

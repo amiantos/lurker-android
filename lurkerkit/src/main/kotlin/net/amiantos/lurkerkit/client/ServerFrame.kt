@@ -12,6 +12,7 @@ import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageReaction
+import net.amiantos.lurkerkit.model.MetadataLimits
 import net.amiantos.lurkerkit.model.ModeListEntry
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NickNote
@@ -30,9 +31,9 @@ import java.time.Instant
  * Parsing the raw JSON into these here keeps the JSON layer an implementation detail
  * the store and UI never see.
  *
- * Port note: three cases share a name with the model type they carry — [AwayState],
- * [WhoisResult] and [ModeSpec] — and inside this interface the bare name is the case. The model
- * type is written out in full there (PORTING.md, "a case named like a builtin").
+ * Port note: four cases share a name with the model type they carry — [AwayState],
+ * [WhoisResult], [ModeSpec] and [UserMetadata] — and inside this interface the bare name is the
+ * case. The model type is written out in full there (PORTING.md, "a case named like a builtin").
  *
  * Port note: where LurkerKit's case has an unlabelled associated value, the property takes the
  * name `LurkerStore` binds it to when it matches the case (`case .networks(let networks)`).
@@ -472,6 +473,27 @@ internal sealed interface ServerFrame {
     data class PeerPresence(val networkId: Int, val nick: String, val state: PresenceState?) : ServerFrame
 
     /**
+     * A `user-metadata` ephemeral (rides `irc`, `type:"user-metadata"`, network-scoped via a
+     * `:server:<id>` target): a nick's whole IRCv3 metadata record, to replace what we hold
+     * (lurker#607, Mobile lurker#1203). `values` null forgets the nick — a rename arrives as the
+     * old nick's null, then the new nick's record.
+     *
+     * ⚠ Like `peer-presence`, recognised above the target guard and never a line: left to fall
+     * through, every profile change on the network drew an empty row in the server buffer.
+     */
+    data class UserMetadata(
+        val networkId: Int,
+        val nick: String,
+        val values: net.amiantos.lurkerkit.model.UserMetadata?,
+    ) : ServerFrame
+
+    /**
+     * WS `avatar-sets-changed`: the account's uploaded avatar tile sets changed on some device
+     * (lurker#607). No payload — re-read `GET /api/avatar-sets`.
+     */
+    data object AvatarSetsChanged : ServerFrame
+
+    /**
      * An `away-state` ephemeral (rides `irc`, `type:"away-state"`, network-scoped via a
      * `:server:<id>` target): *your own* away state changed — from this device, another one,
      * or the server's own idle auto-away.
@@ -689,6 +711,14 @@ internal data class NetworkSnapshot(
      * "unknown", not the RFC defaults — then kept current by `mode-spec`.
      */
     val modeSpec: net.amiantos.lurkerkit.model.ModeSpec? = null,
+    /**
+     * Every nick's IRCv3 metadata this connection holds, `folded nick → record` (lurker#607) —
+     * the connect-time seed that live `user-metadata` events then patch. Empty on a server that
+     * predates it. Defaulted like its neighbours.
+     */
+    val userMetadata: Map<String, net.amiantos.lurkerkit.model.UserMetadata> = emptyMap(),
+    /** What the network can carry, or null without `draft/metadata-2` (and on an older server). */
+    val metadataLimits: MetadataLimits? = null,
 )
 
 internal data class ChannelSnapshot(

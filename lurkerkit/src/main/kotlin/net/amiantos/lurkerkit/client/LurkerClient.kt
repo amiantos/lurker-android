@@ -8,6 +8,7 @@ import java.io.File
 import java.io.IOException
 import java.net.UnknownServiceException
 import java.time.Duration
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.logging.Logger
 import kotlin.coroutines.resume
@@ -35,6 +36,8 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import net.amiantos.lurkerkit.model.AvatarSetManifest
+import net.amiantos.lurkerkit.model.AvatarSets
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.CertificateExport
 import net.amiantos.lurkerkit.model.CertificateResult
@@ -64,6 +67,7 @@ import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.TypingSignal
 import net.amiantos.lurkerkit.model.UploadsFilter
 import net.amiantos.lurkerkit.model.UploadsPage
+import net.amiantos.lurkerkit.model.UploadedAvatarSet
 import net.amiantos.lurkerkit.model.UploadsRequest
 import net.amiantos.lurkerkit.session.PersistedSession
 import net.amiantos.lurkerkit.support.percentEncodedQuery
@@ -72,6 +76,7 @@ import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import net.amiantos.lurkerkit.support.unicodeRegex
 import net.amiantos.lurkerkit.support.utf8OrNull
 import okhttp3.Cache
+import okhttp3.CacheControl
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.CookieJar
@@ -1354,6 +1359,58 @@ internal class LurkerClient(
             val text = data.utf8OrNull()
             if (code !in 200..<300 || text == null) return null
             return FrameParser.parseHighlights(text)
+        } catch (_: IOException) {
+            return null
+        }
+    }
+
+    // MARK: - Avatar sets (lurker#607)
+
+    /**
+     * The account's uploaded avatar tile sets — `GET /api/avatar-sets`. Null for no answer, so
+     * the caller keeps what it had; a 401 is reported like every other read's.
+     */
+    suspend fun fetchAvatarSets(): List<UploadedAvatarSet>? {
+        val token = token ?: return null
+        val url = (baseURL + "/api/avatar-sets").toHttpUrlOrNull() ?: return null
+        val request = Request.Builder().url(url).header("Authorization", "Bearer $token").build()
+        try {
+            val (code, data) = session.await(request)
+            if (code == 401) {
+                reportUnauthorized(sentWith = token)
+                return null
+            }
+            if (code !in 200..<300) return null
+            val text = data.utf8OrNull() ?: return null
+            return AvatarSets.parseList(text)
+        } catch (_: IOException) {
+            return null
+        }
+    }
+
+    /**
+     * A bundled tile set's `manifest.json` — a static file beside the web client, so no token:
+     * `/avatars/<id>/manifest.json`. Null for a server that doesn't ship the set (older than
+     * lurker#607) or an unreadable manifest, which the caller reads as "no tiles to draw".
+     *
+     * Revalidated on every read, as the web's `cache: 'no-cache'` does: a release that re-cuts a
+     * set changes its count without changing its URL.
+     *
+     * Port note: `Cache-Control: max-age=0` on the request is OkHttp's spelling of
+     * `URLRequest.CachePolicy.reloadRevalidatingCacheData` — a cached copy is used only after the
+     * server has confirmed it (a conditional GET), never served as-is.
+     */
+    suspend fun fetchAvatarManifest(setId: String): AvatarSetManifest? {
+        val url = (baseURL + "/avatars/$setId/manifest.json").toHttpUrlOrNull() ?: return null
+        val request = Request.Builder()
+            .url(url)
+            .cacheControl(CacheControl.Builder().maxAge(0, TimeUnit.SECONDS).build())
+            .build()
+        try {
+            val (code, data) = session.await(request)
+            if (code !in 200..<300) return null
+            val text = data.utf8OrNull() ?: return null
+            return AvatarSets.parseManifest(text)
         } catch (_: IOException) {
             return null
         }

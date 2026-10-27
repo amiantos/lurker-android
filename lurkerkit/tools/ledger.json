@@ -1,5 +1,5 @@
 {
-  "pin": "e34823ff75a3b6b12eab0f68ebdcde3dbc6c0689",
+  "pin": "cca629f",
   "tranches": [
     {
       "id": "T1",
@@ -206,6 +206,16 @@
         "Model/TimestampFormat.swift",
         "Model/CompactDensity.swift"
       ]
+    },
+    {
+      "id": "S8",
+      "title": "Sync to lurker-ios cca629f",
+      "about": "lurker-ios#244 (lurker#1203, the web's #607): IRCv3 metadata — display names, avatars, the metadata profile. `UserMetadata` (a nick's record, `MetadataLimits`, and `UserMetadataSet`, the per-network map replaced whole and compared by identity like `RelayBotSet`), `AvatarTiles` (`shared/avatarTiles.ts`'s salted djb2 over the colour's trim, with the web's parity vectors) and `AvatarSets` (the five bundled sets, the uploaded ones, the `look.avatars.set` pointer and its fallback, the list and manifest decoders) are new. `ServerFrame`/`FrameParser` gain `user-metadata` (above the target guard — left to fall through it was an empty row in the server buffer on every profile change), `channel-metadata` (ignored, named), `avatar-sets-changed` and the two snapshot fields; `ChatState` holds the set and answers `displayName`/`plainDisplayName`/`label`; `Network.metadataLimits` follows `modeSpec`'s lifecycle; `CompactDensity.flushBodies` is the list's rule under the gutter; `NickCompletion.rows` matches display names and carries them; `LurkerClient` reads `/api/avatar-sets` and the bundled manifests; `ChatViewModel.avatarSets` publishes them, re-read on every snapshot and on `avatar-sets-changed`, with each answer under its own `NewestAnswer`. All ported. ⚠ Pinned to the iOS branch tip ahead of its merge (the merge commit's tree is identical; move the pin to it when lurker-ios#244 lands).",
+      "files": [
+        "Model/UserMetadata.swift",
+        "Rendering/AvatarTiles.swift",
+        "Model/AvatarSets.swift"
+      ]
     }
   ],
   "notes": {
@@ -289,7 +299,10 @@
     "Model/StatusNotification.swift": "`id` is a `UUID` minted per instance, as in the Swift; the data class compares every field, which is the same answer as LurkerKit's `==` on `id` alone. `cameOnline(frame, before, now)` is internal, as the Swift's is. `sound(settings)` / `sound(kind, settings)` take the settings as a plain parameter (the Swift's `in:` label).",
     "Model/StatusToast.swift": "`StatusToastQueue` is case 3 (a struct whose mutators return values): a plain mutable class with `private set` on `active` and `waiting`, one owner (a surface's presenter), never published. `presentNext` returns a `Presented(toast, hold: Duration)` for the Swift's named tuple.",
     "Model/TimestampFormat.swift": "LurkerKit's `calendar` is `zone`, a `ZoneId`: `java.time` is always ISO, so there is no calendar to pin Gregorian, and a `ZoneId.systemDefault()` default is read per call, which follows a zone change as the autoupdating zone does. Walks UTF-16 units, where the Swift walks scalars; the tokens are ASCII, so the output is the same.",
-    "Model/CompactDensity.swift": "The clamping initialisers are `of(groupGap, lineHeightPercent, indent)` and `of(settings)`: a data class's constructor can't clamp, so it (and `copy`) is private and `of` is the only way in."
+    "Model/CompactDensity.swift": "The clamping initialisers are `of(groupGap, lineHeightPercent, indent)` and `of(settings)`: a data class's constructor can't clamp, so it (and `copy`) is private and `of` is the only way in.",
+    "Model/UserMetadata.swift": "`UserMetadataSet` is a class comparing ALL its records (the `RelayBotSet` ruling), `===` still a valid cheaper test. Swift's public `init(byNetwork:)` and private `init(folded:)` share a parameter type, so here a private primary constructor takes `(map, alreadyFolded)`, the public secondary folds, and a private companion `folded(map)` is the Swift's private init. ⚠ Folded with `NickColor.lowercasedLikeTheWeb`, as the Swift — the server keys with JavaScript's `toLowerCase()` — where `RelayBotSet` and `parsePeerPresence` use `lowercase()`.",
+    "Rendering/AvatarTiles.swift": "Stop characters are code points (`Set<Int>`), the type `NickColor.trimForColor` already takes; `url` pads with `%03d`, identical to the Swift's hand-padding for every index the hash can produce.",
+    "Model/AvatarSets.swift": "`parseList`/`parseManifest` take the response body as a `String` and decode through `FrameParser.jsonObject` (kotlinx, never throws, nesting bounded) where the Swift takes `Data` through `JSONSerialization`. `AvatarSet` drops `Identifiable`; `AvatarInk` gains the standard `fromRawValue`."
   },
   "testNotes": {
     "NotificationTapTests.swift": {
@@ -347,6 +360,9 @@
     },
     "TimestampFormatTests.swift": {
       "note": "`testTheDefaultCalendarIsGregorian` checks that the default zone path prints the Gregorian year; there is no calendar identifier to assert."
+    },
+    "MetadataAndAvatarsTests.swift": {
+      "note": "`testCompletionMatchesTheNameAndItsWordsAndInsertsTheNick`'s local helper names its table parameter `table` (Swift: `names`): a Kotlin default value can't reach the outer `names` through a same-named parameter."
     }
   },
   "partial": {}
