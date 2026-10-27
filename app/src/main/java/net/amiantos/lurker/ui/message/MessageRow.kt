@@ -292,7 +292,7 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
         if (message == null || previews == null) PreviewPlan.None else previews.plan(message)
     }
     val body: AnnotatedString = when (content) {
-        is RowPlan.Content.Of -> remember(content.message, revealed, context.highlighter, context.settings, style, previewPlan.hidden, plan.trailingTime, context) {
+        is RowPlan.Content.Of -> remember(content.message, revealed, context.highlighter, context.settings, style, previewPlan.hidden, plan.trailingTime, context.namesKey) {
             MessageText.renderCompactBody(
                 content.message,
                 style = style,
@@ -305,7 +305,7 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                 names = context.plainName,
             )
         }
-        is RowPlan.Content.Summary -> remember(content.summary, style, plan.trailingTime, context) {
+        is RowPlan.Content.Summary -> remember(content.summary, style, plan.trailingTime, context.namesKey) {
             MessageText.renderCompactConsolidation(content.summary, style, plan.trailingTime, context.plainName)
         }
         is RowPlan.Content.Typists -> remember(content.nicks, style) {
@@ -422,6 +422,7 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                     style = style,
                     textStyle = textStyle,
                     modifier = Modifier.padding(top = if (header != null) CompactMetrics.headerGap else 0.dp),
+                    namesKey = context.namesKey,
                 )
             }
             if (hasBody) {
@@ -549,10 +550,12 @@ private fun ReplyQuoteLine(
     style: MessageTextStyle,
     textStyle: TextStyle,
     modifier: Modifier = Modifier,
+    /** `MessageListContext.namesKey`: what the quote's rendering is cached on, since `reply.names` is a new lambda per plan. */
+    namesKey: Any? = null,
 ) {
     val quote = reply.quote
     val jump = reply.onJump
-    val text = remember(quote, indented, style, reply.names) { MessageText.renderReplyQuote(quote, indented, style, reply.names) }
+    val text = remember(quote, indented, style, namesKey) { MessageText.renderReplyQuote(quote, indented, style, reply.names) }
     val spoken = MessageText.spokenReplyQuote(quote)
     val tap = if (quote != null && jump != null) ({ jump(quote) }) else null
     Text(

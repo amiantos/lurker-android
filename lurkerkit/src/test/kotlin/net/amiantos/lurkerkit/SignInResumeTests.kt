@@ -70,7 +70,9 @@ class SignInResumeTests {
             }
             .build()
 
-        val tokenRequests: List<String> get() = requests.filter { it.startsWith("POST /api/oauth/token") }
+        // Under the list's own lock: a synchronized list guards each call, not an iteration, and the
+        // model's reads after a sign-in land from OkHttp's threads while a test is reading this.
+        val tokenRequests: List<String> get() = synchronized(requests) { requests.filter { it.startsWith("POST /api/oauth/token") } }
     }
 
     /** One process: a view model on a thread of its own, standing in for main, over [storage]. */

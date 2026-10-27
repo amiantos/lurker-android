@@ -365,7 +365,8 @@ class BufferListInputs private constructor(
     val draftedKeys: Set<String>,
     /**
      * A DM row prints its peer's display name (lurker#1203), which changes with a profile and with
-     * the setting — neither moves anything else here. The set by identity, the settings by value.
+     * the setting — neither moves anything else here. The set by identity, the settings by the one
+     * key read (`look.nick.display_names`).
      */
     val userMetadata: UserMetadataSet,
     val settings: Settings,
@@ -431,7 +432,9 @@ class BufferListInputs private constructor(
                 a.pinned == b.pinned &&
                 a.draftedKeys == b.draftedKeys &&
                 a.userMetadata === b.userMetadata &&
-                a.settings == b.settings
+                // The one key these rows print by, not the whole settings: a theme colour or a
+                // notification toggle changing must not rebuild every row.
+                a.settings.bool(ChatState.displayNamesKey, default = true) == b.settings.bool(ChatState.displayNamesKey, default = true)
     }
 }
 

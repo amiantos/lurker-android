@@ -37,7 +37,7 @@ class MemberListInputs private constructor(
     val prefix: List<PrefixMode>?,
     /**
      * The names the rows print (lurker#1203): a profile change, or the setting that shows display
-     * names, arrives with no join alongside it. The set by identity, the settings by value.
+     * names, arrives with no join alongside it. The set by identity, the settings by the one key read.
      */
     val userMetadata: UserMetadataSet,
     val settings: Settings,
@@ -72,7 +72,9 @@ class MemberListInputs private constructor(
 
         fun same(old: MemberListInputs, new: MemberListInputs): Boolean =
             old.members === new.members && old.ignores === new.ignores && old.ownNick == new.ownNick &&
-                old.prefix == new.prefix && old.userMetadata === new.userMetadata && old.settings == new.settings
+                old.prefix == new.prefix && old.userMetadata === new.userMetadata &&
+                // The one key these rows print by, not the whole settings.
+                old.settings.bool(ChatState.displayNamesKey, default = true) == new.settings.bool(ChatState.displayNamesKey, default = true)
     }
 }
 

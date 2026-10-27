@@ -8,6 +8,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -1058,10 +1060,14 @@ class ChatViewModel(
         val uploadedRead = uploadedSetReads.start()
         val manifestRead = manifestReads.start()
         scope.task {
-            val uploaded = client.fetchAvatarSets()
-            val manifests = LinkedHashMap<String, AvatarSetManifest>()
-            for (id in AvatarSets.builtinTileSetIds) {
-                client.fetchAvatarManifest(setId = id)?.let { manifests[id] = it }
+            // The four reads at once: they are independent, and tiles after a connect shouldn't wait
+            // for three round trips in a row.
+            val (uploaded, manifests) = coroutineScope {
+                val list = async { client.fetchAvatarSets() }
+                val reads = AvatarSets.builtinTileSetIds.map { id -> async { id to client.fetchAvatarManifest(setId = id) } }
+                val manifests = LinkedHashMap<String, AvatarSetManifest>()
+                for ((id, manifest) in reads.awaitAll()) manifest?.let { manifests[id] = it }
+                list.await() to manifests
             }
             if (session != SessionState.LoggedIn) return@task
             var next = avatarSetsSubject.value

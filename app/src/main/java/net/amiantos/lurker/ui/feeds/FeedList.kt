@@ -37,6 +37,7 @@ import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import net.amiantos.lurkerkit.store.ChatState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -146,11 +147,18 @@ internal fun FeedList(
     // The rows read the store as they're rendered, so a display name that changes while the feed is
     // open (a profile edit, the setting) would show on the rows rendered since and not on the ones
     // already drawn (lurker#1203). The set is only ever replaced, so its identity is the signal.
-    val metadataFlow = remember(model) { model.statePublisher.map { it.userMetadata }.distinctUntilChanged { a, b -> a === b } }
-    val metadata by metadataFlow.collectAsStateWithLifecycle(initialValue = model.state.userMetadata)
+    val namesFlow = remember(model) {
+        model.statePublisher
+            .map { it.userMetadata to it.settings.bool(ChatState.displayNamesKey, default = true) }
+            .distinctUntilChanged { a, b -> a.first === b.first && a.second == b.second }
+    }
+    val names by namesFlow.collectAsStateWithLifecycle(
+        initialValue = model.state.userMetadata to model.state.settings.bool(ChatState.displayNamesKey, default = true),
+    )
+    val namesKey = remember(names.first, names.second) { Any() }
     // Rendered once per row for the life of an answer: dropped when a new first page lands or the face
     // changes, the moments a row's rendering can change (`FeedRowCache`).
-    val cache = remember(snapshot.epoch, style, day.zone, metadata) {
+    val cache = remember(snapshot.epoch, style, day.zone, namesKey) {
         FeedRowCache { item -> FeedModel.row(item, model.state, style, day.zone) }
     }
     // Built when the rows change, against the state as it stands then — see `FeedModel.sections`.

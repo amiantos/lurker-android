@@ -1407,7 +1407,10 @@ internal class LurkerClient(
             .cacheControl(CacheControl.Builder().maxAge(0, TimeUnit.SECONDS).build())
             .build()
         try {
-            val (code, data) = session.await(request)
+            // Port note: through `mediaSession`, the client whose OkHttp `Cache` serves the tiles
+            // themselves — `session` has none, and a `max-age=0` revalidation against no cache is a
+            // plain GET. On iOS `session`'s shared URLCache does the same job.
+            val (code, data) = mediaSession.await(request)
             if (code !in 200..<300) return null
             val text = data.utf8OrNull() ?: return null
             return AvatarSets.parseManifest(text)

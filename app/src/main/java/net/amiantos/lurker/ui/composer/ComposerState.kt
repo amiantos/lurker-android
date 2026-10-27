@@ -43,6 +43,7 @@ import net.amiantos.lurkerkit.model.ComposerDraft
 import net.amiantos.lurkerkit.model.Drafts
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.NickCompletion
+import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.model.OutgoingTyping
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.Replies
@@ -516,7 +517,13 @@ internal class ComposerState(
             ignores = state.ignores,
             networkId = networkId,
             channel = key.target,
-            displayName = { state.plainDisplayName(networkId = networkId, nick = it) },
+            // Null with the setting off, so the matcher does no lookups at all then (a big channel is
+            // thousands of members per keystroke).
+            displayName = if (state.settings.bool(ChatState.displayNamesKey, default = true)) {
+                { state.plainDisplayName(networkId = networkId, nick = it) }
+            } else {
+                null
+            },
         )
     }
 

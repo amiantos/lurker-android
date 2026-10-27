@@ -103,6 +103,13 @@ class MessageListContext(
     val displayName: (String) -> String? = { null },
     /** [displayName]'s plain form — `ChatState.plainDisplayName` — for narration and quotes. */
     val plainName: (String) -> String? = { null },
+    /**
+     * Something that changes exactly when [displayName] would answer differently — the metadata set
+     * and the setting — for the rows' render caches to key on. The lambdas above are new on every
+     * context, and a context is rebuilt on every frame that moves the rows; keyed on them, every
+     * visible body would be re-parsed per incoming line.
+     */
+    val namesKey: Any? = null,
     /** The avatar column (lurker#607), or null while `look.message.avatars` is off. */
     val avatars: AvatarContext? = null,
 ) {
@@ -130,6 +137,7 @@ class MessageListContext(
             onOpenMedia: ((List<LinkPreview>, Int) -> Unit)? = null,
             displayName: (String) -> String? = { null },
             plainName: (String) -> String? = { null },
+            namesKey: Any? = null,
             avatars: AvatarContext? = null,
         ): MessageListContext = MessageListContext(
             style = style,
@@ -151,6 +159,7 @@ class MessageListContext(
             onOpenMedia = onOpenMedia,
             displayName = displayName,
             plainName = plainName,
+            namesKey = namesKey,
             avatars = avatars,
         )
     }
@@ -429,12 +438,30 @@ object MessageListLayout {
         )
     }
 
-    /** Whether a line's head names a person: not a notice's `-mark-`, not the server, not the app. */
-    fun isPerson(message: Message): Boolean =
+    /** What a line's head stands for — one classification for the display name and the tile's placeholder glyph. */
+    enum class HeadKind {
+        /** A person on the network: a display name may replace the nick, a tile may wear their avatar. */
+        Person,
+
+        /** `-nick-`: a notice, the bot talking at the room. */
+        Notice,
+
+        /** The server itself, or the app: a system line, raw server text. */
+        Server,
+
+        /** Nothing to call it. */
+        None,
+    }
+
+    fun headKind(message: Message): HeadKind =
         when (message.type) {
-            EventType.Notice, EventType.System, EventType.Motd, EventType.Other -> false
-            else -> message.nick != null
+            EventType.Notice -> HeadKind.Notice
+            EventType.System, EventType.Motd, EventType.Other -> HeadKind.Server
+            else -> if (message.nick != null) HeadKind.Person else HeadKind.None
         }
+
+    /** Whether a line's head names a person: not a notice's `-mark-`, not the server, not the app. */
+    fun isPerson(message: Message): Boolean = headKind(message) == HeadKind.Person
 
     /**
      * Whether the row at [index] is the last of its block — whatever follows starts a new one, or

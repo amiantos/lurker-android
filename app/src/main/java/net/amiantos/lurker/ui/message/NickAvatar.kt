@@ -37,7 +37,6 @@ import net.amiantos.lurker.ui.media.rememberPreviewStill
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurkerkit.model.AvatarInk
 import net.amiantos.lurkerkit.model.AvatarSet
-import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.store.ChatState
 
@@ -98,18 +97,20 @@ data class AvatarSpec(
             val nick: String?
             val color: Color
             val mark: AvatarMark?
-            when (message.type) {
-                EventType.Notice -> {
+            // The one classification the head uses (`MessageListLayout.headKind`), so the name and
+            // the tile can't disagree about who a line is from.
+            when (MessageListLayout.headKind(message)) {
+                MessageListLayout.HeadKind.Notice -> {
                     nick = message.nick
                     color = MessageText.nickColor(message.nick, message.isSelf, style)
                     mark = AvatarMark.Notice
                 }
-                EventType.System, EventType.Motd, EventType.Other -> {
+                MessageListLayout.HeadKind.Server -> {
                     nick = networkName
                     color = MessageText.captionColor(message, networkName, style)
                     mark = AvatarMark.Server
                 }
-                else -> {
+                MessageListLayout.HeadKind.Person, MessageListLayout.HeadKind.None -> {
                     nick = message.nick
                     color = MessageText.nickColor(message.nick, message.isSelf, style)
                     mark = null
@@ -185,7 +186,9 @@ fun rememberAvatarSize(style: MessageTextStyle): Dp {
  * a set tile a static file, and both are cached and decoded the way preview pictures are, cropped to
  * the square. A metadata image that fails is latched by the loader and never arrives, so the tile
  * beneath it simply stays — the web's `@error` fallback without a second code path. An avatar already
- * decoded is the whole answer: no tile fetched underneath it to be thrown away.
+ * decoded is the whole answer and no tile is asked for; on a first paint both are asked for, the tile
+ * so the square isn't blank while the avatar loads (the web shows nothing until it does), at the cost
+ * of one small static fetch per author with an avatar until the cache holds it.
  */
 @Composable
 fun NickAvatarTile(spec: AvatarSpec, size: Dp, media: MediaSource, onTap: (() -> Unit)?, modifier: Modifier = Modifier) {

@@ -624,6 +624,10 @@ fun ConversationScreen(
     // the avatar column the gutter is the body indent (lurker#607) — this list's rule, taken here
     // where the column is drawn; the feed shares the density and has no column.
     val avatarsOn = CompactDensity.avatarsOn(inputs.settings)
+    // What the rows' render caches key the names on: a new token only when the metadata set or the
+    // setting moved (the set is only ever replaced, so its identity is the signal).
+    val displayNamesOn = inputs.settings.bool(ChatState.displayNamesKey, default = true)
+    val namesKey = remember(inputs.userMetadata, displayNamesOn) { Any() }
     val style = rememberMessageTextStyle(CompactDensity.of(inputs.settings).let { if (avatarsOn) it.flushBodies else it })
     // The tile sets are REST-fed and beside the store (lurker#607): a manifest read or a set uploaded
     // on the web is a redraw the inputs can't see, so they're collected on their own.
@@ -692,6 +696,7 @@ fun ConversationScreen(
             networkName = { message -> ConversationModel.networkName(message, key, inputs.networks) },
             displayName = { nick -> inputs.names.displayName(networkId = key.networkId, nick = nick) },
             plainName = { nick -> inputs.names.plainDisplayName(networkId = key.networkId, nick = nick) },
+            namesKey = namesKey,
             avatars = avatars,
             highlighter = highlighter,
             modePrefixes = inputs.modePrefixes,
