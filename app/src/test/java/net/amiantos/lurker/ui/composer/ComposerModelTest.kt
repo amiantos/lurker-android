@@ -28,6 +28,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import net.amiantos.lurkerkit.model.NickCompletion
+import net.amiantos.lurkerkit.model.UserMetadata
+import net.amiantos.lurkerkit.model.UserMetadataSet
 import org.junit.Test
 import java.time.Instant
 import net.amiantos.lurkerkit.model.PrefixMode
@@ -71,7 +74,7 @@ class ComposerModelTest {
     fun `suggestions ask only the source the completion needs`() {
         val channels = ComposerModel.suggestions(Completion.ChannelArg("li"), channels = { listOf("#linux") }, nicks = { error("not asked") })
         assertEquals(listOf(Suggestion.channel("#linux")), channels)
-        val nicks = ComposerModel.suggestions(Completion.Mention("a"), channels = { error("not asked") }, nicks = { listOf("alice") })
+        val nicks = ComposerModel.suggestions(Completion.Mention("a"), channels = { error("not asked") }, nicks = { listOf(NickCompletion.Candidate("alice")) })
         assertEquals(listOf(Suggestion("alice", "alice", Suggestion.Kind.Nick, "Insert alice")), nicks)
         assertTrue(ComposerModel.suggestions(null, channels = { error("no") }, nicks = { error("no") }).isEmpty())
     }
@@ -423,5 +426,30 @@ class ComposerModelTest {
         assertFalse(ComposerModel.repaintsDraft(ComposerDraft(body = "from the web"), seen, protected = true))
         // Another device emptying it is a change too.
         assertTrue(ComposerModel.repaintsDraft(null, seen, protected = false))
+    }
+
+    // MARK: - Display names (lurker#1203)
+
+    @Test
+    fun `a nick chip with a display name says both and still inserts the nick`() {
+        val chip = Suggestion.nick("amiantos", displayName = "Brad Root")
+        assertEquals("Brad Root · amiantos", chip.title)
+        assertEquals("amiantos", chip.value)
+        assertEquals("Insert amiantos, Brad Root", chip.accessibility)
+        assertEquals(Suggestion("alice", "alice", Suggestion.Kind.Nick, "Insert alice"), Suggestion.nick("alice"))
+    }
+
+    @Test
+    fun `the chips' sources move with the metadata set and the display-name setting`() {
+        val members = listOf(Member(nick = "alice"))
+        val base = CandidateSources(members, IgnoreSet.empty, emptyMap(), selfNick = "me", speakers = null)
+        val renamed = CandidateSources(
+            members, IgnoreSet.empty, emptyMap(), "me", null,
+            userMetadata = UserMetadataSet(mapOf(1 to mapOf("alice" to UserMetadata(displayName = "Wonderland")))),
+        )
+        val off = CandidateSources(members, IgnoreSet.empty, emptyMap(), "me", null, displayNames = false)
+        assertFalse(CandidateSources.same(base, renamed))
+        assertFalse(CandidateSources.same(base, off))
+        assertTrue(CandidateSources.same(renamed, CandidateSources(members, IgnoreSet.empty, emptyMap(), "me", null, userMetadata = renamed.userMetadata)))
     }
 }

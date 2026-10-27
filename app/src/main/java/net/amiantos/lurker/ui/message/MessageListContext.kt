@@ -6,9 +6,13 @@ package net.amiantos.lurker.ui.message
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.unit.Dp
+import net.amiantos.lurker.ui.media.MediaSource
 import net.amiantos.lurker.ui.media.PreviewContext
+import net.amiantos.lurkerkit.model.UserMetadata
 import net.amiantos.lurkerkit.model.ConsolidationSummary
 import net.amiantos.lurkerkit.model.LinkPreview
+import net.amiantos.lurkerkit.model.EventType
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageRow
 import net.amiantos.lurkerkit.model.ReactionGroup
@@ -90,6 +94,24 @@ class MessageListContext(
      * hosts. Null on screens with nothing to present from, where a tap opens the address instead.
      */
     val onOpenMedia: ((List<LinkPreview>, Int) -> Unit)? = null,
+    /**
+     * A nick's display name on this screen's network (lurker#1203), raw with its mIRC codes, or null
+     * to print the nick — `ChatState.displayName`, which applies the setting and the strip-to-empty
+     * rule. The layout decides where a raw name goes (the head) and where its plain form does
+     * (narration, quotes); the relay exclusion is the layout's too.
+     */
+    val displayName: (String) -> String? = { null },
+    /** [displayName]'s plain form — `ChatState.plainDisplayName` — for narration and quotes. */
+    val plainName: (String) -> String? = { null },
+    /**
+     * Something that changes exactly when [displayName] would answer differently — the metadata set
+     * and the setting — for the rows' render caches to key on. The lambdas above are new on every
+     * context, and a context is rebuilt on every frame that moves the rows; keyed on them, every
+     * visible body would be re-parsed per incoming line.
+     */
+    val namesKey: Any? = null,
+    /** The avatar column (lurker#607), or null while `look.message.avatars` is off. */
+    val avatars: AvatarContext? = null,
 ) {
     companion object {
         /**
@@ -113,6 +135,10 @@ class MessageListContext(
             locale: Locale = Locale.getDefault(),
             previews: PreviewContext? = null,
             onOpenMedia: ((List<LinkPreview>, Int) -> Unit)? = null,
+            displayName: (String) -> String? = { null },
+            plainName: (String) -> String? = { null },
+            namesKey: Any? = null,
+            avatars: AvatarContext? = null,
         ): MessageListContext = MessageListContext(
             style = style,
             networkName = networkName,
@@ -131,9 +157,25 @@ class MessageListContext(
             locale = locale,
             previews = previews,
             onOpenMedia = onOpenMedia,
+            displayName = displayName,
+            plainName = plainName,
+            namesKey = namesKey,
+            avatars = avatars,
         )
     }
 }
+
+/**
+ * What the rows need to draw avatar tiles (lurker#607): how big, where the pictures come from, what a
+ * message's tile is, and where a tap on one goes. lurker-ios's `AvatarContext`.
+ */
+class AvatarContext(
+    val size: Dp,
+    /** Ungated on the instance's previews flag: the bundled and uploaded tiles exist without them. */
+    val media: MediaSource,
+    val spec: (Message) -> AvatarSpec,
+    val onTap: (Message) -> Unit,
+)
 
 /**
  * What a row needs to draw reaction chips: the groups standing on a line, whether tapping each would
@@ -179,17 +221,30 @@ data class CompactHeader(
      * header because it qualifies the *name*, and so is drawn once per author block.
      */
     val relaySource: String? = null,
+    /**
+     * The display name to draw in place of the nick (lurker#1203), raw with its mIRC codes, or null to
+     * draw [nick]. The layout has already applied the setting, the strip-to-empty rule and the relay
+     * exclusion; this only paints. The colour stays [color], the nick's.
+     */
+    val displayName: String? = null,
 ) {
     /**
-     * The name as TalkBack hears it. Relay provenance needs a connective it doesn't need in print,
-     * where colour separates the two words: read out bare, "alice github" is two names.
+     * The name as TalkBack hears it: the shown name where there is one, with the rank glyph the nick
+     * carries. Relay provenance needs a connective it doesn't need in print, where colour separates
+     * the two words: read out bare, "alice github" is two names.
      */
     val spokenNick: String
-        get() = relaySource?.takeIf { it.isNotEmpty() }?.let { "$nick from $it" } ?: nick
+        get() {
+            val said = UserMetadata.shown(displayName)?.let { (modeMark?.glyph ?: "") + it } ?: nick
+            return relaySource?.takeIf { it.isNotEmpty() }?.let { "$said from $it" } ?: said
+        }
 }
 
-/** A reply's quote line: the line it answers (null for "unavailable"), and where a tap on it goes. */
-data class ReplyLine(val quote: ReplyQuote?, val onJump: ((ReplyQuote) -> Unit)?)
+/**
+ * A reply's quote line: the line it answers (null for "unavailable"), where a tap on it goes, and the
+ * quoted nick's shown name (lurker#1203) — null for nicks.
+ */
+data class ReplyLine(val quote: ReplyQuote?, val onJump: ((ReplyQuote) -> Unit)?, val names: ((String) -> String?)? = null)
 
 /** The chips under a line, each with whether a tap on it can send. */
 data class ReactionChips(val chips: List<Chip>, val showsAdd: Boolean) {
@@ -231,6 +286,11 @@ sealed interface RowPlan {
          * continuation, and wherever the format hides the time.
          */
         val trailingTime: String? = null,
+        /**
+         * The tile a run's first row draws (lurker#607), null on a continuation or a narration line —
+         * which still take the gutter while the column is on, so bodies stay on one edge.
+         */
+        val avatar: AvatarSpec? = null,
     ) : RowPlan
 
     /** What a compact row's body is made from. */
@@ -284,6 +344,7 @@ object MessageListLayout {
                     } else {
                         null
                     },
+                    avatar = if (header != null) context.avatars?.spec?.invoke(row.message) else null,
                 )
             }
             is MessageRow.Line -> RowPlan.Compact(
@@ -370,8 +431,37 @@ object MessageListLayout {
             // Nil for everything but a re-attributed relay line, and nil for a bare `<nick> message`
             // relay too, whose envelope names no source — the web's call as well.
             relaySource = message.relaySource,
+            // The display name (lurker#1203) for a head that names a person. Never for a re-attributed
+            // relay line: the bridged speaker isn't a network nick, so a record under that spelling
+            // would be someone else's. A notice keeps its `-nick-`: it's the bot's mark, not a name.
+            displayName = if (isPerson(message) && message.relayBot == null) message.nick?.let(context.displayName) else null,
         )
     }
+
+    /** What a line's head stands for — one classification for the display name and the tile's placeholder glyph. */
+    enum class HeadKind {
+        /** A person on the network: a display name may replace the nick, a tile may wear their avatar. */
+        Person,
+
+        /** `-nick-`: a notice, the bot talking at the room. */
+        Notice,
+
+        /** The server itself, or the app: a system line, raw server text. */
+        Server,
+
+        /** Nothing to call it. */
+        None,
+    }
+
+    fun headKind(message: Message): HeadKind =
+        when (message.type) {
+            EventType.Notice -> HeadKind.Notice
+            EventType.System, EventType.Motd, EventType.Other -> HeadKind.Server
+            else -> if (message.nick != null) HeadKind.Person else HeadKind.None
+        }
+
+    /** Whether a line's head names a person: not a notice's `-mark-`, not the server, not the app. */
+    fun isPerson(message: Message): Boolean = headKind(message) == HeadKind.Person
 
     /**
      * Whether the row at [index] is the last of its block — whatever follows starts a new one, or
@@ -410,7 +500,7 @@ object MessageListLayout {
     fun replyLine(message: Message, position: RunPosition?, index: Int, context: MessageListContext): ReplyLine? {
         if (message.replyTo == null) return null
         if (position?.isFirst != true && Replies.continues(message, previous = previousMessage(index, context))) return null
-        return ReplyLine(quote = message.replyQuote, onJump = context.onJumpToReply)
+        return ReplyLine(quote = message.replyQuote, onJump = context.onJumpToReply, names = context.plainName)
     }
 
     /** The chips for a line, or null when it has none (or the screen draws none). */

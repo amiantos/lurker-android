@@ -45,6 +45,8 @@ import net.amiantos.lurkerkit.model.SystemLevel
 import net.amiantos.lurkerkit.model.TagSupport
 import net.amiantos.lurkerkit.model.TypingActivity
 import net.amiantos.lurkerkit.model.TypingEntry
+import net.amiantos.lurkerkit.model.UserMetadata
+import net.amiantos.lurkerkit.model.UserMetadataSet
 import net.amiantos.lurkerkit.model.WhoisResult
 import net.amiantos.lurkerkit.support.CurrentValueSubject
 import net.amiantos.lurkerkit.support.bumped
@@ -372,6 +374,14 @@ data class ChatState(
      */
     val nickNotes: NickNoteSet = NickNoteSet.empty,
     /**
+     * Every nick's IRCv3 metadata the server holds (lurker#607, Mobile lurker#1203): display
+     * names, avatars, pronouns, homepage, status. Seeded by the connect `snapshot` — one map per
+     * network blob — and patched a nick at a time by `user-metadata`, like `relayBots` above.
+     * Server-authoritative; read through `metadata(networkId, nick)` and
+     * `displayName(networkId, nick)`, which applies the setting.
+     */
+    val userMetadata: UserMetadataSet = UserMetadataSet.empty,
+    /**
      * Cached WHOIS replies, `networkId → folded nick → reply` (lurker-ios#12).
      *
      * ⚠ Volatile by nature and deliberately not persisted: who is on a network, idle for how
@@ -592,6 +602,7 @@ data class ChatState(
             peerPresence = next.peerPresence - id,
             pinned = next.pinned - id,
             nickNotes = next.nickNotes.removing(networkId = id),
+            userMetadata = next.userMetadata.removing(networkId = id),
             whois = next.whois - id,
             // Nothing is coming back to free these: the connection they were asked over is
             // gone. Left behind, they'd be a permanent "waiting for whois reply…" on every nick
@@ -771,6 +782,41 @@ data class ChatState(
         val buffer = buffers[key.id] ?: return false
         return buffer.kind == BufferKind.Channel && !buffer.joined
     }
+
+    /**
+     * `nick`'s metadata record on `networkId`, raw — what the profile sheet reads, setting or
+     * not: a user's pronouns are theirs whether or not we rename them in the list.
+     */
+    fun metadata(networkId: Int?, nick: String?): UserMetadata? =
+        userMetadata.record(networkId = networkId, nick = nick)
+
+    /**
+     * The name to show for `nick` in place of the nick, raw with its mIRC codes for a surface
+     * that renders them, or null to show the nick: the setting is off, there is no record, or the
+     * name strips to nothing. ⚠ The nick stays the identity — colour, sort, mentions, the
+     * profile's title — so this answers what to *print*, never what to key on.
+     */
+    fun displayName(networkId: Int?, nick: String?): String? =
+        shownName(networkId = networkId, nick = nick)?.raw
+
+    /** `displayName` for a plain surface — the roster, a DM row, a chip: codes stripped. */
+    fun plainDisplayName(networkId: Int?, nick: String?): String? =
+        shownName(networkId = networkId, nick = nick)?.plain
+
+    /** Port note: the Swift's named tuple `(raw: String, plain: String)`. */
+    private data class ShownName(val raw: String, val plain: String)
+
+    /** Both forms from one strip: the raw name is only shown when its plain form is something. */
+    private fun shownName(networkId: Int?, nick: String?): ShownName? {
+        if (!settings.bool(displayNamesKey, default = true)) return null
+        val raw = metadata(networkId = networkId, nick = nick)?.displayName ?: return null
+        val plain = UserMetadata.shown(raw) ?: return null
+        return ShownName(raw, plain)
+    }
+
+    /** What a plain surface prints for `nick`: its display name, else the nick itself. */
+    fun label(networkId: Int?, nick: String): String =
+        plainDisplayName(networkId = networkId, nick = nick) ?: nick
 
     /**
      * The status of a watched (network, nick), disconnected-aware — what a profile reads, and
@@ -1178,6 +1224,9 @@ data class ChatState(
          * matched with the reply that answers it.
          */
         fun whoisKey(networkId: Int, nick: String): String = "$networkId::${nick.lowercase()}"
+
+        /** The setting that shows display names (lurker#607). Default on. */
+        const val displayNamesKey = "look.nick.display_names"
     }
 }
 
@@ -1591,6 +1640,8 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                         // Same for the mode vocabulary: the next registration restates it once
                         // its burst ends, and until then the last link's answer is not this one's.
                         if (connection != ConnectionState.Connected) updated = updated.copy(modeSpec = null)
+                        // And the metadata caps (lurker#607): the next registration states them again.
+                        if (connection != ConnectionState.Connected) updated = updated.copy(metadataLimits = null)
                         updated
                     } else {
                         Network(id = frame.networkId, name = null, state = connection, nick = nick ?: "")
@@ -1698,6 +1749,18 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                     val map = if (peerState != null) held + (nick to peerState) else held - nick
                     state.copy(peerPresence = state.peerPresence + (frame.networkId to map))
                 }
+                is ServerFrame.UserMetadata ->
+                    // One nick at a time, whole record, null forgets — see `UserMetadataSet.applying`.
+                    // Not gated on holding the network: a record for one we don't hold is harmless and
+                    // the snapshot that brings the network replaces the bucket anyway.
+                    state.copy(
+                        userMetadata = state.userMetadata.applying(
+                            networkId = frame.networkId, nick = frame.nick, values = frame.values,
+                        ),
+                    )
+                is ServerFrame.AvatarSetsChanged ->
+                    // REST-fed state (`ChatViewModel.refreshAvatarSets`), nothing held here.
+                    state
                 is ServerFrame.AwayState -> {
                     // Only ever a patch onto a network we already hold. The away stream is
                     // broadcast from a live connection, so its network is in the snapshot by
@@ -1805,7 +1868,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                         // Every network's mode vocabulary was this socket's word, and a dropped
                         // socket can't hear the `state` frame that would retire it. The next
                         // snapshot restates it; until then it's unknown, which is what null says.
-                        networks = state.networks.mapValues { it.value.copy(modeSpec = null) },
+                        networks = state.networks.mapValues { it.value.copy(modeSpec = null, metadataLimits = null) },
                         // Nobody is typing at us over a socket that isn't there. The lease would
                         // retire these on its own, but a `paused` entry holds for 30s — long
                         // enough to survive a reconnect and show a peer composing when we've
@@ -2048,6 +2111,13 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             for (snapshot in networks) {
                 if (snapshot.nickNotes.isNotEmpty()) nickNotesByNetwork[snapshot.id] = snapshot.nickNotes
             }
+            // Metadata (lurker#607) replaces wholesale for the same reason again: the snapshot is
+            // what the connection holds now, so a nick forgotten while this device was away is gone
+            // here rather than left showing a stale name.
+            val metadataByNetwork = LinkedHashMap<Int, Map<String, UserMetadata>>()
+            for (snapshot in networks) {
+                if (snapshot.userMetadata.isNotEmpty()) metadataByNetwork[snapshot.id] = snapshot.userMetadata
+            }
             // DCC chats (lurker#270) replace wholesale too: the snapshot lists every live
             // session, a disconnected network's included, so a chat that ended while this device
             // was away is gone here rather than left reading as live.
@@ -2097,6 +2167,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                         away = snapshot.away,
                         tagSupport = snapshot.tagSupport,
                         modeSpec = snapshot.modeSpec,
+                        metadataLimits = snapshot.metadataLimits,
                     )
                 } else {
                     // ⚠⚠ No name, rather than a placeholder that reads like one
@@ -2111,6 +2182,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                     nets[snapshot.id] = Network(
                         id = snapshot.id, name = null, state = snapshot.state, nick = snapshot.nick,
                         away = snapshot.away, tagSupport = snapshot.tagSupport, modeSpec = snapshot.modeSpec,
+                        metadataLimits = snapshot.metadataLimits,
                     )
                 }
                 for (channel in snapshot.channels) {
@@ -2140,6 +2212,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                 ignores = IgnoreSet(global = globalIgnores, byNetwork = ignoresByNetwork),
                 relayBots = RelayBotSet(byNetwork = relayBotsByNetwork),
                 nickNotes = NickNoteSet(byNetwork = nickNotesByNetwork),
+                userMetadata = UserMetadataSet(byNetwork = metadataByNetwork),
                 dccChats = dccChats,
                 dccChatOffers = offers,
                 lastDccChatOfferId = lastDccChatOfferId,

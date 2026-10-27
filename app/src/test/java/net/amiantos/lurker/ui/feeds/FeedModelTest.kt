@@ -30,6 +30,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import net.amiantos.lurkerkit.model.UserMetadata
+import net.amiantos.lurkerkit.model.UserMetadataSet
 import org.junit.Test
 import java.time.Instant
 import java.time.ZoneOffset
@@ -234,5 +236,16 @@ class FeedModelTest {
         assertFalse(row.body.text, row.body.text.contains("ghost"))
         assertFalse(row.spokenBody, row.spokenBody.contains("ghost"))
         assertEquals("😮 on \u201Cthe ending: ${MessageText.HIDDEN_SPOILER}\u201D", row.spokenBody)
+    }
+
+    @Test
+    fun aDisplayNameHeadsAPersonsRowAndNeverAServerLine() {
+        val named = state.copy(
+            userMetadata = UserMetadataSet(mapOf(1 to mapOf("alice" to UserMetadata(displayName = "Wonderland Alice")))),
+        )
+        assertEquals("Wonderland Alice", FeedModel.row(item(1), named, style, zone).header?.displayName)
+        // Server text with a nick field set is still the network's line, not a person's.
+        assertNull(FeedModel.row(item(2, type = EventType.Other, networkName = "Libera"), named, style, zone).header?.displayName)
+        assertNull(FeedModel.row(item(3, type = EventType.Notice), named, style, zone).header?.displayName)
     }
 }

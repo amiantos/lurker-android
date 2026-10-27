@@ -20,6 +20,7 @@ import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.MemberPrefix
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.NickCompletion
+import net.amiantos.lurkerkit.model.UserMetadataSet
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.FriendPresence
@@ -90,7 +91,18 @@ internal data class Suggestion(val title: String, val value: String, val kind: K
         /** Shown and inserted verbatim. */
         fun channel(name: String) = Suggestion(name, name, Kind.Channel, "Channel $name")
 
-        fun nick(nick: String) = Suggestion(nick, nick, Kind.Nick, "Insert $nick")
+        /**
+         * With a display name (lurker#1203) the chip says both — the name you recognise and the nick a
+         * pick inserts, as the web's picker shows the name with the nick in a badge. A chip reading only
+         * "Brad Root" that types `amiantos` would be a chip that lies about its tap.
+         */
+        fun nick(nick: String, displayName: String? = null) =
+            Suggestion(
+                if (displayName != null) "$displayName · $nick" else nick,
+                nick,
+                Kind.Nick,
+                if (displayName != null) "Insert $nick, $displayName" else "Insert $nick",
+            )
     }
 }
 
@@ -231,6 +243,9 @@ internal class CandidateSources(
     val buffers: Map<String, Buffer>,
     val selfNick: String?,
     val speakers: SpeakerMap?,
+    /** The names the chips match and show (lurker#1203): the set by identity, the setting by value. */
+    val userMetadata: UserMetadataSet = UserMetadataSet.empty,
+    val displayNames: Boolean = true,
 ) {
     companion object {
         fun of(state: ChatState, key: BufferKey) = CandidateSources(
@@ -239,11 +254,14 @@ internal class CandidateSources(
             ignores = state.ignores,
             buffers = state.buffers,
             selfNick = key.networkId?.let { state.networks[it]?.nick },
+            userMetadata = state.userMetadata,
+            displayNames = state.settings.bool(ChatState.displayNamesKey, default = true),
         )
 
         fun same(old: CandidateSources, new: CandidateSources): Boolean =
             old.members === new.members && old.ignores === new.ignores && old.buffers === new.buffers &&
-                old.selfNick == new.selfNick && old.speakers === new.speakers
+                old.selfNick == new.selfNick && old.speakers === new.speakers &&
+                old.userMetadata === new.userMetadata && old.displayNames == new.displayNames
     }
 }
 
@@ -314,12 +332,12 @@ internal object ComposerModel {
     fun suggestions(
         completion: Completion?,
         channels: (query: String) -> List<String>,
-        nicks: (query: String) -> List<String>,
+        nicks: (query: String) -> List<NickCompletion.Candidate>,
     ): List<Suggestion> = when (completion) {
         is Completion.Command -> CommandRegistry.matching(completion.query).map(Suggestion::command)
         is Completion.ChannelArg -> channels(completion.query).map(Suggestion::channel)
-        is Completion.NickArg -> nicks(completion.query).map(Suggestion::nick)
-        is Completion.Mention -> nicks(completion.query).map(Suggestion::nick)
+        is Completion.NickArg -> nicks(completion.query).map { Suggestion.nick(it.nick, it.displayName) }
+        is Completion.Mention -> nicks(completion.query).map { Suggestion.nick(it.nick, it.displayName) }
         null -> emptyList()
     }
 

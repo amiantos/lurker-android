@@ -21,6 +21,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.unit.IntSize
+import net.amiantos.lurker.ui.media.DecodeSize
+import net.amiantos.lurker.ui.media.MediaSource
+import net.amiantos.lurker.ui.media.rememberPreviewStill
+import net.amiantos.lurker.ui.message.MessageText
+import net.amiantos.lurker.ui.message.rememberMessageTextStyle
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -73,6 +90,9 @@ import java.time.Instant
 class ProfileState(private val model: ChatViewModel, val networkId: Int, val nick: String, scope: CoroutineScope) {
     private val inputsFlow = MutableStateFlow(ProfileInputs.of(model.state, networkId, nick))
 
+    /** Where the metadata avatar's bytes come from (lurker#607): the proxy, ungated on the previews flag — a null path is how "can't serve one" arrives. */
+    val media: MediaSource = MediaSource(fetch = { path -> model.proxiedMedia(path) }, playable = { _, _ -> null })
+
     /** What the page draws — mapped and distinct off the publisher, never the raw state. */
     val inputs = inputsFlow.asStateFlow()
 
@@ -114,12 +134,14 @@ internal fun UserProfilePage(
     val clipboard = LocalClipboard.current
     val events = LocalAppEvents.current
     val scope = rememberCoroutineScope()
+    val uriHandler = LocalUriHandler.current
     UserProfileContent(
         title = state.nick,
         sections = sections,
         outcome = UserProfileModel.lookupOutcome(inputs, state.nick),
         exit = exit,
         onExit = onExit,
+        media = state.media,
         onRow = { row ->
             when (row) {
                 is ProfileRow.Detail -> if (row.copyable) {
@@ -128,6 +150,7 @@ internal fun UserProfilePage(
                         events.confirmCopy()
                     }
                 }
+                is ProfileRow.Link -> uriHandler.openUri(row.url)
                 // Through the one join path: a channel you're in opens at once, one you aren't opens
                 // when the server says you're in, and a refusal shows over this dialog rather than
                 // leaving you on a screen for a channel you never got into. Opening closes the dialog
@@ -136,7 +159,7 @@ internal fun UserProfilePage(
                 is ProfileRow.EditNote -> onEditNote()
                 ProfileRow.SendMessage -> onSendMessage?.invoke()
                 ProfileRow.Refresh -> state.refresh()
-                is ProfileRow.Status, is ProfileRow.Flag, is ProfileRow.Note -> Unit
+                is ProfileRow.Status, is ProfileRow.Flag, is ProfileRow.Note, is ProfileRow.Avatar, is ProfileRow.DisplayName -> Unit
             }
         },
     )
@@ -150,6 +173,7 @@ private fun UserProfileContent(
     exit: PageExit,
     onExit: () -> Unit,
     onRow: (ProfileRow) -> Unit,
+    media: MediaSource = MediaSource.None,
 ) {
     DialogPage(title = title, exit = exit, onExit = onExit) { padding ->
         Box(Modifier.fillMaxSize()) {
@@ -158,7 +182,7 @@ private fun UserProfileContent(
                     item(key = "section$index") {
                         Column {
                             section.header?.let { FormSectionHeader(it) }
-                            section.rows.forEach { row -> ProfileRowView(row, onRow) }
+                            section.rows.forEach { row -> ProfileRowView(row, onRow, media) }
                             section.footer?.let { FormSectionFooter(it) }
                         }
                     }
@@ -174,12 +198,48 @@ private fun UserProfileContent(
 }
 
 @Composable
-private fun ProfileRowView(row: ProfileRow, onRow: (ProfileRow) -> Unit) {
+private fun ProfileRowView(row: ProfileRow, onRow: (ProfileRow) -> Unit, media: MediaSource) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val tint = MaterialTheme.colorScheme.primary
     val clear = ListItemDefaults.colors(containerColor = Color.Transparent)
     when (row) {
         is ProfileRow.Status -> StatusLineRow(row)
+        // The metadata avatar (lurker#607): 64dp, the web's 4em, centred at the head of the page. Only
+        // once it has loaded — a blank box over a page about a person says the wrong thing.
+        is ProfileRow.Avatar -> {
+            val px = with(LocalDensity.current) { 64.dp.roundToPx() }
+            val still by rememberPreviewStill(row.path, media, IntSize(px, px), DecodeSize.Mode.Fill)
+            val picture = still
+            if (picture != null) {
+                Box(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), contentAlignment = Alignment.Center) {
+                    Image(
+                        picture.image,
+                        contentDescription = "avatar",
+                        modifier = Modifier.size(64.dp).clip(RoundedCornerShape(6.dp)),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+            }
+        }
+        // The display name with its mIRC formatting (lurker#1203), over the page's own text colour.
+        is ProfileRow.DisplayName -> {
+            val style = rememberMessageTextStyle()
+            val onSurface = MaterialTheme.colorScheme.onSurface
+            val name = remember(row, style, onSurface) { MessageText.formattedName(row.raw, onSurface, style) }
+            ListItem(
+                modifier = Modifier.clearAndSetSemantics { contentDescription = "Display name, ${row.plain}" },
+                colors = clear,
+                overlineContent = { Text("Display name", color = muted) },
+                headlineContent = { Text(name) },
+            )
+        }
+        is ProfileRow.Link -> ListItem(
+            modifier = Modifier.clickable(onClickLabel = "open", role = Role.Button) { onRow(row) },
+            colors = clear,
+            overlineContent = { Text(row.title, color = muted) },
+            headlineContent = { Text(row.url, color = tint) },
+            trailingContent = { Icon(LurkerIcons.ChevronRight, contentDescription = null, tint = muted) },
+        )
         // Label above, value below — on every row, not just the long ones: a hostmask always needs the
         // room, and one row in a different shape reads as something gone wrong. The LABEL is the quiet
         // caption; the value is what you came to read.

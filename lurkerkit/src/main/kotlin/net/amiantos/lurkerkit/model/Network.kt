@@ -88,6 +88,13 @@ data class Network(
      * null as the RFC defaults — a default is not the network saying so.
      */
     val modeSpec: ModeSpec? = null,
+    /**
+     * What this network can carry in IRCv3 metadata (lurker#607), or null: no `draft/metadata-2`,
+     * an older server, or a link that is down. Same lifecycle as `modeSpec` — the snapshot
+     * states it, a drop clears it. Edit Profile (lurker#1204) gates on it; the display half
+     * (lurker#1203) doesn't read it.
+     */
+    val metadataLimits: MetadataLimits? = null,
 ) {
     /**
      * Take the roster's word for the REST-only fields — `name`, `position`, `blocked` — and

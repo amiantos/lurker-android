@@ -16,6 +16,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import net.amiantos.lurkerkit.model.AvatarSets
+import net.amiantos.lurkerkit.model.UploadedAvatarSet
 import org.junit.Test
 
 /** The settings screen's rules — each one a comment in lurker-ios's `SettingsViewController`. */
@@ -36,6 +38,9 @@ class SettingsModelTest {
     private val nickSuffix =
         SettingOption("input.completion.nick_suffix", "", "", SettingType.String, SettingValue.String(":"))
 
+    private val avatarSet =
+        SettingOption(AvatarSets.settingKey, "", "", SettingType.String, SettingValue.String(AvatarSets.defaultSetId))
+
     /** Every key the screen can show, as a current server would describe them. */
     private fun fullRegistry(): Map<String, SettingOption> {
         val keys = SettingsModel.chatSettings + SettingsModel.eventSettings +
@@ -44,6 +49,7 @@ class SettingsModelTest {
             key to when (key) {
                 EventFilter.modeKey -> eventTier
                 "input.completion.nick_suffix" -> nickSuffix
+                AvatarSets.settingKey -> avatarSet
                 "chat.consolidate_max_names" -> int(key, 5, min = 1, max = 20)
                 "chat.smart_filter_delay", "chat.smart_filter_join_unmask" -> int(key, 15, min = 1, max = 120)
                 else -> bool(key)
@@ -98,6 +104,9 @@ class SettingsModelTest {
                 "chat.smart_filter_delay" to "\"Recently spoke\" window (min)",
                 "chat.smart_filter_join_unmask" to "Reveal join on speaking (min)",
                 "look.nick.show_mode_prefix" to "Show mode prefix on nicks",
+                "look.nick.display_names" to "Show display names",
+                "look.message.avatars" to "Show avatars",
+                "look.avatars.set" to "Avatar placeholders",
                 "chat.inline_media.enabled" to "Inline media",
                 "chat.link_previews.enabled" to "Link previews",
             ),
@@ -122,7 +131,10 @@ class SettingsModelTest {
     fun previewKeysAreHiddenWhenTheInstanceHasNoPreviews() {
         val appearance = SettingsModel.sections(inputs(linkPreviews = false))
             .filterIsInstance<SettingsSection.Appearance>().single()
-        assertEquals(listOf("look.nick.show_mode_prefix"), appearance.rows.map { it.option.key })
+        assertEquals(
+            listOf("look.nick.show_mode_prefix", "look.nick.display_names", "look.message.avatars", "look.avatars.set"),
+            appearance.rows.map { it.option.key },
+        )
     }
 
     @Test
@@ -476,5 +488,32 @@ class SettingsModelTest {
         val registry = mapOf(joins.key to joins, max.key to max)
         val flipped = SettingsEdits().began(joins.key, SettingValue.Bool(true))
         assertTrue(SettingsModel.rowState(SettingRow("Max", max), Settings(registry, emptyMap()), flipped).enabled)
+    }
+
+    // MARK: - Avatar placeholders (lurker#607)
+
+    @Test
+    fun theAvatarSetOffersTheBundledSetsAndTheUploadedOnesByName() {
+        val sets = AvatarSets(uploaded = listOf(UploadedAvatarSet(id = 7, name = "Cats", count = 12)))
+        val control = SettingsModel.rowState(
+            SettingRow("Avatar placeholders", avatarSet), Settings(mapOf(avatarSet.key to avatarSet), mapOf(avatarSet.key to SettingValue.String("7"))),
+            SettingsEdits(), sets,
+        ).control as SettingControl.Menu
+        assertEquals(listOf("ealain", "plain-light", "plain-dark", "initial-light", "initial-dark", "7"), control.choices.map { it.value })
+        assertEquals("Cats", control.title)
+        assertEquals("Cats", control.spokenTitle)
+    }
+
+    @Test
+    fun aPointerAtASetWeDontKnowReadsAsTheDefault() {
+        val control = SettingsModel.rowState(
+            SettingRow("Avatar placeholders", avatarSet), Settings(mapOf(avatarSet.key to avatarSet), mapOf(avatarSet.key to SettingValue.String("99"))),
+            SettingsEdits(), AvatarSets.none,
+        ).control as SettingControl.Menu
+        assertEquals(AvatarSets.defaultSetId, control.current)
+        assertEquals("Initial (Dark)", control.title)
+        assertEquals(5, control.choices.size)
+        // Without the sets at all the row is still a pull-down of the bundled five.
+        assertTrue(rowState(avatarSet).control is SettingControl.Menu)
     }
 }

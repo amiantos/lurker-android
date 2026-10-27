@@ -6,6 +6,8 @@ package net.amiantos.lurker.ui.profile
 import net.amiantos.lurkerkit.model.FriendPresence
 import net.amiantos.lurkerkit.model.NickNote
 import net.amiantos.lurkerkit.model.ProfileStatus
+import net.amiantos.lurkerkit.model.UserMetadata
+import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import net.amiantos.lurkerkit.model.WhoisResult
 import net.amiantos.lurkerkit.store.ChatState
 import java.time.Instant
@@ -29,10 +31,17 @@ data class ProfileInputs(
     val note: NickNote?,
     val isRelay: Boolean,
     val selfNick: String,
+    /**
+     * Their IRCv3 metadata (lurker#1203): display name, avatar, pronouns, homepage, status. Read off
+     * the record directly, setting or not — the setting decides whether the list renames people, and a
+     * profile is where you come to read what they set either way.
+     */
+    val metadata: UserMetadata? = null,
 ) {
     companion object {
         fun of(state: ChatState, networkId: Int, nick: String): ProfileInputs =
             ProfileInputs(
+                metadata = state.metadata(networkId = networkId, nick = nick),
                 whois = state.whoisResult(networkId = networkId, nick = nick),
                 isLookingUp = state.isWhoisPending(networkId = networkId, nick = nick),
                 // `presence`, not `rowPresence`: the profile keeps the stricter reading, which says
@@ -58,6 +67,21 @@ sealed interface ProfileRow {
      * the one thing here people actually retype elsewhere.
      */
     data class Detail(val title: String, val value: String, val copyable: Boolean = false) : ProfileRow
+
+    /**
+     * The metadata avatar at the top of the page (lurker#607), by its server-minted path — the picture
+     * only, never the generated tile, which is the list's shorthand for a face.
+     */
+    data class Avatar(val path: String) : ProfileRow
+
+    /**
+     * The display name (lurker#1203), with its mIRC codes for the page to render — the web renders them
+     * here too. [plain] is what it strips to, for TalkBack.
+     */
+    data class DisplayName(val raw: String, val plain: String) : ProfileRow
+
+    /** A labelled fact that is an address: the homepage. Tapping it opens the link. */
+    data class Link(val title: String, val url: String) : ProfileRow
 
     /** A standing fact about the account rather than a value: registered, bot, operator. */
     data class Flag(val title: String, val icon: ProfileFlagIcon) : ProfileRow
@@ -116,8 +140,9 @@ object UserProfileModel {
     ): List<ProfileSection> {
         val status = status(inputs, nick)
         val built = mutableListOf<ProfileSection>()
+        inputs.metadata?.avatarUrl?.let { built += ProfileSection(rows = listOf(ProfileRow.Avatar(it))) }
         status.statusLine?.let { line -> built += ProfileSection(rows = listOf(ProfileRow.Status(line, statusText(line, nick)))) }
-        val details = details(status, inputs.whois, dateTime)
+        val details = details(status, inputs.whois, dateTime, inputs.metadata)
         if (details.isNotEmpty()) built += ProfileSection(rows = details)
         val flags = flags(inputs.whois, inputs.isRelay)
         if (flags.isNotEmpty()) built += ProfileSection(rows = flags)
@@ -173,18 +198,45 @@ object UserProfileModel {
      * says whose profile this is, and as a row it says its state in words, which is what a colour was
      * only standing in for.
      */
-    fun details(status: ProfileStatus, whois: WhoisResult?, dateTime: (Instant) -> String): List<ProfileRow> {
+    fun details(status: ProfileStatus, whois: WhoisResult?, dateTime: (Instant) -> String, metadata: UserMetadata? = null): List<ProfileRow> {
         val rows = mutableListOf<ProfileRow>()
         fun add(title: String, value: String?, copyable: Boolean = false) {
             if (value.isNullOrEmpty()) return
             rows += ProfileRow.Detail(title, value, copyable)
         }
+        // The metadata rows (lurker#607), in the web's order around the WHOIS real name.
+        fun addMetadata(afterRealName: Boolean) {
+            if (metadata == null) return
+            if (!afterRealName) {
+                val raw = metadata.displayName
+                val plain = UserMetadata.shown(raw)
+                if (raw != null && plain != null) {
+                    // Plain when the raw name IS the plain name; with its codes when it carried any.
+                    rows += if (raw.trimmingWhitespacesAndNewlines() == plain) ProfileRow.Detail("Display name", plain) else ProfileRow.DisplayName(raw, plain)
+                }
+            } else {
+                add("Pronouns", metadata.pronouns)
+                // "Status message", not "Status": the row above says whether they're here. The server
+                // keeps this to text Lurker will show; the value is theirs.
+                add("Status message", metadata.status)
+                // The server keeps only http(s) values (`ircMetadata.ts`), so a value is a link.
+                val homepage = metadata.homepage
+                if (!homepage.isNullOrEmpty() && (homepage.startsWith("https://") || homepage.startsWith("http://"))) {
+                    rows += ProfileRow.Link("Homepage", homepage)
+                }
+            }
+        }
         // ⚠ Omitted rather than shown as "Unknown" while we're still asking. The status LINE above
         // already says "Looking up alice…", and a row asserting we don't know, under a line saying
         // we're finding out, is the same fact told twice.
         if (status.presence != FriendPresence.Unknown) add("Status", statusValue(status))
-        if (whois == null) return rows
+        addMetadata(afterRealName = false)
+        if (whois == null) {
+            addMetadata(afterRealName = true)
+            return rows
+        }
         add("Real name", whois.realName)
+        addMetadata(afterRealName = true)
         add("Hostmask", whois.hostmask, copyable = true)
         // Only opers and the account itself are told this, so it's absent far more often than
         // present — a row that appears rather than one that says "unknown".

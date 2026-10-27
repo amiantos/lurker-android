@@ -700,4 +700,19 @@ class BufferListModelTest {
         val keys = sections.flatMap { section -> section.entries.map { it.first.lazyKey } }
         assertEquals(keys.size, keys.toSet().size)
     }
+
+    // MARK: - Display names (lurker#1203)
+
+    @Test
+    fun aDmRowPrintsThePeersDisplayNameAndHintsCollideOnWhatIsPrinted() {
+        val rows = listOf(
+            Row(buffer(1, "alice"), networkName = "Libera", label = "Alice Liddell"),
+            Row(buffer(2, "wonderland"), networkName = "OFTC", label = "Alice Liddell"),
+            Row(buffer(2, "bob"), networkName = "OFTC"),
+        )
+        assertEquals(listOf("Alice Liddell", "Alice Liddell", "bob"), rows.map(BufferListModel::printedName))
+        val hinted = BufferListModel.addNetworkHints(mapOf(1 to "l", 2 to "o"), rows)
+        assertEquals(listOf("l", "o", null), hinted.map { it.networkHint })
+        assertTrue(BufferListModel.rowDescription(rows[0]).startsWith("Alice Liddell, Libera"))
+    }
 }

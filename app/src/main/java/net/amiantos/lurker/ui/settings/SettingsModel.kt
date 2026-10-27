@@ -9,6 +9,8 @@ import net.amiantos.lurkerkit.model.SettingOption
 import net.amiantos.lurkerkit.model.SettingType
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.model.AvatarSets
+import net.amiantos.lurkerkit.model.CompactDensity
 import net.amiantos.lurkerkit.model.StatusNotification
 import net.amiantos.lurkerkit.push.AppPushUnavailable
 import net.amiantos.lurkerkit.store.ChatState
@@ -25,9 +27,15 @@ import net.amiantos.lurkerkit.store.ChatState
  * `linkPreviews` isn't in `ChatState` (it's `ChatViewModel.features`, re-read on every reconnect), so
  * it's sampled on each frame, as iOS reads it on each rebuild.
  */
-data class SettingsInputs(val settings: Settings, val linkPreviews: Boolean) {
+data class SettingsInputs(
+    val settings: Settings,
+    val linkPreviews: Boolean,
+    /** The avatar tile sets (lurker#607) the Avatar placeholders pull-down offers — REST-fed, beside the store. */
+    val avatarSets: AvatarSets = AvatarSets.none,
+) {
     companion object {
-        fun of(state: ChatState, linkPreviews: Boolean) = SettingsInputs(state.settings, linkPreviews)
+        fun of(state: ChatState, linkPreviews: Boolean, avatarSets: AvatarSets = AvatarSets.none) =
+            SettingsInputs(state.settings, linkPreviews, avatarSets)
     }
 }
 
@@ -268,6 +276,12 @@ object SettingsModel {
      */
     val appearanceSettings: List<Pair<String, String>> = listOf(
         "look.nick.show_mode_prefix" to "Show mode prefix on nicks",
+        // IRCv3 metadata (lurker#607, Mobile lurker#1203): the name a user set in place of their nick,
+        // and the avatar column — the compact layout is the only one this app has, so the web's
+        // "compact only" caveat is every row here.
+        ChatState.displayNamesKey to "Show display names",
+        CompactDensity.avatarsKey to "Show avatars",
+        AvatarSets.settingKey to "Avatar placeholders",
         // U8: inline media and link previews render from these.
         "chat.inline_media.enabled" to "Inline media",
         "chat.link_previews.enabled" to "Link previews",
@@ -472,7 +486,24 @@ object SettingsModel {
         val values: List<Pair<String, String>>,
         val normalize: (String) -> String,
         val spoken: (String) -> String,
+        /** The label for a stored value that isn't one of [values], shown as itself and checked. */
+        val custom: (String) -> String = { it },
     )
+
+    /**
+     * Choices that depend on what the server holds, so they can't be a static table: the avatar sets
+     * (lurker#607) are the five bundled ones plus whatever the account uploaded on the web. A pointer
+     * at a set we don't know — one deleted elsewhere, or not fetched yet — reads as the registry
+     * default, which is what the list then draws (`AvatarSets.active`).
+     */
+    private fun dynamicChoices(key: String, avatarSets: AvatarSets): StringChoices? {
+        if (key != AvatarSets.settingKey) return null
+        return StringChoices(
+            values = avatarSets.all.map { it.id to it.name },
+            normalize = { stored -> avatarSets.set(stored)?.id ?: AvatarSets.defaultSetId },
+            spoken = { id -> avatarSets.set(id)?.name ?: id },
+        )
+    }
 
     private val stringChoices: Map<String, StringChoices> = mapOf(
         // Labelled as the form each one produces rather than by naming the punctuation: the question
@@ -483,6 +514,7 @@ object SettingsModel {
             values = listOf(":" to "nick:", "," to "nick,", ";" to "nick;", "" to "nick"),
             normalize = NickCompletion::addressPunctuation,
             spoken = NickCompletion::spokenPunctuation,
+            custom = { "nick$it" },
         ),
     )
 
@@ -493,7 +525,7 @@ object SettingsModel {
      * Live is the registry's own `dependsOn` (#666) rather than a table kept here, so the phone greys
      * out exactly what the web does and a new dependency needs no app change.
      */
-    fun rowState(row: SettingRow, settings: Settings, edits: SettingsEdits): SettingRowState {
+    fun rowState(row: SettingRow, settings: Settings, edits: SettingsEdits, avatarSets: AvatarSets = AvatarSets.none): SettingRowState {
         val option = row.option
         val value = displayed(option, settings, edits)
         val control = when (option.type) {
@@ -509,7 +541,7 @@ object SettingsModel {
                 current = value?.stringValue ?: option.default.stringValue ?: "",
                 choices = option.choices.map { MenuChoice(value = it, label = option.label(it)) },
             )
-            SettingType.String -> stringMenu(option, value)
+            SettingType.String -> stringMenu(option, value, avatarSets)
             else -> SettingControl.Plain
         }
         return SettingRowState(
@@ -531,14 +563,14 @@ object SettingsModel {
      * offered forms is how you leave it. Read aloud through the SAME function as the four, so the one
      * value this control can't otherwise explain is not the one it declines to name.
      */
-    private fun stringMenu(option: SettingOption, value: SettingValue?): SettingControl {
-        val curated = stringChoices[option.key] ?: return SettingControl.Plain
+    private fun stringMenu(option: SettingOption, value: SettingValue?, avatarSets: AvatarSets): SettingControl {
+        val curated = stringChoices[option.key] ?: dynamicChoices(option.key, avatarSets) ?: return SettingControl.Plain
         val stored = value?.stringValue ?: option.default.stringValue ?: ""
         val current = curated.normalize(stored)
         val values = if (curated.values.any { it.first == current }) {
             curated.values
         } else {
-            curated.values + (current to "nick$current")
+            curated.values + (current to curated.custom(current))
         }
         return SettingControl.Menu(
             current = current,

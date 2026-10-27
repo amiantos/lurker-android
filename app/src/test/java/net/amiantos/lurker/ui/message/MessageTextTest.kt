@@ -715,4 +715,33 @@ class MessageTextTest {
         assertEquals("b", body.string)
         assertTrue(body.inkRanges().isEmpty())
     }
+
+    // MARK: - Display names (lurker#1203)
+
+    @Test
+    fun `a display name is drawn with its codes over the nick's colour, after the rank glyph`() {
+        val header = CompactHeader("@alice", Color.Red, time = null, modeMark = MemberPrefix.Mark("@", MemberPrefix.Tier.Op), displayName = "\u000304Wonder\u0003 Alice")
+        val name = MessageText.headerName(header, style)
+        assertEquals("@Wonder Alice", name.text)
+        assertEquals(colors.memberOp, name.styleAt(0).color)
+        assertEquals(colors.mirc[4], name.styleAt(1).color)
+        assertEquals(Color.Red, name.styleAt(name.indexOf("Alice")).color)
+        assertNull(name.styleAt(name.indexOf("Alice")).fontWeight)
+        // Beside the avatar gutter the name is bold — weight is what tells the head from the body there.
+        assertEquals(FontWeight.Bold, MessageText.headerName(CompactHeader("alice", Color.Red, time = null), style, emphasized = true).styleAt(0).fontWeight)
+        assertEquals("@Wonder Alice", header.spokenNick)
+    }
+
+    @Test
+    fun `narration and an action print the shown name in the nick's colour, a relayed action keeps its spelling`() {
+        val names: (String) -> String? = { if (it == "alice") "Wonderland Alice" else null }
+        val joined = MessageText.renderCompactBody(message(null, type = EventType.Join), style, names = names)
+        assertEquals("Wonderland Alice joined", joined.text)
+        assertEquals(MessageText.nickColor("alice", false, style), joined.styleAt(0).color)
+        assertEquals("* Wonderland Alice waves", MessageText.renderCompactBody(message("waves", type = EventType.Action), style, names = names).text)
+        val relayed = message("<alice> waves", type = EventType.Action, nick = "bridge").relayed(speaker = "alice", text = "waves", bot = "bridge", source = null)
+        assertEquals("* alice waves", MessageText.renderCompactBody(relayed, style, names = names).text)
+        // A plain quote prints the shown name too.
+        assertEquals("╭─ <Wonderland Alice> hi", MessageText.renderReplyQuote(quote(text = "hi"), indented = false, style, names).text)
+    }
 }

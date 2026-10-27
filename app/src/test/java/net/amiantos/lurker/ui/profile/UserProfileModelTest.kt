@@ -17,6 +17,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import net.amiantos.lurkerkit.model.UserMetadata
 import org.junit.Test
 import java.time.Instant
 
@@ -236,5 +237,39 @@ class UserProfileModelTest {
         assertTrue(NickNoteModel.offersDelete("x"))
         assertEquals("Note about alice", NickNoteModel.fieldLabel("alice"))
         assertEquals("Your note about alice will be removed from all your devices.", NickNoteModel.deleteMessage("alice"))
+    }
+
+    // MARK: - Metadata (lurker#1203)
+
+    @Test
+    fun metadataRowsSitAroundTheRealNameAndTheAvatarHeadsThePage() {
+        val meta = UserMetadata(
+            displayName = "\u000304Alice\u0003", avatarUrl = "/api/link-preview/avatar/t", pronouns = "she/her",
+            homepage = "https://alice.example", status = "busy",
+        )
+        val whois = WhoisResult(nick = "alice", realName = "Alice Liddell")
+        val rows = rows(inputs(whois = whois, presence = FriendPresence.Online).copy(metadata = meta))
+        assertEquals(ProfileRow.Avatar("/api/link-preview/avatar/t"), rows.first())
+        val titles = rows.mapNotNull {
+            when (it) {
+                is ProfileRow.Detail -> it.title
+                is ProfileRow.DisplayName -> "Display name"
+                is ProfileRow.Link -> it.title
+                else -> null
+            }
+        }
+        assertEquals(listOf("Status", "Display name", "Real name", "Pronouns", "Status message", "Homepage"), titles)
+        // A name that carried codes keeps them for the page to render; its plain form is spoken.
+        assertEquals(ProfileRow.DisplayName("\u000304Alice\u0003", "Alice"), rows.first { it is ProfileRow.DisplayName })
+        assertEquals(ProfileRow.Link("Homepage", "https://alice.example"), rows.first { it is ProfileRow.Link })
+    }
+
+    @Test
+    fun aPlainNameIsAPlainRowAndANonHttpHomepageIsNotALink() {
+        val meta = UserMetadata(displayName = " Alice ", homepage = "gopher://alice.example")
+        val rows = rows(inputs().copy(metadata = meta))
+        assertEquals(ProfileRow.Detail("Display name", "Alice"), rows.first { it is ProfileRow.Detail && it.title == "Display name" })
+        assertTrue(rows.none { it is ProfileRow.Link })
+        assertTrue(rows.none { it is ProfileRow.Avatar })
     }
 }

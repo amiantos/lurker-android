@@ -155,4 +155,24 @@ class MemberListModelTest {
         val specced = base.copy(networks = mapOf(1 to Network(id = 1, name = "Libera", nick = "me", modeSpec = spec)))
         assertFalse(MemberListInputs.same(a, MemberListInputs.of(specced, key)))
     }
+
+    // MARK: - Display names (lurker#1203)
+
+    @Test
+    fun rowsPrintTheLabelAndStayKeyedSortedAndFilteredOnTheNick() {
+        val rows = MemberListModel.rows(listOf(Member("zed"), Member("alice")), prefix = null) { if (it == "zed") "Aardvark" else it }
+        // Sorted on the nick: "Aardvark" (zed) still comes after alice.
+        assertEquals(listOf("alice", "zed"), rows.map { it.nick })
+        assertEquals(listOf("alice", "Aardvark"), rows.map { it.label })
+        assertEquals("zed", rows[1].id)
+        // The filter finds a member by either name.
+        assertEquals(listOf("zed"), MemberListModel.filter(rows, "aard").map { it.nick })
+        assertEquals(listOf("zed"), MemberListModel.filter(rows, "ZED").map { it.nick })
+    }
+
+    @Test
+    fun talkBackHearsTheShownNameAndThenTheNickWhenTheyDiffer() {
+        assertEquals("Wonderland Alice, alice, operator", MemberListModel.accessibilityLabel(MemberRow("alice", MemberPrefix.Mark("@", MemberPrefix.Tier.Op), away = false, label = "Wonderland Alice")))
+        assertEquals("alice, away", MemberListModel.accessibilityLabel(MemberRow("alice", null, away = true)))
+    }
 }

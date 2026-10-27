@@ -28,6 +28,7 @@ import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageReaction
+import net.amiantos.lurkerkit.model.MetadataLimits
 import net.amiantos.lurkerkit.model.ModeChange
 import net.amiantos.lurkerkit.model.ModeChangeKind
 import net.amiantos.lurkerkit.model.ModeListEntry
@@ -55,6 +56,7 @@ import net.amiantos.lurkerkit.model.TagSupport
 import net.amiantos.lurkerkit.model.TypingActivity
 import net.amiantos.lurkerkit.model.UploadItem
 import net.amiantos.lurkerkit.model.UploadsPage
+import net.amiantos.lurkerkit.model.UserMetadata
 import net.amiantos.lurkerkit.model.WhoisResult
 import net.amiantos.lurkerkit.support.graphemeBoundaries
 import net.amiantos.lurkerkit.support.swiftInt
@@ -127,6 +129,7 @@ internal object FrameParser {
                 }
             }
             "error" -> return ServerFrame.ServerError(obj.string("text"))
+            "avatar-sets-changed" -> return ServerFrame.AvatarSetsChanged
             "favorites-changed" ->
                 // The FULL global order, replace wholesale — the same frame seeds the
                 // connect burst, so this one handler covers seed and every correction.
@@ -661,6 +664,8 @@ internal object FrameParser {
                 dccChatOffers = nonEmptyStrings(network["dccChatOffers"]),
                 tagSupport = tagSupport(network),
                 modeSpec = parseModeSpec(network["modeSpec"]),
+                userMetadata = parseUserMetadata(network["userMetadata"] as? JsonObject),
+                metadataLimits = parseMetadataLimits(network["metadataLimits"]),
             )
         }
         return ServerFrame.Snapshot(
@@ -831,6 +836,49 @@ internal object FrameParser {
         value.asLong()?.let { return it }
         value.asString()?.let { return swiftInt(it) }
         return null
+    }
+
+    /**
+     * A snapshot's `userMetadata` blob (lurker#607): `nick → record`. Keys are folded by
+     * `UserMetadataSet`, so they're passed as the wire had them; a value that isn't an object is
+     * skipped.
+     */
+    private fun parseUserMetadata(blob: JsonObject?): Map<String, UserMetadata> {
+        if (blob == null) return emptyMap()
+        val out = LinkedHashMap<String, UserMetadata>()
+        for ((nick, value) in blob) {
+            if (nick.isEmpty()) continue
+            val entry = value as? JsonObject ?: continue
+            out[nick] = parseUserMetadataRecord(entry)
+        }
+        return out
+    }
+
+    /**
+     * One nick's record, as the snapshot and `user-metadata` both carry it. Every key is
+     * optional and `avatarUrl` may be null — null either way, which means the generated tile.
+     */
+    private fun parseUserMetadataRecord(entry: JsonObject): UserMetadata =
+        UserMetadata(
+            displayName = entry.stringOrNull("displayName"),
+            avatarUrl = entry.stringOrNull("avatarUrl"),
+            pronouns = entry.stringOrNull("pronouns"),
+            homepage = entry.stringOrNull("homepage"),
+            status = entry.stringOrNull("status"),
+        )
+
+    /**
+     * `metadataLimits`: null (no `draft/metadata-2`) and absent (an older server) both read as
+     * null — neither is a network that can carry a profile.
+     */
+    private fun parseMetadataLimits(raw: JsonElement?): MetadataLimits? {
+        val obj = raw as? JsonObject ?: return null
+        return MetadataLimits(
+            maxSubs = obj.intOrNull("maxSubs"),
+            maxKeys = obj.intOrNull("maxKeys"),
+            maxValueBytes = obj.intOrNull("maxValueBytes"),
+            beforeConnect = obj.bool("beforeConnect"),
+        )
     }
 
     /**
@@ -1183,6 +1231,21 @@ internal object FrameParser {
                 state = PresenceState.fromRawValue(obj.string("state")),
             )
         }
+        // `user-metadata` (lurker#607) is `peer-presence`'s shape again: network-scoped state
+        // routed by `nick` on a `:server:<id>` carrier, nothing to render, and `values` is
+        // legitimately null — that is how "forget this nick" arrives. ⚠ Below the guard it fell
+        // through to `Other` and drew an empty row in the server buffer on every profile change.
+        if (obj.string("type") == "user-metadata") {
+            val networkId = obj.intOrNull("networkId") ?: return ServerFrame.Ignored
+            val nick = obj.string("nick")
+            if (nick.isEmpty()) return ServerFrame.Ignored
+            val values = (obj["values"] as? JsonObject)?.let(::parseUserMetadataRecord)
+            return ServerFrame.UserMetadata(networkId = networkId, nick = nick, values = values)
+        }
+        // `channel-metadata` is a channel's own display name and avatar, whole. The web stores it
+        // and nothing reads it, and channel avatars are outside lurker#607 — so the kit knows the
+        // type only so it is never a line. State it is, state it stays: nothing to apply.
+        if (obj.string("type") == "channel-metadata") return ServerFrame.Ignored
         // `away-state` is network-scoped state like `peer-presence`, and its `:server:<id>`
         // target is the same kind of carrier — so it's handled above the target guard too,
         // and for the extra reason that its payload is legitimately *null*: an account with

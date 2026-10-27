@@ -108,7 +108,7 @@ internal fun MemberListPage(
             .conflate()
             .map { MemberListInputs.of(it, key) }
             .filter { inputs -> state.built?.let { MemberListInputs.same(it.inputs, inputs) } != true }
-            .map { inputs -> BuiltMembers(inputs, MemberListModel.rows(inputs.visible, inputs.prefix)).also { state.built = it }.rows }
+            .map { inputs -> BuiltMembers(inputs, MemberListModel.rows(inputs.visible, inputs.prefix, inputs::label)).also { state.built = it }.rows }
             .flowOn(Dispatchers.Default)
             .conflate()
     }
@@ -233,7 +233,7 @@ private fun MemberListRow(
         if (row.prefix.isNotEmpty()) {
             withStyle(SpanStyle(color = rank ?: base, fontWeight = if (rank != null) FontWeight.Bold else null)) { append(row.prefix) }
         }
-        append(row.nick)
+        append(row.label)
     }
     val label = MemberListModel.accessibilityLabel(row)
     Box {

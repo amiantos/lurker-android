@@ -188,21 +188,64 @@ object MessageText {
      * field. Last in the name on purpose — the name truncates from the tail, so under width pressure
      * the provenance goes before the speaker does.
      */
-    fun headerName(header: CompactHeader, style: MessageTextStyle): AnnotatedString = buildAnnotatedString {
+    fun headerName(header: CompactHeader, style: MessageTextStyle, emphasized: Boolean = false): AnnotatedString = buildAnnotatedString {
         val mark = header.modeMark
         val prefix = mark?.glyph.orEmpty()
-        withStyle(SpanStyle(color = header.color)) {
-            if (mark != null && prefix.isNotEmpty() && header.nick.startsWith(prefix)) {
-                val rank = style.colors.memberPrefix(mark.tier)
-                withStyle(SpanStyle(color = rank, fontWeight = FontWeight.Bold)) { append(prefix) }
-                append(header.nick.substring(prefix.length))
-            } else {
-                append(header.nick)
+        // Beside the avatar gutter the body sits flush under the nick and weight is what tells the
+        // head line from the text — the web's `font-weight: 600` there (lurker#607).
+        val weight = if (emphasized) FontWeight.Bold else null
+        val shown = header.displayName
+        if (shown != null) {
+            // The display name (lurker#1203) with its own formatting over the nick's colour; the rank
+            // glyph ahead of it as it is ahead of a nick.
+            if (mark != null && prefix.isNotEmpty()) {
+                withStyle(SpanStyle(color = style.colors.memberPrefix(mark.tier), fontWeight = FontWeight.Bold)) { append(prefix) }
+            }
+            append(formattedName(shown, header.color, style, bold = emphasized))
+        } else {
+            withStyle(SpanStyle(color = header.color, fontWeight = weight)) {
+                if (mark != null && prefix.isNotEmpty() && header.nick.startsWith(prefix)) {
+                    val rank = style.colors.memberPrefix(mark.tier)
+                    withStyle(SpanStyle(color = rank, fontWeight = FontWeight.Bold)) { append(prefix) }
+                    append(header.nick.substring(prefix.length))
+                } else {
+                    append(header.nick)
+                }
             }
         }
         val source = header.relaySource
         if (!source.isNullOrEmpty()) {
             withStyle(SpanStyle(color = style.colors.fgMuted)) { append(" $source") }
+        }
+    }
+
+    /**
+     * A display name as the head draws it (lurker#1203): its mIRC formatting rendered — bold, italic,
+     * underline, strike, colours — over the nick's own colour, the web's `formattingSegments`. No
+     * links, no nick detection, no spoiler boxes: it's a label, not a message. Trimmed at the ends,
+     * as the plain form is. lurker-ios's `MessageRenderer.formattedName`.
+     */
+    fun formattedName(raw: String, color: Color, style: MessageTextStyle, bold: Boolean = false): AnnotatedString = buildAnnotatedString {
+        for (run in IRCFormatting.parse(raw.trimmingWhitespacesAndNewlines())) {
+            val paint = run.paint(
+                fg = run.fg?.let { ircColor(it, style) },
+                bg = run.bg?.let { ircColor(it, style) },
+                text = color,
+                canvas = style.colors.bg,
+            )
+            val decorations = listOfNotNull(
+                if (run.underline) TextDecoration.Underline else null,
+                if (run.strike) TextDecoration.LineThrough else null,
+            )
+            withStyle(
+                SpanStyle(
+                    color = paint.ink,
+                    background = paint.fill ?: Color.Unspecified,
+                    fontWeight = if (run.bold || bold) FontWeight.Bold else null,
+                    fontStyle = if (run.italic) FontStyle.Italic else null,
+                    textDecoration = if (decorations.isEmpty()) null else TextDecoration.combine(decorations),
+                ),
+            ) { append(run.text) }
         }
     }
 
@@ -232,12 +275,16 @@ object MessageText {
         revealed: Set<Int> = emptySet(),
         hiddenUrls: Set<String> = emptySet(),
         onToggleSpoiler: ((Int) -> Unit)? = null,
+        names: ((String) -> String?)? = null,
     ): AnnotatedString {
         // A line that names its own actor keeps doing so: it has no header to be named by.
         if (message.type == EventType.Action) {
             val color = nickColor(message.nick, message.isSelf, style)
             val line = StyledBody()
-            line.append("* ${message.nick ?: "*"} ", SpanStyle(color = color))
+            // The shown name (lurker#1203), never on a relayed line: a bridged speaker isn't a network
+            // nick, so a record under that spelling would be someone else's.
+            val actor = if (message.relayBot == null) message.nick?.let { names?.invoke(it) } else null
+            line.append("* ${actor ?: message.nick ?: "*"} ", SpanStyle(color = color))
             line.append(body(message, style, fallback = color, highlighter, revealed, hiddenUrls))
             appendCompactTime(trailingTime, line, style)
             // Two, to clear the `* ` this line opens with.
@@ -247,7 +294,7 @@ object MessageText {
             // No arrow column. "alice joined" already says which direction it went, and the
             // narration starts flush with the nicks above it, so arrows would be an extra column of
             // punctuation buying nothing.
-            val line = activity(message, style, settings, revealed)
+            val line = activity(message, style, settings, revealed, names)
             appendCompactTime(trailingTime, line, style)
             return finish(line, style, flushFirstLine = true, onToggleSpoiler = onToggleSpoiler)
         }
@@ -269,11 +316,12 @@ object MessageText {
         summary: ConsolidationSummary,
         style: MessageTextStyle,
         trailingTime: String? = null,
+        names: ((String) -> String?)? = null,
     ): AnnotatedString {
         val line = StyledBody()
         summary.groups.forEachIndexed { index, group ->
             if (index > 0) line.append("; ", muted(style))
-            identityClause(group, style, line)
+            identityClause(group, style, line, names)
         }
         appendCompactTime(trailingTime, line, style)
         return finish(line, style, flushFirstLine = true, onToggleSpoiler = null)
@@ -463,7 +511,12 @@ object MessageText {
      * on the baseline it sits below the text's middle. [indented] lines it up with a body, which sits
      * in by the indent setting; a header-less narration line's quote starts flush, as the line does.
      */
-    fun renderReplyQuote(quote: ReplyQuote?, indented: Boolean, style: MessageTextStyle): AnnotatedString =
+    fun renderReplyQuote(
+        quote: ReplyQuote?,
+        indented: Boolean,
+        style: MessageTextStyle,
+        names: ((String) -> String?)? = null,
+    ): AnnotatedString =
         buildAnnotatedString {
             val fg = style.colors.fg
             withStyle(SpanStyle(color = fg, baselineShift = BaselineShift(REPLY_ARM_LIFT))) { append("╭─ ") }
@@ -478,7 +531,9 @@ object MessageText {
                 }
                 withStyle(plain) {
                     append(open)
-                    withStyle(SpanStyle(color = nickColor(quote.nick, quote.isSelf, style))) { append(quote.nick) }
+                    // The shown name (lurker#1203), plain inside the brackets; a relayed quote's nick is
+                    // a bridged speaker and keeps its spelling.
+                    withStyle(SpanStyle(color = nickColor(quote.nick, quote.isSelf, style))) { append(quotedName(quote, names)) }
                     append("$close ")
                     val source = quote.relaySource
                     if (!source.isNullOrEmpty()) append("[$source] ")
@@ -492,10 +547,14 @@ object MessageText {
         }
 
     /** What TalkBack says for a reply's quote. */
-    fun spokenReplyQuote(quote: ReplyQuote?): String {
+    fun spokenReplyQuote(quote: ReplyQuote?, names: ((String) -> String?)? = null): String {
         if (quote == null) return "In reply to a message that's unavailable"
-        return "In reply to ${quote.nick}: ${Replies.excerpt(quote.text)}"
+        return "In reply to ${quotedName(quote, names)}: ${Replies.excerpt(quote.text)}"
     }
+
+    /** The quoted nick as the quote prints it: its shown name (lurker#1203), a relayed speaker's own spelling. */
+    fun quotedName(quote: ReplyQuote, names: ((String) -> String?)?): String =
+        if (quote.relayBot == null) names?.invoke(quote.nick) ?: quote.nick else quote.nick
 
     /** iOS lifts the arm by 18% of the point size, as the web nudges it up 3px. */
     private const val REPLY_ARM_LIFT = 0.18f
@@ -664,8 +723,17 @@ object MessageText {
     /** A nick that has to say *something*: "someone" for the nick-less event that shouldn't happen but mustn't render blank. */
     private fun nickName(nick: String?): String = if (nick.isNullOrEmpty()) "someone" else nick
 
-    private fun nickToken(line: StyledBody, nick: String?, style: MessageTextStyle, isSelf: Boolean = false) {
-        line.append(nickName(nick), SpanStyle(color = nickColor(nick, isSelf, style)))
+    private fun nickToken(
+        line: StyledBody,
+        nick: String?,
+        style: MessageTextStyle,
+        isSelf: Boolean = false,
+        names: ((String) -> String?)? = null,
+    ) {
+        // The display name where one is shown (lurker#1203), plain: narration is a sentence and a colour
+        // code mid-sentence is noise. The colour stays the nick's — it is the identity.
+        val shown = nick?.let { names?.invoke(it) } ?: nickName(nick)
+        line.append(shown, SpanStyle(color = nickColor(nick, isSelf, style)))
     }
 
     /** A part, quit or kick reason in parentheses, or nothing when there isn't one. */
@@ -745,9 +813,15 @@ object MessageText {
      *
      * [revealed] reaches the one body a line can carry — a topic or a reason — so a spoiler in it opens.
      */
-    private fun activity(message: Message, style: MessageTextStyle, settings: Settings, revealed: Set<Int>): StyledBody {
+    private fun activity(
+        message: Message,
+        style: MessageTextStyle,
+        settings: Settings,
+        revealed: Set<Int>,
+        names: ((String) -> String?)? = null,
+    ): StyledBody {
         val line = StyledBody()
-        val actor = { nickToken(line, message.nick, style, isSelf = message.isSelf) }
+        val actor = { nickToken(line, message.nick, style, isSelf = message.isSelf, names = names) }
         // Both off by default, matching the registry. The account sits between the nick and the
         // host, as it does on the web (and in weechat, irssi and thelounge).
         val account = if (settings.bool("chat.show_join_account", default = false)) {
@@ -779,11 +853,11 @@ object MessageText {
             EventType.Nick -> {
                 actor()
                 line.append(" is now ", muted)
-                nickToken(line, message.newNick, style, isSelf = message.isSelf)
+                nickToken(line, message.newNick, style, isSelf = message.isSelf, names = names)
                 line.append(host, muted)
             }
             EventType.Kick -> {
-                nickToken(line, message.kicked, style)
+                nickToken(line, message.kicked, style, names = names)
                 line.append(" was kicked by ", muted)
                 actor()
                 appendReason(line, message, style, revealed)
@@ -796,7 +870,7 @@ object MessageText {
                         is ModeNarration.Segment.Arg -> line.append(segment.arg, muted)
                         // Only ever emitted for a `prefix` change, so this is a real member and
                         // never a mask — a ban's target must not get a nick's colour.
-                        is ModeNarration.Segment.Nick -> nickToken(line, segment.nick, style)
+                        is ModeNarration.Segment.Nick -> nickToken(line, segment.nick, style, names = names)
                     }
                 }
             }
@@ -816,7 +890,7 @@ object MessageText {
             EventType.Invite -> {
                 actor()
                 line.append(" invited ", muted)
-                nickToken(line, message.invited, style)
+                nickToken(line, message.invited, style, names = names)
             }
             else -> {
                 // Only actions and activity reach here, but a line still has to show *something* if
@@ -830,7 +904,12 @@ object MessageText {
     }
 
     /** One summary category as "alice, bob and carol joined" — the names as nick tokens, the rest muted. */
-    private fun identityClause(group: ConsolidationSummary.IdentityGroup, style: MessageTextStyle, line: StyledBody) {
+    private fun identityClause(
+        group: ConsolidationSummary.IdentityGroup,
+        style: MessageTextStyle,
+        line: StyledBody,
+        names: ((String) -> String?)? = null,
+    ) {
         val muted = muted(style)
         group.visible.forEachIndexed { index, entry ->
             if (index > 0) {
@@ -840,11 +919,11 @@ object MessageText {
                 line.append(if (isLast && group.hidden == 0) " and " else ", ", muted)
             }
             when (entry) {
-                is ConsolidationSummary.Entry.Nick -> nickToken(line, entry.nick, style)
+                is ConsolidationSummary.Entry.Nick -> nickToken(line, entry.nick, style, names = names)
                 is ConsolidationSummary.Entry.Renamed -> {
-                    nickToken(line, entry.from, style)
+                    nickToken(line, entry.from, style, names = names)
                     line.append(" → ", muted)
-                    nickToken(line, entry.to, style)
+                    nickToken(line, entry.to, style, names = names)
                 }
             }
         }

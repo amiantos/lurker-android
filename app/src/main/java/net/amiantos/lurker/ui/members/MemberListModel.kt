@@ -9,6 +9,8 @@ import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.MemberPrefix
 import net.amiantos.lurkerkit.model.Network
+import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.model.UserMetadataSet
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 import net.amiantos.lurkerkit.model.PrefixMode
@@ -33,8 +35,19 @@ class MemberListInputs private constructor(
     val ownNick: String?,
     /** The network's PREFIX — its symbols and ranks (lurker-ios#191); null before ISUPPORT. */
     val prefix: List<PrefixMode>?,
+    /**
+     * The names the rows print (lurker#1203): a profile change, or the setting that shows display
+     * names, arrives with no join alongside it. The set by identity, the settings by the one key read.
+     */
+    val userMetadata: UserMetadataSet,
+    val settings: Settings,
     private val key: BufferKey,
 ) {
+    /** What a row prints for a nick: its display name, else the nick — the kit's `label`. Keyed, sorted and coloured on the nick still. */
+    fun label(nick: String): String = names.label(networkId = key.networkId, nick = nick)
+
+    private val names: ChatState by lazy { ChatState(settings = settings, userMetadata = userMetadata) }
+
     /** The members a reader sees: the kit's `visibleMembers`, over exactly what was compared. */
     val visible: List<Member> by lazy {
         val networkId = key.networkId
@@ -52,12 +65,16 @@ class MemberListInputs private constructor(
                 ignores = state.ignores,
                 ownNick = key.networkId?.let { state.networks[it]?.nick },
                 prefix = key.networkId?.let { state.networks[it]?.modeSpec?.prefix },
+                userMetadata = state.userMetadata,
+                settings = state.settings,
                 key = key,
             )
 
         fun same(old: MemberListInputs, new: MemberListInputs): Boolean =
             old.members === new.members && old.ignores === new.ignores && old.ownNick == new.ownNick &&
-                old.prefix == new.prefix
+                old.prefix == new.prefix && old.userMetadata === new.userMetadata &&
+                // The one key these rows print by, not the whole settings.
+                old.settings.bool(ChatState.displayNamesKey, default = true) == new.settings.bool(ChatState.displayNamesKey, default = true)
     }
 }
 
@@ -70,6 +87,8 @@ data class MemberRow(
      */
     val mark: MemberPrefix.Mark?,
     val away: Boolean,
+    /** What the row prints (lurker#1203): the display name, else [nick]. The nick stays the identity. */
+    val label: String = nick,
 ) {
     /** The glyph the row draws, "" with no mark. */
     val prefix: String get() = mark?.glyph.orEmpty()
@@ -104,10 +123,10 @@ object MemberListModel {
      * is dropped here, before anything draws. The first is the one the store has held longest, and so
      * the one carrying the modes and away state the server last sent for it.
      */
-    fun rows(visible: List<Member>, prefix: List<PrefixMode>?): List<MemberRow> =
+    fun rows(visible: List<Member>, prefix: List<PrefixMode>?, label: (String) -> String = { it }): List<MemberRow> =
         MemberPrefix.sorted(visible.distinctBy { it.nick.lowercase() }, prefix)
             .map { member ->
-                MemberRow(nick = member.nick, mark = MemberPrefix.mark(member.modes, prefix), away = member.away)
+                MemberRow(nick = member.nick, mark = MemberPrefix.mark(member.modes, prefix), away = member.away, label = label(member.nick))
             }
 
     fun title(count: Int): String = if (count == 0) "Members" else "Members ($count)"
@@ -137,7 +156,8 @@ object MemberListModel {
     fun filter(rows: List<MemberRow>, query: String): List<MemberRow> {
         val folded = query.trimmingWhitespacesAndNewlines().lowercase()
         if (folded.isEmpty()) return rows
-        return rows.filter { it.nick.lowercase().contains(folded) }
+        // On the printed name too (lurker#1203): you may know someone only by it.
+        return rows.filter { it.nick.lowercase().contains(folded) || it.label.lowercase().contains(folded) }
     }
 
     /**
@@ -171,7 +191,10 @@ object MemberListModel {
             null -> null
         }
         return buildString {
-            append(row.nick)
+            // The shown name (lurker#1203), and the nick after it when they differ — the identity is
+            // worth hearing once, as the web puts it in the row's hover title.
+            append(row.label)
+            if (row.label != row.nick) append(", ").append(row.nick)
             if (rank != null) append(", ").append(rank)
             if (row.away) append(", away")
         }

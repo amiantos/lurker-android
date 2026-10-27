@@ -193,7 +193,7 @@ internal fun BufferRow(
             // pair the hint exists to tell apart, and a tail ellipsis would eat it first.
             Row(Modifier.weight(1f).alpha(textAlpha), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    row.buffer.displayName(),
+                    BufferListModel.printedName(row),
                     modifier = Modifier.weight(1f, fill = false),
                     style = style,
                     color = nameColor,

@@ -5,6 +5,7 @@ package net.amiantos.lurkerkit.model
 
 import net.amiantos.lurkerkit.support.decodingUtf16
 import net.amiantos.lurkerkit.support.isInWhitespacesAndNewlines
+import net.amiantos.lurkerkit.support.splitOnSwiftWhitespace
 import kotlin.math.max
 import kotlin.math.min
 
@@ -79,7 +80,56 @@ object NickCompletion {
         ignores: IgnoreSet = IgnoreSet.empty,
         networkId: Int? = null,
         channel: String = "",
-    ): List<String> {
+        displayName: ((String) -> String?)? = null,
+    ): List<String> =
+        rows(
+            speakers = speakers, members = members, selfNick = selfNick, query = query,
+            isChannel = isChannel, limit = limit, ignores = ignores, networkId = networkId,
+            channel = channel, displayName = displayName,
+        ).map { it.nick }
+
+    /**
+     * One offered nick, with the display name it matched or wears (lurker#1203) so the chip can
+     * show it. ⚠ `nick` is what a pick inserts — always: a display name is text another user
+     * controls, and addressing someone by it addresses nobody.
+     */
+    data class Candidate(
+        val nick: String,
+        /** The plain (stripped) display name, when the user has one and the setting shows it. */
+        val displayName: String? = null,
+    )
+
+    /**
+     * Whether a nick is offered, and its name if that was looked up on the way.
+     *
+     * Port note: the Swift's `matches` returns the tuple `(Bool, String?)`.
+     */
+    private data class Match(val matched: Boolean, val name: String?)
+
+    /**
+     * `candidates` with the display name beside each nick. `displayName` answers a nick's plain
+     * shown name (`ChatState.plainDisplayName`), or null; with it, a candidate also matches on the
+     * name — its start, or the start of any of its words, so `bra` finds "Brad Root" and `root`
+     * does too — the web's `nickCompletion.ts` rule. Without it (or with the setting off, when
+     * the resolver answers null) this is the old matcher.
+     *
+     * Port note: the name folds with `lowercase()` and its words are
+     * `splitOnSwiftWhitespace()` (Swift's `split(whereSeparator: \.isWhitespace)`, which omits
+     * empty pieces, as that helper does); the fold differs from `lowercased()` at the final-sigma
+     * edge named above.
+     */
+    fun rows(
+        speakers: SpeakerMap,
+        members: List<Member>,
+        selfNick: String?,
+        query: String,
+        isChannel: Boolean,
+        limit: Int = 4,
+        ignores: IgnoreSet = IgnoreSet.empty,
+        networkId: Int? = null,
+        channel: String = "",
+        displayName: ((String) -> String?)? = null,
+    ): List<Candidate> {
         val prefix = query.lowercase()
         val seen = mutableSetOf<String>()
         if (selfNick != null) seen.add(selfNick.lowercase())
@@ -94,7 +144,23 @@ object NickCompletion {
                 networkId = networkId, nick = nick, userhost = userhost, channel = channel,
             )
         }
-        val out = mutableListOf<String>()
+        fun nameOf(nick: String): String? = displayName?.invoke(nick)
+        fun nameMatches(name: String?): Boolean {
+            val folded = name?.lowercase() ?: return false
+            if (folded.startsWith(prefix)) return true
+            return folded.splitOnSwiftWhitespace().any { it.startsWith(prefix) }
+        }
+        // Whether `nick` is offered, and its name if that was looked up on the way: the nick's
+        // own prefix is the cheap test and the common hit, so the name — a settings read, a fold
+        // and a strip per member — is resolved only when the nick alone didn't match. A kept
+        // candidate gets its name for the chip afterwards, and only the few kept do.
+        fun matches(nick: String): Match {
+            if (nick.lowercase().startsWith(prefix)) return Match(true, null)
+            if (displayName == null) return Match(false, null)
+            val name = nameOf(nick)
+            return Match(nameMatches(name), name)
+        }
+        val out = mutableListOf<Candidate>()
 
         // Speakers, newest first. Only speech counts, and never our own — the map records
         // message/action from others alone, so a notice bot or a join flood never crowds it.
@@ -102,14 +168,16 @@ object NickCompletion {
             if (out.size >= limit) return out
             val nick = speaker.nick
             val lc = nick.lowercase()
-            if (seen.contains(lc) || !lc.startsWith(prefix)) continue
+            if (seen.contains(lc)) continue
+            val (matched, name) = matches(nick)
+            if (!matched) continue
             val member = memberByNick[lc]
             if (isChannel && member == null) continue
             // Marked seen either way: an ignored nick is *decided*, and leaving it unseen would
             // let the member pass below offer the same person the speaker pass just refused.
             seen.add(lc)
             if (isIgnored(nick, member?.userhost)) continue
-            out.add(nick)
+            out.add(Candidate(nick = nick, displayName = name ?: nameOf(nick)))
         }
 
         // Then everyone else who's here, in case-folded alphabetical order — the same
@@ -117,14 +185,17 @@ object NickCompletion {
         // is about who you're addressing, not who has ops). Filtered before the sort: a
         // bare word asks on most keystrokes, and a big channel's whole member list
         // shouldn't be sorted for the handful that match.
-        val matching = members.filter { it.nick.lowercase().startsWith(prefix) }
-        for (member in matching.sortedWith { lhs, rhs -> lhs.nick.lowercase().compareTo(rhs.nick.lowercase()) }) {
+        val matching = members.mapNotNull { member ->
+            val (matched, name) = matches(member.nick)
+            if (matched) member to name else null
+        }
+        for ((member, name) in matching.sortedWith { lhs, rhs -> lhs.first.nick.lowercase().compareTo(rhs.first.nick.lowercase()) }) {
             if (out.size >= limit) return out
             val lc = member.nick.lowercase()
             if (seen.contains(lc)) continue
             seen.add(lc)
             if (isIgnored(member.nick, member.userhost)) continue
-            out.add(member.nick)
+            out.add(Candidate(nick = member.nick, displayName = name ?: nameOf(member.nick)))
         }
         return out
     }

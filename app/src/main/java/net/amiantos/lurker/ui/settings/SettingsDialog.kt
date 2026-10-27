@@ -73,6 +73,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.util.UUID
 import net.amiantos.lurker.platform.findActivity
@@ -95,6 +96,7 @@ import net.amiantos.lurkerkit.model.SettingOption
 import net.amiantos.lurkerkit.model.SettingType
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.model.AvatarSets
 import net.amiantos.lurkerkit.session.ChatViewModel
 
 /**
@@ -121,12 +123,13 @@ internal fun SettingsDialog(
     onSignOut: () -> Unit,
 ) {
     val inputsFlow = remember(model) {
-        model.statePublisher
-            .conflate()
-            .map { SettingsInputs.of(it, linkPreviews = model.features.linkPreviews) }
-            .distinctUntilChanged()
+        // The avatar set pull-down lists the account's uploaded sets (lurker#607), which arrive by REST
+        // after the screen is built and change when a set is uploaded on the web — their own stream.
+        combine(model.statePublisher.conflate(), model.avatarSetsPublisher) { state, sets ->
+            SettingsInputs.of(state, linkPreviews = model.features.linkPreviews, avatarSets = sets)
+        }.distinctUntilChanged()
     }
-    val initialInputs = remember(model) { SettingsInputs.of(model.state, linkPreviews = model.features.linkPreviews) }
+    val initialInputs = remember(model) { SettingsInputs.of(model.state, linkPreviews = model.features.linkPreviews, avatarSets = model.avatarSets) }
     val inputs by inputsFlow.collectAsStateWithLifecycle(initialValue = initialInputs)
 
     // Kept in an activity-scoped store under a saved token, so a rotation keeps the writer and what it
@@ -158,6 +161,7 @@ internal fun SettingsDialog(
         SettingsContent(
             sections = SettingsModel.sections(inputs),
             settings = inputs.settings,
+            avatarSets = inputs.avatarSets,
             edits = writer.edits,
             device = DeviceToggles(autocapitalizes = autocapitalizes, enterSends = enterSends, noAppPush = noAppPush),
             about = about,
@@ -266,13 +270,14 @@ private fun SettingsContent(
     device: DeviceToggles,
     about: AboutLines,
     actions: SettingsActions,
+    avatarSets: AvatarSets = AvatarSets.none,
 ) {
     // The push notice is the Notifications section's footer when there is one; else the device rows'.
     val hasNotifications = SettingsModel.hasNotifications(sections)
     DialogPage(title = "Settings", exit = PageExit.Close, onExit = actions.onClose) { padding ->
         LazyColumn(Modifier.fillMaxSize(), contentPadding = padding) {
             sections.forEachIndexed { index, section ->
-                section(index, section, settings, edits, device, about, actions, hasNotifications)
+                section(index, section, settings, edits, device, about, actions, hasNotifications, avatarSets)
             }
             item(key = "end") { Spacer(Modifier.height(24.dp)) }
         }
@@ -289,6 +294,7 @@ private fun LazyListScope.section(
     about: AboutLines,
     actions: SettingsActions,
     hasNotifications: Boolean,
+    avatarSets: AvatarSets = AvatarSets.none,
 ) {
     val id = section::class.simpleName ?: "section$index"
     val header = SettingsModel.header(section)
@@ -304,7 +310,7 @@ private fun LazyListScope.section(
         is SettingsSection.Chat -> settingRows(id, section.rows, settings, edits, actions)
         is SettingsSection.Events -> settingRows(id, section.rows, settings, edits, actions)
         is SettingsSection.SmartFilter -> settingRows(id, section.rows, settings, edits, actions)
-        is SettingsSection.Appearance -> settingRows(id, section.rows, settings, edits, actions)
+        is SettingsSection.Appearance -> settingRows(id, section.rows, settings, edits, actions, avatarSets)
         is SettingsSection.Notifications -> for (row in section.rows) {
             when (row) {
                 is NotificationRow.Toggle -> settingRows(id, listOf(row.row), settings, edits, actions)
@@ -352,10 +358,11 @@ private fun LazyListScope.settingRows(
     settings: Settings,
     edits: SettingsEdits,
     actions: SettingsActions,
+    avatarSets: AvatarSets = AvatarSets.none,
 ) {
     for (row in rows) {
         item(key = "$sectionId.${row.option.key}") {
-            SettingRowView(SettingsModel.rowState(row, settings, edits), actions)
+            SettingRowView(SettingsModel.rowState(row, settings, edits, avatarSets), actions)
         }
     }
 }
