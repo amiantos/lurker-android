@@ -1,5 +1,5 @@
 {
-  "pin": "cca629f",
+  "pin": "e0fbde1f3b30831a0d1ff302776e3df3e49685a9",
   "tranches": [
     {
       "id": "T1",
@@ -209,8 +209,8 @@
     },
     {
       "id": "S8",
-      "title": "Sync to lurker-ios cca629f",
-      "about": "lurker-ios#244 (lurker#1203, the web's #607): IRCv3 metadata — display names, avatars, the metadata profile. `UserMetadata` (a nick's record, `MetadataLimits`, and `UserMetadataSet`, the per-network map replaced whole and compared by identity like `RelayBotSet`), `AvatarTiles` (`shared/avatarTiles.ts`'s salted djb2 over the colour's trim, with the web's parity vectors) and `AvatarSets` (the five bundled sets, the uploaded ones, the `look.avatars.set` pointer and its fallback, the list and manifest decoders) are new. `ServerFrame`/`FrameParser` gain `user-metadata` (above the target guard — left to fall through it was an empty row in the server buffer on every profile change), `channel-metadata` (ignored, named), `avatar-sets-changed` and the two snapshot fields; `ChatState` holds the set and answers `displayName`/`plainDisplayName`/`label`; `Network.metadataLimits` follows `modeSpec`'s lifecycle; `CompactDensity.flushBodies` is the list's rule under the gutter; `NickCompletion.rows` matches display names and carries them; `LurkerClient` reads `/api/avatar-sets` and the bundled manifests; `ChatViewModel.avatarSets` publishes them, re-read on every snapshot and on `avatar-sets-changed`, with each answer under its own `NewestAnswer`. All ported. ⚠ Pinned to the iOS branch tip ahead of its merge (the merge commit's tree is identical; move the pin to it when lurker-ios#244 lands).",
+      "title": "Sync to lurker-ios e0fbde1",
+      "about": "lurker-ios#244 (lurker#1203, the web's #607): IRCv3 metadata — display names, avatars, the metadata profile. `UserMetadata` (a nick's record, `MetadataLimits`, and `UserMetadataSet`, the per-network map replaced whole and compared by identity like `RelayBotSet`), `AvatarTiles` (`shared/avatarTiles.ts`'s salted djb2 over the colour's trim, with the web's parity vectors) and `AvatarSets` (the five bundled sets, the uploaded ones, the `look.avatars.set` pointer and its fallback, the list and manifest decoders) are new. `ServerFrame`/`FrameParser` gain `user-metadata` (above the target guard — left to fall through it was an empty row in the server buffer on every profile change), `channel-metadata` (ignored, named), `avatar-sets-changed` and the two snapshot fields; `ChatState` holds the set and answers `displayName`/`plainDisplayName`/`label`; `Network.metadataLimits` follows `modeSpec`'s lifecycle; `CompactDensity.flushBodies` is the list's rule under the gutter; `NickCompletion.rows` matches display names and carries them; `LurkerClient` reads `/api/avatar-sets` and the bundled manifests; `ChatViewModel.avatarSets` publishes them, re-read on every snapshot and on `avatar-sets-changed`, with each answer under its own `NewestAnswer`. All ported.",
       "files": [
         "Model/UserMetadata.swift",
         "Rendering/AvatarTiles.swift",
