@@ -41,7 +41,9 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -147,7 +149,20 @@ internal data class CompactMetrics(
     /** The share of [blockGap] a block keeps inside its own wash, at each end (`compactWashPadding`). */
     val wash: Dp get() = blockGap / 3
 
+    /**
+     * The gap a marker carries above its text: the wash a block opens with ([MarkerRow]). Part of the
+     * space between two rows, not of the marker, so it doesn't count toward the marker being on screen.
+     */
+    val markerGapAbove: Dp get() = wash
+
+    /** The gap a marker carries below its text: the rest of the block gap and the nudge ([MarkerRow]). */
+    val markerGapBelow: Dp get() = blockGap - wash + washBottomNudge
+
     companion object {
+        /** `look.message.compact.group_gap` at [density]'s font scale. */
+        fun of(compact: CompactDensity, density: Density): CompactMetrics =
+            CompactMetrics(blockGap = with(density) { compact.groupGap.sp.toDp() })
+
         /** A row's own side margins, so a cutout or a rail can't swallow a timestamp (`useOwnSideMargins`). */
         val side: Dp = 20.dp
 
@@ -173,8 +188,12 @@ internal data class CompactMetrics(
         val attachmentsTop: Dp = 6.dp
         val attachmentsBottom: Dp = 8.dp
 
-        /** A marker's breathing room — iOS's default cell margins around one line. */
-        val markerVertical: Dp = 10.dp
+        /**
+         * The air a marker keeps above and below its text: the web's 6px divider padding, in sp so it
+         * scales with the font like [blockGap]. Fixed, not a density: the setting moves the gap
+         * *around* a marker (lurker#1238), never the marker itself.
+         */
+        val markerPadding: TextUnit = 6.sp
     }
 }
 
@@ -182,7 +201,7 @@ internal data class CompactMetrics(
 internal fun rememberCompactMetrics(compact: CompactDensity = CompactDensity.standard): CompactMetrics {
     val density = LocalDensity.current
     return remember(compact, density) {
-        CompactMetrics(blockGap = with(density) { compact.groupGap.sp.toDp() })
+        CompactMetrics.of(compact, density)
     }
 }
 
@@ -192,7 +211,7 @@ internal fun rememberCompactMetrics(compact: CompactDensity = CompactDensity.sta
 @Composable
 fun MessageListRow(row: MessageRow, index: Int, context: MessageListContext, modifier: Modifier = Modifier) {
     when (val plan = MessageListLayout.plan(row, index, context)) {
-        is RowPlan.Marker -> MarkerRow(plan, modifier)
+        is RowPlan.Marker -> MarkerRow(plan, rememberCompactMetrics(context.style.density), modifier)
         is RowPlan.Compact -> CompactRow(plan, context, modifier)
     }
 }
@@ -201,15 +220,26 @@ fun MessageListRow(row: MessageRow, index: Int, context: MessageListContext, mod
  * A centred marker row. Set in the system face, not the log's: it isn't a line of the log.
  *
  * ⚠ One font size, the app's rule — `bodyMedium`, where iOS draws these a size down (`caption1`).
+ *
+ * A marker is a block of its own: a cluster boundary, as the web's compact layout treats a divider
+ * (lurker#1238). So it takes the wash a block opens with above its text, and below it the rest of the
+ * block gap and the nudge, the way any block's last row does ([CompactRow]). The row above a marker always ends its
+ * block and the row below always starts one (a divider breaks a run), so the marker sits one gap from
+ * each neighbour, and two markers in a row sit one gap apart, not two.
  */
 @Composable
-private fun MarkerRow(plan: RowPlan.Marker, modifier: Modifier = Modifier) {
+private fun MarkerRow(plan: RowPlan.Marker, metrics: CompactMetrics, modifier: Modifier = Modifier) {
     val colors = LurkerTheme.colors
+    val padding = with(LocalDensity.current) { CompactMetrics.markerPadding.toDp() }
     Text(
         plan.text,
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = CompactMetrics.side, vertical = CompactMetrics.markerVertical),
+            .padding(horizontal = CompactMetrics.side)
+            .padding(
+                top = padding + metrics.markerGapAbove,
+                bottom = padding + metrics.markerGapBelow,
+            ),
         style = MaterialTheme.typography.bodyMedium,
         color = when (plan.tone) {
             MarkerTone.Unread -> colors.badText

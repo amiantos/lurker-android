@@ -172,6 +172,8 @@ internal data class LayoutFacts(
             contentEnd: Int,
             nearBottomPx: Int,
             pagingPx: Int,
+            dividerGapAbove: Int = 0,
+            dividerGapBelow: Int = 0,
         ): LayoutFacts? {
             if (!describes(items, built)) return null
             val total = built.rows.size
@@ -187,8 +189,13 @@ internal data class LayoutFacts(
                 val index = built.itemIndex(row)
                 val laidOut = items.firstOrNull { it.index == index }
                 if (laidOut != null) {
-                    dividerVisible = laidOut.offset + laidOut.size > 0 && laidOut.offset < contentEnd
-                    dividerAbove = laidOut.offset >= contentEnd
+                    // The marker's text and its padding, without the group gap it carries either side
+                    // (lurker#1238): at a wide gap, the empty space under "New messages" peeking in at
+                    // the top edge isn't the reader having reached it.
+                    val bottom = laidOut.offset + dividerGapBelow
+                    val top = laidOut.offset + laidOut.size - dividerGapAbove
+                    dividerVisible = top > 0 && bottom < contentEnd
+                    dividerAbove = bottom >= contentEnd
                 } else {
                     dividerAbove = index > highest.index
                 }

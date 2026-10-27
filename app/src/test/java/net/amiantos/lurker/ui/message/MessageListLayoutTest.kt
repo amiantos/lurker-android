@@ -198,6 +198,23 @@ class MessageListLayoutTest {
     }
 
     @Test
+    fun `a line with nothing to call it opens a block under a marker, and only there`() {
+        val alice = line("alice", 0)
+        val motd = line(null, 10, type = EventType.Motd)
+        val rows = MessageRows.build(listOf(alice, motd), dividerAfterId = alice.id, hasMoreOlder = true, zone = ZoneOffset.UTC)
+            .filter { it !is MessageRow.DateDivider }
+        assertEquals(MessageRow.UnreadDivider, rows[1])
+        assertTrue(rows[2] is MessageRow.Bubble)
+        val under = plans(rows)[2] as RowPlan.Compact
+        assertNull(under.header)
+        assertTrue(under.startsBlock)
+
+        // Without the marker it continues whatever is above it, as before (lurker#1238).
+        val after = plans(rows(line("alice", 0), line(null, 10, type = EventType.Motd)))[1] as RowPlan.Compact
+        assertFalse(after.startsBlock)
+    }
+
+    @Test
     fun `a run of status narration is one block`() {
         val settingsOff = net.amiantos.lurkerkit.model.Settings(
             registry = emptyMap(),
