@@ -137,6 +137,9 @@ internal class LurkerClient(
 ) {
     private val session: OkHttpClient = httpClient
 
+    /** The socket's client: [session] with redirects off — see [socketConfiguration]. */
+    private val socketSession: OkHttpClient = socketConfiguration(httpClient)
+
     /** Preview bytes only, so its cache can be purged on sign-out without touching API state. */
     private val mediaSession: OkHttpClient
     private var baseURL = ""
@@ -764,7 +767,7 @@ internal class LurkerClient(
         // Port note: OkHttp starts connecting the moment the socket is made — there is no
         // separate `resume()`. Its callbacks reach this client only through `scope`, so none
         // can land before the two lines below have run.
-        val task = session.newWebSocket(request, SocketListener())
+        val task = socketSession.newWebSocket(request, SocketListener())
         socket = task
         socketEnded = false
         socketGeneration += 1
@@ -2624,13 +2627,38 @@ internal class LurkerClient(
          * Port note: OkHttp's default jar is already `NO_COOKIES`; it is stated anyway. The
          * timeouts are `URLSessionConfiguration.default`'s 60 s, which the notes in this file
          * count on ("the session's 60s default"), where OkHttp's own default is 10 s.
+         *
+         * ⚠⚠ `CleartextPolicy` is installed HERE and nowhere else, so that every client built from
+         * this one by `newBuilder()` — the media session included — inherits it. On iOS the OS
+         * refuses cleartext to a public host; on Android this interceptor is what does. Installed
+         * TWICE, on purpose: an application interceptor runs once per call, before the cache, and a
+         * network interceptor runs once per hop — a redirect's follow-up is built below the
+         * application interceptors and would otherwise be followed to `http://` in the clear.
          */
         internal fun bearerOnlyConfiguration(): OkHttpClient =
             OkHttpClient.Builder()
+                .addInterceptor(CleartextPolicy)
+                .addNetworkInterceptor(CleartextPolicy)
                 .cookieJar(CookieJar.NO_COOKIES)
                 .connectTimeout(Duration.ofSeconds(60))
                 .readTimeout(Duration.ofSeconds(60))
                 .writeTimeout(Duration.ofSeconds(60))
+                .build()
+
+        /**
+         * The client the WebSocket upgrade goes through: [base] with redirects off.
+         *
+         * ⚠⚠ Port-only, and the reason is `CleartextPolicy`'s one blind spot: OkHttp runs NO
+         * network interceptors for a WebSocket call, and the application interceptors see only
+         * the first request — so a `/ws` answered with `302 Location: http://…` to a public host
+         * would be followed by the upgrade in the clear, with neither layer asked. The Lurker
+         * server never redirects its socket, so nothing is lost by refusing to follow one: the
+         * 3xx surfaces as the upgrade's status (`onFailure`), as a 426 or 401 does.
+         */
+        internal fun socketConfiguration(base: OkHttpClient): OkHttpClient =
+            base.newBuilder()
+                .followRedirects(false)
+                .followSslRedirects(false)
                 .build()
 
         /**
@@ -3046,6 +3074,13 @@ internal class LurkerClient(
             if (scheme != null) {
                 if (scheme != "https" && scheme != "http") return null
                 val absolute = path.toHttpUrlOrNull() ?: return null
+                // ⚠⚠ The same cleartext rule `playableMediaURL` applies, asked of the same
+                // `LocalNetworking`: a server (or the bucket it is configured with) that mints a
+                // plain-http address on a public host must not have inline images, thumbnails and
+                // avatar tiles fetched in the clear on render, with no tap. `CleartextPolicy` on the
+                // client would refuse the request anyway; refusing it here keeps the verdict a
+                // `null` the loader latches rather than an `IOException` it retries.
+                if (scheme == "http" && !LocalNetworking.permitsCleartext(host = absolute.host)) return null
                 return Request.Builder().url(absolute).build()
             }
             // ⚠⚠ The relative branch must be genuinely relative TO THE ROOT, or the concatenation

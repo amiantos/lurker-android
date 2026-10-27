@@ -17,7 +17,8 @@ object AttachmentNaming {
      *
      * @property filename what the upload is called — the provider's display name, with the inferred
      *   extension added when it had none.
-     * @property extension what the staged copy is named with, or "" when nothing knows.
+     * @property extension what the staged copy is named with, or "" when nothing knows — or when the
+     *   name's extension is not one a file in the cache may carry ([stagedExtension]).
      */
     data class Named(val filename: String, val extension: String, val mime: String, val isVideo: Boolean)
 
@@ -54,8 +55,15 @@ object AttachmentNaming {
         // while the uploaded name says nothing is the two halves disagreeing, and the name is the half
         // the server reads first. When the source named itself this changes nothing.
         val filename = if (ownExtension.isEmpty() && inferred.isNotEmpty()) "$name.$inferred" else name
-        return Named(filename = filename, extension = ext, mime = mime, isVideo = isVideo)
+        // ⚠ The staged copy's name is built from the provider's display name, and a provider says
+        // whatever it likes: `a/b` in it used to fail the copy closed with an error dialog that echoed
+        // the cache path. Letters and digits only; the claim and the uploaded filename are unchanged.
+        val staged = if (stagedExtension.matches(ext)) ext else ""
+        return Named(filename = filename, extension = staged, mime = mime, isVideo = isVideo)
     }
+
+    /** What a staged copy may be named with: `[A-Za-z0-9]{1,16}`. */
+    private val stagedExtension = Regex("[A-Za-z0-9]{1,16}")
 
     /**
      * The claim. The extension's registered type first — the same order iOS reads (`UTType` from the

@@ -6,6 +6,7 @@ package net.amiantos.lurker.ui.uploads
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -13,14 +14,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
@@ -28,10 +34,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FullScreenDialog
 import net.amiantos.lurker.ui.networks.PageExit
@@ -54,7 +63,17 @@ import net.amiantos.lurkerkit.session.ChatViewModel
  * conversation comes or goes, not on every message.
  */
 @Composable
-fun SharePickerDialog(model: ChatViewModel, onPick: (BufferKey) -> Unit, onDismiss: () -> Unit) {
+fun SharePickerDialog(model: ChatViewModel, share: SharePayload, onPick: (BufferKey) -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    // What is being shared, named: the pick is the only consent step, and a share arrives from any
+    // app that cares to send one. The providers' names, read off the main thread; the grant that
+    // came with the intent is still live. "unnamed file" until they arrive, never nothing — and
+    // ⚠ never the PREVIOUS share's names: a second share replaces the first while this is up, and
+    // the names are keyed to the payload, so a slow provider shows blanks, not the old files.
+    var names by remember(share) { mutableStateOf<List<String?>>(share.streams.map { null }) }
+    LaunchedEffect(share) {
+        names = withContext(Dispatchers.IO) { share.streams.map { providerDisplayName(context.contentResolver, it.toUri()) } }
+    }
     val flow = remember(model) {
         model.statePublisher
             .conflate()
@@ -66,7 +85,10 @@ fun SharePickerDialog(model: ChatViewModel, onPick: (BufferKey) -> Unit, onDismi
     FullScreenDialog(onDismissRequest = onDismiss) {
         DialogPage(title = "Choose a Conversation", exit = PageExit.Close, onExit = onDismiss) { padding ->
             Box(Modifier.fillMaxSize().padding(padding)) {
-                SharePickerList(sections = shown.first, settled = shown.second, onPick = onPick)
+                Column(Modifier.fillMaxSize()) {
+                    ShareSummaryLines(files = ShareSummary.files(names), text = ShareSummary.text(share.text))
+                    SharePickerList(sections = shown.first, settled = shown.second, onPick = onPick)
+                }
                 // The app's own connection, over the list, as the buffer list carries it. Android needs
                 // this where iOS has no such screen: "Loading buffers…" waits on the roster's burst, which
                 // never lands while the app is offline — and this dialog covers the scaffold's banner, so
@@ -80,6 +102,18 @@ fun SharePickerDialog(model: ChatViewModel, onPick: (BufferKey) -> Unit, onDismi
             }
         }
     }
+}
+
+/** What the share holds, above the list: the files by name, and the text in quotes. */
+@Composable
+private fun ShareSummaryLines(files: String?, text: String?) {
+    val colors = LurkerTheme.colors
+    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+        Text("Sharing", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, color = colors.fgMuted)
+        files?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = colors.fg, maxLines = 3, overflow = TextOverflow.Ellipsis) }
+        text?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = colors.fg, maxLines = 2, overflow = TextOverflow.Ellipsis) }
+    }
+    HorizontalDivider()
 }
 
 @Composable

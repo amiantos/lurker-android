@@ -65,6 +65,42 @@ class ShareInboxTest {
         assertEquals(listOf("=carol"), sections[2].targets.map { it.name })
     }
 
+    /**
+     * ⚠⚠ The share sheet's confused-deputy guard: only another app's `content://` address is a
+     * share. A `file://` path would be opened as this app — a path into its own sandbox included —
+     * and this app's own provider is the same trick one layer up.
+     */
+    @Test
+    fun onlyAnotherAppsContentAddressIsAShare() {
+        val pkg = "net.amiantos.lurker"
+        assertTrue(ShareUris.isAcceptable("content", "com.android.providers.media.documents", pkg))
+        assertTrue(ShareUris.isAcceptable("content", "com.google.android.apps.photos.contentprovider", pkg))
+        assertFalse(ShareUris.isAcceptable("file", null, pkg))
+        assertFalse(ShareUris.isAcceptable("file", "", pkg))
+        assertFalse(ShareUris.isAcceptable("content", "net.amiantos.lurker.files", pkg))
+        assertFalse(ShareUris.isAcceptable("content", "net.amiantos.lurker", pkg))
+        assertFalse(ShareUris.isAcceptable("content", "net.amiantos.lurker.anything", pkg))
+        assertFalse(ShareUris.isAcceptable("content", null, pkg))
+        assertFalse(ShareUris.isAcceptable("content", "", pkg))
+        assertFalse(ShareUris.isAcceptable(null, "com.android.providers.media.documents", pkg))
+        assertFalse(ShareUris.isAcceptable("android.resource", "net.amiantos.other", pkg))
+    }
+
+    /** The pick is the only consent step, so it names what is being shared. */
+    @Test
+    fun theSummaryNamesTheFilesAndQuotesTheText() {
+        assertNull(ShareSummary.files(emptyList()))
+        assertEquals("photo.jpg", ShareSummary.files(listOf("photo.jpg")))
+        assertEquals("unnamed file", ShareSummary.files(listOf(null)))
+        assertEquals("unnamed file", ShareSummary.files(listOf("  ")))
+        assertEquals("3 files: a.jpg, unnamed file, c.mp4", ShareSummary.files(listOf("a.jpg", null, "c.mp4")))
+        assertNull(ShareSummary.text(null))
+        assertNull(ShareSummary.text("  \n "))
+        assertEquals("\u201Chttps://example.com\u201D", ShareSummary.text("https://example.com"))
+        assertEquals("\u201Cfirst line\u201D", ShareSummary.text("  first line\nsecond line"))
+        assertEquals("\u201Cabcde\u2026\u201D", ShareSummary.text("abcde fghij", limit = 5))
+    }
+
     @Test
     fun onlyConversationsTakeUploads() {
         assertTrue(UploadTargets.takes(BufferKey(1, "#lurker")))

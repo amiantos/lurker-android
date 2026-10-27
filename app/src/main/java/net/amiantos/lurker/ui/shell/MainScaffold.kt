@@ -641,7 +641,9 @@ fun MainScaffold(
             UploadReportDialog(uploads.runner)
             // A share waiting for its conversation — asked as soon as the signed-in app is up.
             val share by uploads.shares.share.collectAsStateWithLifecycle()
-            if (share != null) SharePickerDialog(model = model, onPick = ::sendShare, onDismiss = { uploads.shares.take() })
+            share?.let { payload ->
+                SharePickerDialog(model = model, share = payload, onPick = ::sendShare, onDismiss = { uploads.shares.take() })
+            }
             // After Settings, so a networks list opened from it is the window on top.
             NetworkSheetsHost(sheets = sheets, model = model) { networkId, channel ->
                 model.requestJoin(networkId = networkId, channel = channel, opens = true)

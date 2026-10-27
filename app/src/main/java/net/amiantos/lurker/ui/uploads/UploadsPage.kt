@@ -13,7 +13,6 @@ import android.icu.text.RelativeDateTimeFormatter
 import android.icu.util.ULocale
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
-import androidx.core.net.toUri
 import android.text.format.Formatter
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -48,6 +47,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
@@ -93,6 +94,7 @@ import net.amiantos.lurker.platform.confirmCopy
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.PageExit
 import net.amiantos.lurker.ui.shell.RetryRow
+import net.amiantos.lurker.ui.shell.SafeUriHandler
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
@@ -100,6 +102,7 @@ import net.amiantos.lurkerkit.model.LinkPreview
 import net.amiantos.lurkerkit.model.UploadItem
 import net.amiantos.lurkerkit.model.UploadKind
 import net.amiantos.lurkerkit.model.UploadsFilter
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.time.Instant
 
 /**
@@ -133,6 +136,10 @@ internal fun UploadsPage(
 ) {
     val context = LocalContext.current
     val events = LocalAppEvents.current
+    // This page is a dialog outside the conversation's provider, so it brings its own opener — the
+    // same one every other surface opens links with, so a link nothing takes fails the same way.
+    val platform = LocalUriHandler.current
+    val uriHandler = remember(platform) { SafeUriHandler(platform) }
     val grid = state.grid
     val keyboard = LocalSoftwareKeyboardController.current
     // One formatter for the page, rebuilt only when the locale changes — not one per tile per frame.
@@ -161,9 +168,9 @@ internal fun UploadsPage(
                 // A gallery over every viewable row in the grid, positioned on this one; nothing to
                 // present after all, and the browser can have it.
                 else -> UploadTiles.gallery(grid.items, item)?.let { (previews, start) -> onView(previews, start) }
-                    ?: openInBrowser(context, item.url)
+                    ?: openInBrowser(uriHandler, item.url)
             }
-            UploadAction.OpenInBrowser -> if (item.removed) state.reportTombstone() else openInBrowser(context, item.url)
+            UploadAction.OpenInBrowser -> if (item.removed) state.reportTombstone() else openInBrowser(uriHandler, item.url)
             UploadAction.AddToMessage -> onAddToMessage?.invoke(item.url)
             UploadAction.Star, UploadAction.Unstar -> state.toggleStar(item)
             UploadAction.CopyLink -> if (item.removed) state.reportTombstone() else copyLink(context, item.url, events)
@@ -584,13 +591,16 @@ private fun share(context: Context, url: String) {
 
 /**
  * Hand the file to the browser — text, and whatever the media viewer can't present (`UploadTiles.preview`).
+ *
+ * ⚠ Only a web address. The URL is the server's (`/api/uploads`), and every other link this app opens is
+ * scheme-bounded (`URLMatcher`, `LinkPreview.isViewable`, the profile's homepage); this one used to go
+ * to `ACTION_VIEW` as written, which would have handed a `tel:`, `sms:` or another app's deep link to
+ * the system had a server ever minted one. Through the shared opener, so a link nothing takes fails
+ * the way it does everywhere else: quietly.
  */
-private fun openInBrowser(context: Context, url: String) {
-    try {
-        context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
-    } catch (_: ActivityNotFoundException) {
-        // No browser — nothing to hand it to.
-    }
+private fun openInBrowser(uriHandler: UriHandler, url: String) {
+    val target = url.toHttpUrlOrNull() ?: return
+    uriHandler.openUri(target.toString())
 }
 
 // MARK: - Previews

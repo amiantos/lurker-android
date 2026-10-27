@@ -21,6 +21,7 @@ import net.amiantos.lurker.platform.push.PushMessage
 import net.amiantos.lurker.ui.shell.AppRoot
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurker.ui.uploads.SharePayload
+import net.amiantos.lurker.ui.uploads.ShareUris
 import net.amiantos.lurkerkit.client.NotificationTap
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.session.ChatViewModel
@@ -118,6 +119,10 @@ class MainActivity : ComponentActivity() {
      *
      * The files' read grants came with this intent and last as long as this task, which is why the run
      * copies each one into the cache at its turn rather than reading the provider at upload time.
+     *
+     * ⚠⚠ Only another app's `content://` addresses are kept (`ShareUris`): any app can send this
+     * activity an intent, and a `file://` path into this app's own sandbox would otherwise be read as
+     * this app and uploaded. Refused here, before anything is parked, and again when it is staged.
      */
     private fun consumeShare(intent: Intent) {
         val action = intent.action
@@ -127,8 +132,15 @@ class MainActivity : ComponentActivity() {
         } else {
             IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
         }
+        val acceptable = streams.filter { ShareUris.isAcceptable(it.scheme, it.authority, packageName) }
+        if (acceptable.size < streams.size) {
+            // Said, not swallowed: an app that still shares `file://` paths (older file managers)
+            // would otherwise bring Lurker forward with no picker and no word why.
+            val refused = streams.size - acceptable.size
+            app.events.send(AppEvent.Notice(if (refused == 1) "Lurker can't accept that file" else "Lurker can't accept those files"))
+        }
         val text = intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString()
-        app.uploads.shares.receive(SharePayload.of(streams.map(Uri::toString), text))
+        app.uploads.shares.receive(SharePayload.of(acceptable.map(Uri::toString), text))
         setIntent(Intent(this, MainActivity::class.java).setAction(Intent.ACTION_MAIN))
     }
 

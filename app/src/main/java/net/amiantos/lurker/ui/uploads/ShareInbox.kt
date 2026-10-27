@@ -31,6 +31,31 @@ data class SharePayload(val streams: List<String>, val text: String?) {
 }
 
 /**
+ * What the picker says is being shared — the pick is the only consent step, so it has to carry the
+ * information: which files, by name, and what text. Pure, so the wording is held to by a test; the
+ * names come from the providers (`OpenableColumns.DISPLAY_NAME`), resolved by the dialog.
+ */
+object ShareSummary {
+    /**
+     * One line for the files: "photo.jpg", "3 files: a.jpg, b.jpg, c.mp4". [names] is one entry per
+     * shared file, in order; null where the provider gave no name. Null when there are no files.
+     */
+    fun files(names: List<String?>): String? {
+        if (names.isEmpty()) return null
+        val shown = names.map { it?.takeIf(String::isNotBlank) ?: "unnamed file" }
+        return if (shown.size == 1) shown[0] else "${shown.size} files: ${shown.joinToString(", ")}"
+    }
+
+    /** The text's first line, in quotes, cut at [limit] characters with an ellipsis; null for no text. */
+    fun text(text: String?, limit: Int = 120): String? {
+        val line = text?.trimmingWhitespacesAndNewlines()?.lineSequence()?.firstOrNull()?.takeIf { it.isNotEmpty() }
+            ?: return null
+        val cut = if (line.length > limit) line.take(limit).trimEnd() + "\u2026" else line
+        return "\u201C$cut\u201D"
+    }
+}
+
+/**
  * The share waiting for the reader to say which conversation it goes to. App-long, so a share that
  * arrives while signed out **waits for the sign-in** rather than being dropped: the scaffold asks as
  * soon as it's up. A sign-out drops it — the next account isn't who the share was meant for.

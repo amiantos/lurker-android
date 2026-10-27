@@ -11,10 +11,12 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * Locks the transport policy (lurker-ios#29) to ATS's own definition of "local": on iOS, with
- * `NSAllowsLocalNetworking` as the app's only exception, everything this policy passes must be
- * loadable and everything it rejects must fail with our copy — the two lists drifting apart is
- * the bug these tests exist to catch. Here they hold the policy to the same answers iOS gives.
+ * Locks the transport policy (lurker-ios#29) to `LocalNetworking`'s one definition of "local":
+ * single-label names, `.local` names and the private, link-local and loopback ranges — never a
+ * public address, on either platform. Everything this policy passes must be loadable and
+ * everything it rejects must fail with our copy; the sign-in gate, the playback gate and the
+ * `CleartextPolicy` interceptor drifting apart is the bug these tests exist to catch. Here they
+ * hold the policy to the same answers iOS gives.
  */
 class ServerAddressTests {
 
@@ -53,16 +55,41 @@ class ServerAddressTests {
     }
 
     @Test
-    fun testPlainHTTPPassesForApplesThreeLocalHostClasses() {
+    fun testPlainHTTPPassesForTheLocalNetwork() {
         // Unqualified single-label names.
         assertNull(ServerAddress.rejection("http://localhost:8010"))
         assertNull(ServerAddress.rejection("http://xerxes:8010"))
         // .local names (case-insensitively — DNS names have no case).
         assertNull(ServerAddress.rejection("http://xerxes.local:8010"))
         assertNull(ServerAddress.rejection("http://Xerxes.LOCAL:8010"))
-        // IP literals, v4 and v6 (the v6 brackets are stripped).
-        assertNull(ServerAddress.rejection("http://192.168.1.5:8010"))
+        // Private, loopback and link-local literals, v4 and v6 (the v6 brackets are stripped).
+        assertNull(ServerAddress.rejection("http://192.168.1.2:8010"))
+        assertNull(ServerAddress.rejection("http://10.0.0.5:8010"))
+        assertNull(ServerAddress.rejection("http://172.20.0.1:8010"))
+        assertNull(ServerAddress.rejection("http://127.0.0.1:8010"))
         assertNull(ServerAddress.rejection("http://[fe80::1]:8010"))
+        assertNull(ServerAddress.rejection("http://[::1]:8010"))
+        assertNull(ServerAddress.rejection("http://box.local"))
+        // Port-only: judged in OkHttp's spelling, which is the one the interceptor sees.
+        assertNull(ServerAddress.rejection("http://[0:0:0:0:0:0:0:1]:8010"))
+        assertNull(ServerAddress.rejection("http://[FE80::1]:8010"))
+        assertNull(ServerAddress.rejection("http://[fd00:0:0:0:0:0:0:1]"))
+    }
+
+    /**
+     * ⚠⚠ A PUBLIC address over plain http is refused, IP literal or not. This policy used to admit
+     * any well-formed IP literal; on iOS the OS refused the connection anyway, on Android nothing
+     * did, and the bearer token would have crossed the internet in the clear. Refused with the
+     * HTTPS copy, which now says "a private IP".
+     */
+    @Test
+    fun testPlainHTTPToAPublicAddressIsRejectedWithTheHTTPSMessage() {
+        for (url in listOf("http://8.8.8.8", "http://203.0.113.5:8010", "http://[2001:db8::1]:8010", "http://1.1.1.1")) {
+            val reason = ServerAddress.rejection(url)
+            assertNotNull(reason, url)
+            assertTrue(reason.contains("HTTPS"), url)
+            assertTrue(reason.contains("a private IP"), url)
+        }
     }
 
     /**
@@ -122,7 +149,6 @@ class ServerAddressTests {
             "http://a.b@c.d@localhost",
             "http://localhost:",
             "http://[::1]",
-            "http://001.002.003.004",
             "http://box.local/path?q=1#f",
             "http://localhost/a b",
             "http://localhost#frag",
@@ -136,6 +162,10 @@ class ServerAddressTests {
             "http://my_box.example.com",
             "http://user@chat.example.org",
             "http://256.1.1.1",
+            // A well-formed literal, but a public one: not the local network.
+            "http://001.002.003.004",
+            // Leading zeros: `inet_aton` reads octal, so this is not the private 10.0.0.4 it looks like.
+            "http://010.000.000.004",
             "http://1.2.3",
             "http://1.2.3.",
             // A trailing dot makes it a qualified name, not a `.local` one.
@@ -166,8 +196,9 @@ class ServerAddressTests {
 
         // Where this port deliberately leaves iOS: `URLComponents` passes these, but OkHttp
         // cannot load them, and an address that clears sign-in must be one a request can use.
+        // (A PRIVATE address with the bad port: a public one is told it needs HTTPS first.)
         val unloadable = listOf(
-            "http://1.2.3.4:99999",
+            "http://10.2.3.4:99999",
             "https://chat.example.org:0",
             "http://.local",
             "https://a..b",

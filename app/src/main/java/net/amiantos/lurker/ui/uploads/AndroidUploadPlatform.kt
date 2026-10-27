@@ -5,6 +5,7 @@ package net.amiantos.lurker.ui.uploads
 
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import androidx.core.net.toUri
@@ -70,9 +71,14 @@ class AndroidUploadPlatform(
     override suspend fun stage(source: AttachmentSource.Content): StageResult =
         withOwnedFiles(Dispatchers.IO) { claim ->
             val uri = source.uri.toUri()
+            // ⚠⚠ A `content://` address only. A share's address is another app's choice (`ShareUris`,
+            // which has already refused anything else at the door); the pickers' and the camera's are
+            // `content://` by construction. `openInputStream` would open a `file://` path directly, as
+            // this app — the confused-deputy read this whole check exists to refuse.
+            if (uri.scheme != "content") return@withOwnedFiles StageResult.Failed("Couldn't read the file.")
             val resolver = context.contentResolver
             val named = AttachmentNaming.name(
-                displayName = displayName(uri),
+                displayName = providerDisplayName(resolver, uri),
                 providerType = try { resolver.getType(uri) } catch (_: RuntimeException) { null },
                 mimeForExtension = { MimeTypeMap.getSingleton().getMimeTypeFromExtension(it) },
                 extensionForMime = { MimeTypeMap.getSingleton().getExtensionFromMimeType(it) },
@@ -80,7 +86,24 @@ class AndroidUploadPlatform(
             val stem = "lurker-attach-${UUID.randomUUID()}"
             val dest = claim(File(directory, if (named.extension.isEmpty()) stem else "$stem.${named.extension}"))
             try {
-                val input = resolver.openInputStream(uri) ?: return@withOwnedFiles StageResult.Failed("Couldn't read the file.")
+                // The descriptor, not a stream, so WHAT was opened can be checked before it is read:
+                // a provider — this app's own camera `FileProvider`, or a hostile one — may hand back
+                // a descriptor onto a file inside this app's private data. `/proc/self/fd/<fd>` names
+                // it; anything under the data directory but the camera's scratch is refused. A pipe
+                // (a cloud provider streaming a download) or a socket canonicalises to `pipe:[…]`,
+                // which is nowhere near it. Read through the asset descriptor, as `openInputStream`
+                // does, so an item that is a region of a larger file (an offset and a length) still
+                // reads as the item.
+                val asset = resolver.openAssetFileDescriptor(uri, "r")
+                    ?: return@withOwnedFiles StageResult.Failed("Couldn't read the file.")
+                val opened = runCatching { File("/proc/self/fd/${asset.parcelFileDescriptor.fd}").canonicalPath }.getOrNull()
+                if (opened == null || isPrivate(opened)) {
+                    asset.close()
+                    return@withOwnedFiles StageResult.Failed("Couldn't read the file.")
+                }
+                // Owns the descriptor from here: closing the stream closes it — so until it exists,
+                // the descriptor is ours to close.
+                val input = try { asset.createInputStream() } catch (e: Exception) { asset.close(); throw e }
                 input.use { stream ->
                     FileOutputStream(dest).use { out ->
                         val chunk = ByteArray(1 shl 16)
@@ -104,14 +127,17 @@ class AndroidUploadPlatform(
             StageResult.Staged(Picked(dest, named.filename, named.mime, named.isVideo))
         }
 
-    private fun displayName(uri: Uri): String? =
-        try {
-            context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) cursor.getString(0) else null
-            } ?: uri.lastPathSegment
-        } catch (_: RuntimeException) {
-            uri.lastPathSegment
-        }
+    /**
+     * Whether a canonical path is inside this app's private data — the data directory under either of
+     * its names (`/data/user/0/<pkg>` and `/data/data/<pkg>` are the same place) — other than the
+     * camera's own scratch directory, which the app's `FileProvider` legitimately serves (`file_paths.xml`).
+     */
+    private fun isPrivate(canonicalPath: String): Boolean {
+        val camera = File(context.cacheDir, "camera").canonicalPath + File.separator
+        if (canonicalPath.startsWith(camera)) return false
+        val roots = listOfNotNull(context.dataDir, context.applicationInfo.dataDir?.let(::File))
+        return roots.any { root -> canonicalPath.startsWith(root.canonicalPath + File.separator) }
+    }
 
     override suspend fun prepareImage(file: File, maxStaticImageDimension: Int?): PreparedImage? =
         images.prepare(file, maxStaticImageDimension)
@@ -173,6 +199,20 @@ class AndroidUploadPlatform(
         clipboard.setPrimaryClip(ClipData.newPlainText("Links", text))
     }
 }
+
+/**
+ * The provider's name for an item (`OpenableColumns.DISPLAY_NAME`), else the address's last segment,
+ * else null. One reader for the two places that ask — the share picker, which names what is being
+ * shared, and the stage, which names the upload — so the reader is shown the name the file goes up as.
+ */
+internal fun providerDisplayName(resolver: ContentResolver, uri: Uri): String? =
+    try {
+        resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        } ?: uri.lastPathSegment
+    } catch (_: RuntimeException) {
+        uri.lastPathSegment
+    }
 
 /**
  * Whether [name] is one of the kit's assembled upload bodies — `lurker-upload-<UUID>.multipart`
