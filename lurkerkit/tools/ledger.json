@@ -34,7 +34,9 @@
         "Rendering/NickColor.swift",
         "Rendering/NickHighlighter.swift",
         "Rendering/URLMatcher.swift",
-        "Session/NewestAnswer.swift"
+        "Session/NewestAnswer.swift",
+        "Model/ExternalLink.swift",
+        "Model/PreviewImageBudget.swift"
       ]
     },
     {
@@ -230,14 +232,14 @@
     "Client/JSON.swift": "→ `client/Json.kt`. `FailableDecodable` is `Json.decodeEach`. The reads bridge numbers and booleans the way `NSNumber` does.",
     "Model/ISOTime.swift": "One ISO parser covers both of LurkerKit's; no lock.",
     "Client/OAuth.swift": "An `object`. `Registration`/`Callback`/`TokenGrant` are sealed interfaces (payloads named `message`, `code`, `token`); `PKCE` a data class over `MessageDigest` + `SecureRandom`. `callback` reads the query by hand (`support.removingPercentEncoding`, shared with `PreviewSelection`; the fragment is found first, so a `?` inside it opens no query) so `+` stays `+` and `%2B` decodes to `+`, as `URLComponents` does. JSON bodies read through `FrameParser.jsonObject(data)`.",
-    "Session/SessionStore.swift": "Keychain → `SecureStorage` (`read`/`write`/`delete` by account; implementations never throw), implemented by `:app` over the Keystore — readable after first unlock, excluded from backup and transfer, as the Swift’s accessibility attribute asked. `account`/`legacyAccount` keep their values; `service` has no counterpart. `save` is one replacing `write`. `SessionCodec` is kotlinx with `ignoreUnknownKeys`. `PendingRevoke.since` is epoch milliseconds where LurkerKit stores a `Date`; each platform reads only its own store. Port-only: `PendingSignIn` and its save/read/clear under account `pending-sign-in` — the sign-in out in the browser, so a redirect that outlives the process can finish (`ChatViewModel.resumeSignIn`); iOS needs none, its sheet dies with the app.",
+    "Session/SessionStore.swift": "Keychain → `SecureStorage` (`read`/`write`/`delete` by account; implementations never throw), implemented by `:app` over the Keystore — readable after first unlock, excluded from backup and transfer, as the Swift’s accessibility attribute asked. `account`/`legacyAccount` keep their values; `service` has no counterpart. `save` is one replacing `write`. `SessionCodec` is kotlinx with `ignoreUnknownKeys`. `PendingRevoke.since` is epoch milliseconds where LurkerKit stores a `Date`; each platform reads only its own store. Port-only: `PendingSignIn` and its save/read/clear under account `pending-sign-in` — the sign-in out in the browser, so a redirect that outlives the process can finish (`ChatViewModel.resumeSignIn`); iOS needs none, its sheet dies with the app. S9: the Swift logs a failed `SecItemAdd` status; `SecureStorage.write` can't fail here, so the log lives in the app's `KeystoreSecureStorage`.",
     "Session/OAuthClients.swift": "`UserDefaults` → the kit’s `DefaultsStorage` (shared with `SettingsCache`); the client ids travel as a `JsonObject` of strings, read all-or-nothing. `key` keeps its value and must survive sign-out.",
     "Store/SettingsCache.swift": "`UserDefaults` → `DefaultsStorage` (`dictionary`, `set`, `removeObject`, mirroring the three calls), implemented by `:app`; no default storage. Values travel as `JsonObject`.",
     "Client/Uploads.swift": "`UploadProgressDelegate` keeps its name and whole-percent coalescing; `UploadProgressBody` is the counting OkHttp `RequestBody` (a `ForwardingSink`) that feeds it. `upload` streams the already-assembled multipart file, as the Swift does. `assemble` deletes its partial file on failure, which LurkerKit leaves to iOS. `UploadLimits.maxUploadBytes` is `Long` (a byte count).",
     "Model/Typing.swift": "`OutgoingTyping` is a mutable class (PORTING.md, structs that mutate, case 3). Composing is judged on the draft's first character, as the send decides it (lurker-ios#210, reversing #202's trim), and a `//`-escaped line counts as a message.",
     "Session/NewestAnswer.swift": "A mutable class (case 3).",
     "Model/UploadContentTypes.swift": "`[UTType]` → MIME patterns. Adds `application/json`, which `text/*` cannot reach and `.text` does by conformance.",
-    "Model/ServerAddress.swift": "Parses by hand to match `URLComponents`, then also requires that OkHttp can load the address — stricter than iOS at a few edges, pinned by a port-only test.",
+    "Model/ServerAddress.swift": "Parses by hand to match `URLComponents`, then also requires that OkHttp can load the address — stricter than iOS at a few edges, pinned by a port-only test. S9: the scheme folds case; `isLocalHost` gone, the cleartext branch asks `LocalNetworking.permitsCleartext` directly. `canonicalHost`/`loadable` stay (percent-decoded spelling, `box%2eexample.com`).",
     "Model/NetworkAbbreviation.swift": "Grows by code point where Swift grows by grapheme cluster; differs only for names with combining marks.",
     "Commands/SpoilerMarkup.swift": "Checked against the Swift over a corpus; differs only when a combining mark follows a `|` or a `\\`. `layout` (lurker-ios#232) counts UTF-16 units, as `apply` walks them, and `ColorMarkup.chatBody` hands it the same units. `close` takes the next unit; since LurkerKit reads the next character's first scalar, the two agree, keycap included (they did not before e00fb77).",
     "Rendering/NickColor.swift": "`lowercasedLikeTheWeb` is written out (Final_Sigma with case-ignorable skipping), not `lowercase()`, whose JDK rule disagreed with node on 204 of 6,026 random strings; the port agrees on all but 8 (U+10D4E, unassigned in JDK 21's Unicode). Case_Ignorable comes from Java's general categories plus a Word_Break list, so it follows the runtime's Unicode version. `trimForColor` walks code points.",
@@ -257,7 +259,7 @@
     "Model/PendingJoins.swift": "A mutable class (case 3). `stopOpening` rewrites each immutable `Request` through `setValue`, keeping the order.",
     "Model/UnsentCorrelator.swift": "A mutable class (case 3). Mints `android-N` client ids where LurkerKit mints `ios-N`.",
     "Model/HighlightGrouping.swift": "\"The day before\" is ported from ICU's wall-time rule, not `minusDays`; Yesterday is a same-calendar-day check (lurker-ios#200), matched against the Swift for every day 2000–2030 in all 443 zones. Depends on time-zone data; verify on a device.",
-    "Model/MessageActions.swift": "`MessageAction.symbol` keeps the SF Symbol names; the app maps them to its own icons.",
+    "Model/MessageActions.swift": "`MessageAction.symbol` keeps the SF Symbol names; the app maps them to its own icons. S9: Open Link only for an `ExternalLink.isOpenable` url; Copy and Share always.",
     "Model/WhoisResult.swift": "A plain value; the string-or-number reading is FrameParser's (T4).",
     "Model/Modes.swift": "No Swift test of its own; checked against the Swift over a corpus.",
     "Model/UploadsRequest.swift": "The query is encoded by `support.percentEncodedQuery`, to `URLComponents`' rule.",
@@ -311,7 +313,10 @@
     "Model/UserMetadata.swift": "`UserMetadataSet` is a class comparing ALL its records (the `RelayBotSet` ruling), `===` still a valid cheaper test. Swift's public `init(byNetwork:)` and private `init(folded:)` share a parameter type, so here a private primary constructor takes `(map, alreadyFolded)`, the public secondary folds, and a private companion `folded(map)` is the Swift's private init. ⚠ Folded with `NickColor.lowercasedLikeTheWeb`, as the Swift — the server keys with JavaScript's `toLowerCase()` — where `RelayBotSet` and `parsePeerPresence` use `lowercase()`.",
     "Rendering/AvatarTiles.swift": "Stop characters are code points (`Set<Int>`), the type `NickColor.trimForColor` already takes; `url` pads with `%03d`, identical to the Swift's hand-padding for every index the hash can produce.",
     "Model/AvatarSets.swift": "`parseList`/`parseManifest` take the response body as a `String` and decode through `FrameParser.jsonObject` (kotlinx, never throws, nesting bounded) where the Swift takes `Data` through `JSONSerialization`. `AvatarSet` drops `Identifiable`; `AvatarInk` gains the standard `fromRawValue`.",
-    "Model/ConversationScroll.swift": "Not in the kit here: this is the ORIGIN. `app/ui/conversation/ConversationScroll.kt` (with `RowOptions`, `BuiltRows`, `ReplyWatch`, `LayoutFacts`) was ported to Swift as lurker-ios#246; the Swift adds `tailPending`/`landedAtTail` (a UITableView lands over passes) and reads `historyRevision` in `ReplyWatch`, which S9 brought back here."
+    "Model/ConversationScroll.swift": "Not in the kit here: this is the ORIGIN. `app/ui/conversation/ConversationScroll.kt` (with `RowOptions`, `BuiltRows`, `ReplyWatch`, `LayoutFacts`) was ported to Swift as lurker-ios#246; the Swift adds `tailPending`/`landedAtTail` (a UITableView lands over passes) and reads `historyRevision` in `ReplyWatch`, which S9 brought back here.",
+    "Model/ExternalLink.swift": "S9 (the audit, lurker-ios#245). `isOpenable(url: String)` reads the scheme per RFC 3986 up to the first `:`, since the kit carries a `String` where the Swift has a `URL`.",
+    "Model/LocalNetworking.swift": "S9: judges the PARSED IPv6 address with a BSD-grammar parser of its own (`InetAddress.getByName` falls through to DNS on a non-literal; OkHttp's decoder is internal); the numeric-host rule the port had from lurker-android#97 is the Swift's now.",
+    "Model/PreviewImageBudget.swift": "S9 (the audit). The app's own decode budgets (`ui/media/DecodeSize`, `PreviewImageLoader`) predate it; the kit rule is here for parity and for the loader to adopt."
   },
   "testNotes": {
     "NotificationTapTests.swift": {
