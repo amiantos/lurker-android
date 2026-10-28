@@ -67,6 +67,22 @@ class UiPreferences(private val prefs: StringPrefs) {
 
     private val enterSends = MutableStateFlow(readComposerEnterSends())
 
+    // MARK: - Diagnostics
+
+    private val scrollTraceOn = MutableStateFlow(prefs.getString(SCROLL_TRACE) == "true")
+
+    /**
+     * The message list's trace (lurker-ios#137): off by default, device-local, and what the hidden
+     * Diagnostics section in Settings keys off. The trace object itself is told at startup
+     * (`LurkerApp`) and on every change, so the screens never read this flow on their hot paths.
+     */
+    val scrollTrace: StateFlow<Boolean> = scrollTraceOn.asStateFlow()
+
+    fun setScrollTrace(on: Boolean) {
+        prefs.putString(SCROLL_TRACE, on.toString())
+        scrollTraceOn.value = on
+    }
+
     /**
      * "Enter to send" (lurker-android#64): whether the on-screen keyboard's return key sends — it
      * reads "Send" then — rather than starting a new line. Off by default, so a multi-line message
@@ -162,5 +178,6 @@ class UiPreferences(private val prefs: StringPrefs) {
         private const val COMPOSER_AUTOCAPITALIZATION = "composerAutocapitalization"
 
         private const val COMPOSER_ENTER_SENDS = "composerEnterSends"
+        private const val SCROLL_TRACE = "scrollTraceEnabled"
     }
 }

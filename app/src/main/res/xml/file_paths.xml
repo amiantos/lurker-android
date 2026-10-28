@@ -3,7 +3,9 @@
   Copyright (c) 2026 Brad Root
   SPDX-License-Identifier: MPL-2.0
 -->
-<!-- What FileProvider may hand out: only the camera's own scratch directory (Take Photo, lurker#1117). -->
+<!-- What FileProvider may hand out: the camera's own scratch directory (Take Photo, lurker#1117) and
+     the diagnostics trace the tester shares from Settings (lurker-ios#137). -->
 <paths>
     <cache-path name="camera" path="camera/" />
+    <cache-path name="diagnostics" path="diagnostics/" />
 </paths>

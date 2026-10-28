@@ -63,6 +63,13 @@ sealed interface SettingsSection {
     /** Bootstrap hasn't landed (or this server offers none of the keys), so there's nothing to build controls from. */
     data class Unavailable(val loaded: Boolean) : SettingsSection
     data object Device : SettingsSection
+
+    /**
+     * The message list's trace (lurker-ios#137): hidden until the version row is tapped five
+     * times, and shown whenever the trace is on, so a tester can find the switch again to turn it
+     * off or share what it caught.
+     */
+    data object Diagnostics : SettingsSection
     data object Account : SettingsSection
     data object About : SettingsSection
 }
@@ -323,7 +330,7 @@ object SettingsModel {
      * would advertise a rung it can't serve. Device, Account and About are unconditional: they need no
      * registry, and they still work on a server too old (or too unreachable) to describe itself.
      */
-    fun sections(inputs: SettingsInputs): List<SettingsSection> {
+    fun sections(inputs: SettingsInputs, showsDiagnostics: Boolean = false): List<SettingsSection> {
         val registry = inputs.settings.registry
         fun resolve(entries: List<Pair<String, String>>): List<SettingRow> = entries.mapNotNull { (key, label) ->
             val option = registry[key] ?: return@mapNotNull null
@@ -331,7 +338,8 @@ object SettingsModel {
             SettingRow(label, option)
         }
         val chat = resolve(chatSettings)
-        val tail = listOf(SettingsSection.Device, SettingsSection.Account, SettingsSection.About)
+        val tail = listOf(SettingsSection.Device, SettingsSection.Account, SettingsSection.About) +
+            (if (showsDiagnostics) listOf(SettingsSection.Diagnostics) else emptyList())
         if (chat.isEmpty()) {
             return listOf(SettingsSection.Networks, SettingsSection.Unavailable(loaded = inputs.settings.loaded)) + tail
         }
@@ -367,6 +375,7 @@ object SettingsModel {
         is SettingsSection.Appearance -> "Appearance"
         is SettingsSection.Notifications -> "Notifications"
         SettingsSection.Device -> "This Device"
+        SettingsSection.Diagnostics -> "Diagnostics"
         SettingsSection.Networks, SettingsSection.Account, SettingsSection.About -> null
     }
 
@@ -392,6 +401,10 @@ object SettingsModel {
                 "Enter to send: Return on the on-screen keyboard sends the message. A hardware " +
                 "keyboard's Enter always sends; Shift-Enter starts a new line."
         is SettingsSection.SmartFilter -> "Used when Event filter is set to Smart."
+        SettingsSection.Diagnostics ->
+            "Records how the message list decides where to scroll and when to show the unread " +
+                "banner, on this device only: positions and decisions, never what the messages say. " +
+                "Turn it on when asked to, reproduce the problem, then share the trace."
         // **Notifications** — the switches govern push too, and the push notice is this footer when
         // the server can't push to the app at all.
         is SettingsSection.Notifications ->
