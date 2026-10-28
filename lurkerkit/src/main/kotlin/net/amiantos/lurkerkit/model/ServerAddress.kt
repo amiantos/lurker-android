@@ -10,15 +10,23 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 /**
  * The transport policy for a typed-in server address (lurker-ios#29).
  *
- * HTTPS everywhere, except the local network: `localhost` and other single-label names, `.local`
- * names, and the private, link-local and loopback address ranges. ⚠⚠ ONE definition of "local",
- * `LocalNetworking.permitsCleartext` — the same one that gates clip playback and, on this
- * platform, every request the HTTP client sends (`CleartextPolicy`). This used to carry its own
- * copy of Apple's `NSAllowsLocalNetworking` host classes, which admit ANY IP literal, public ones
- * included; on iOS the OS backstopped that (ATS refuses cleartext to a public address whatever the
- * app asks), and on Android nothing did, so `http://203.0.113.5` sent the bearer token across the
- * internet in the clear. The two definitions had drifted apart exactly as the comment here said
- * they must not, and the fix is for there to be only one.
+ * On iOS the app ships with App Transport Security on, plus the `NSAllowsLocalNetworking`
+ * exception — the narrow carve-out App Review accepts without a written justification.
+ * That means HTTPS everywhere, except hosts on the local network, and "local" is ONE
+ * definition for the whole app: `LocalNetworking.permitsCleartext`, the rule a cleartext
+ * media load is judged by (and, on this platform, every request the HTTP client sends:
+ * `CleartextPolicy`). Sharing it means the sign-in check, the playback check and what
+ * the OS will actually permit can't drift apart: everything allowed here is loadable, and
+ * everything blocked here fails with our copy instead of a `-1022` deep in a URLSession
+ * error.
+ *
+ * ⚠ This used to hold its own, wider reading — ANY IP literal was local, as Apple's
+ * pre-iOS 17 documentation of the exemption had it. Since iOS 17 ATS applies to a public
+ * address through `URLSession` like any other host, so the drift showed as a confusing
+ * failure: `http://203.0.113.5` passed the sign-in copy, then died inside the first request
+ * with "iOS blocked the connection". On a platform whose OS does not backstop it (Android
+ * permits cleartext app-wide), the same drift is the bearer token in the clear across the
+ * internet. One definition closes both.
  *
  * Port note: Android has no such class of host. Its network security config permits cleartext
  * per named domain or for everything, so an app that lets a self-hoster reach a LAN box over
@@ -45,7 +53,13 @@ object ServerAddress {
     fun normalize(raw: String): String {
         val trimmed = raw.trimmingWhitespacesAndNewlines().trimEnd('/')
         if (trimmed.isEmpty()) return trimmed
-        return if (trimmed.contains("://")) trimmed else "https://$trimmed"
+        val separator = trimmed.indexOf("://")
+        if (separator < 0) return "https://$trimmed"
+        // ⚠ The scheme lower-cased, and only the scheme: a phone keyboard capitalises the first
+        // letter of a typed address, and `HTTPS://` loads like `https://` — but the socket URL is
+        // built by rewriting a lowercase `http` to `ws`, so a scheme left as typed would reach
+        // the socket as `HTTPS://`, which it refuses (on iOS `webSocketTask(with:)` traps on it).
+        return trimmed.substring(0, separator).lowercase() + trimmed.substring(separator)
     }
 
     /**
@@ -58,10 +72,15 @@ object ServerAddress {
         val components = Components.parse(normalized)
         val host = components?.host
         if (components == null || host.isNullOrEmpty()) return "That server URL doesn't look right."
+        // Schemes have no case (`HTTPS://` is what a phone keyboard's auto-capital makes of a
+        // typed address), and the HTTP client loads either spelling.
+        val scheme = components.scheme.lowercase()
         return when {
-            components.scheme == "https" -> loadable(normalized)
-            components.scheme == "http" && isLocalHost(canonicalHost(normalized) ?: host) -> loadable(normalized)
-            components.scheme == "http" ->
+            scheme == "https" -> loadable(normalized)
+            // `LocalNetworking` reads an IPv6 literal with or without its brackets.
+            scheme == "http" && LocalNetworking.permitsCleartext(canonicalHost(normalized) ?: host) ->
+                loadable(normalized)
+            scheme == "http" ->
                 "That server needs HTTPS — plain http:// only works for local " +
                     "addresses (a private IP, a .local name, or a single-word host like localhost)."
             else -> "Server URLs start with https:// (or http:// for a local server)."
@@ -79,17 +98,11 @@ object ServerAddress {
         if (normalized.toHttpUrlOrNull() != null) null else "That server URL doesn't look right."
 
     /**
-     * The local network, by `LocalNetworking`'s one definition: single-label names, `.local`
-     * names, and the private, link-local and loopback ranges — never a public address. The
-     * brackets of an IPv6 literal are already stripped, as `LocalNetworking` expects.
-     */
-    private fun isLocalHost(host: String): Boolean = LocalNetworking.permitsCleartext(host)
-
-    /**
      * Port-only: the host as OkHttp will spell it, which is what `CleartextPolicy` and the
-     * playback gate judge — `[0:0:0:0:0:0:0:1]` is `::1` to it. Judged here in the same spelling,
-     * or an address the interceptor would let through is refused at the door. Null for an address
-     * OkHttp can't read, which `loadable` refuses anyway.
+     * playback gate judge — `box%2eexample.com` is `box.example.com` to it, as it is to
+     * `URLComponents.host`, which percent-decodes. Judged here in the same spelling, or an
+     * address the interceptor would refuse is admitted at the door with the wrong copy. Null for
+     * an address OkHttp can't read, which `loadable` refuses anyway.
      */
     private fun canonicalHost(normalized: String): String? = normalized.toHttpUrlOrNull()?.host
 

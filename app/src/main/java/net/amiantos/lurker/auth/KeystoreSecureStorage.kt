@@ -7,6 +7,7 @@ import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.util.Log
 import net.amiantos.lurkerkit.session.SecureStorage
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
@@ -86,9 +87,13 @@ class KeystoreSecureStorage(
     override fun write(account: String, data: ByteString) {
         runCatching {
             prefs.edit().putString(account, encrypt(data)).apply()
-        }.onFailure {
+        }.onFailure { e ->
             // A key the Keystore no longer honours: forget it, so the next call regenerates.
             key = null
+            // ⚠ Loud, the failure only — never the data. A device where the write fails is signed
+            // out on every launch with nothing to explain it, and this line is the one trace that
+            // says why (LurkerKit logs the Keychain add's `OSStatus` at the same point).
+            Log.w("Lurker", "[session] keystore write of $account failed: ${e.javaClass.name}: ${e.message}")
         }
     }
 

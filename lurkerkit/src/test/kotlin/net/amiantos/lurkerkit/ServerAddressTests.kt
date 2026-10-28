@@ -3,6 +3,7 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.LurkerClient
 import net.amiantos.lurkerkit.model.ServerAddress
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -55,41 +56,74 @@ class ServerAddressTests {
     }
 
     @Test
-    fun testPlainHTTPPassesForTheLocalNetwork() {
+    fun testPlainHTTPPassesForLocalHosts() {
         // Unqualified single-label names.
         assertNull(ServerAddress.rejection("http://localhost:8010"))
         assertNull(ServerAddress.rejection("http://xerxes:8010"))
         // .local names (case-insensitively — DNS names have no case).
         assertNull(ServerAddress.rejection("http://xerxes.local:8010"))
         assertNull(ServerAddress.rejection("http://Xerxes.LOCAL:8010"))
-        // Private, loopback and link-local literals, v4 and v6 (the v6 brackets are stripped).
-        assertNull(ServerAddress.rejection("http://192.168.1.2:8010"))
+        // Private and machine-local addresses, v4 and v6 (the v6 brackets are stripped) — the
+        // same ranges `LocalNetworking` admits a media load from.
+        assertNull(ServerAddress.rejection("http://192.168.1.5:8010"))
         assertNull(ServerAddress.rejection("http://10.0.0.5:8010"))
-        assertNull(ServerAddress.rejection("http://172.20.0.1:8010"))
+        assertNull(ServerAddress.rejection("http://172.16.0.5:8010"))
         assertNull(ServerAddress.rejection("http://127.0.0.1:8010"))
         assertNull(ServerAddress.rejection("http://[fe80::1]:8010"))
         assertNull(ServerAddress.rejection("http://[::1]:8010"))
+        // Port-only: more of the same, from the Android audit (lurker-android#97).
         assertNull(ServerAddress.rejection("http://box.local"))
-        // Port-only: judged in OkHttp's spelling, which is the one the interceptor sees.
-        assertNull(ServerAddress.rejection("http://[0:0:0:0:0:0:0:1]:8010"))
         assertNull(ServerAddress.rejection("http://[FE80::1]:8010"))
         assertNull(ServerAddress.rejection("http://[fd00:0:0:0:0:0:0:1]"))
     }
 
     /**
-     * ⚠⚠ A PUBLIC address over plain http is refused, IP literal or not. This policy used to admit
-     * any well-formed IP literal; on iOS the OS refused the connection anyway, on Android nothing
-     * did, and the bearer token would have crossed the internet in the clear. Refused with the
-     * HTTPS copy, which now says "a private IP".
+     * ⚠ The carve-out is the PRIVATE ranges, not "any IP literal". A public address over plain
+     * http is the bearer token in the clear across the internet — and on iOS 17+ ATS refuses
+     * the connection anyway, after the copy had promised it would work; on Android nothing
+     * refuses it but this. One definition with `LocalNetworking`, so this and
+     * `LocalNetworkingTests` can never disagree.
      */
     @Test
     fun testPlainHTTPToAPublicAddressIsRejectedWithTheHTTPSMessage() {
         for (url in listOf("http://8.8.8.8", "http://203.0.113.5:8010", "http://[2001:db8::1]:8010", "http://1.1.1.1")) {
             val reason = ServerAddress.rejection(url)
-            assertNotNull(reason, url)
-            assertTrue(reason.contains("HTTPS"), url)
+            assertNotNull(reason, "$url is a public address")
+            assertTrue(reason.contains("HTTPS"), "the copy must say what to do")
+            // Port-only: the copy says which addresses do pass.
             assertTrue(reason.contains("a private IP"), url)
         }
+    }
+
+    /** A scheme has no case; a phone keyboard capitalises the first letter of a typed address. */
+    @Test
+    fun testSchemeCaseIsNotAParseError() {
+        assertNull(ServerAddress.rejection("HTTPS://chat.example.org"))
+        assertNull(ServerAddress.rejection("HTTP://192.168.1.5:8010"))
+        assertTrue(ServerAddress.rejection("HTTP://chat.example.org")?.contains("HTTPS") ?: false)
+    }
+
+    /**
+     * ⚠ And canonical after `normalize`, because what passes the policy is what the client is
+     * handed: the socket URL rewrites a lowercase `http` to `ws`, and the socket refuses any
+     * other scheme (on iOS `webSocketTask(with:)` traps on it). Only the scheme is folded — a
+     * host keeps its spelling.
+     */
+    @Test
+    fun testNormalizeLowerCasesTheScheme() {
+        assertEquals("https://Chat.Example.org", ServerAddress.normalize("HTTPS://Chat.Example.org/"))
+        assertEquals("http://localhost:8010", ServerAddress.normalize("Http://localhost:8010"))
+        assertTrue(
+            LurkerClient.socketURL(baseURL = ServerAddress.normalize("HTTPS://chat.example.org"), since = 0)
+                ?.startsWith("wss://") ?: false,
+        )
+    }
+
+    /** Equivalent spellings of a local address are the same address to the policy. */
+    @Test
+    fun testIPv6SpellingsPassAlike() {
+        assertNull(ServerAddress.rejection("http://[0:0:0:0:0:0:0:1]:8010"))
+        assertNull(ServerAddress.rejection("http://[::0001]:8010"))
     }
 
     /**
@@ -206,9 +240,11 @@ class ServerAddressTests {
         )
         for (url in unloadable) assertEquals(looksWrong, ServerAddress.rejection(url), url)
 
-        // The scheme is compared as written — an upper-case one is not `https`.
-        for (url in listOf("HTTPS://app.lurker.chat", "HTTP://localhost", "ht+tp://x")) {
-            assertEquals(wrongScheme, ServerAddress.rejection(url), url)
-        }
+        // A scheme that isn't http(s) in any case.
+        assertEquals(wrongScheme, ServerAddress.rejection("ht+tp://x"))
+
+        // Judged in OkHttp's spelling of the host, which percent-decodes as `URLComponents.host`
+        // does: a dot hidden in an escape is still a dot.
+        assertTrue(ServerAddress.rejection("http://box%2eexample.com")?.contains("HTTPS") == true)
     }
 }

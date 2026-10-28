@@ -329,7 +329,7 @@ class MessageActionsTests {
 
     // MARK: - Links
 
-    /** A URL is a URL — nothing to gate on, so the list is fixed. */
+    /** A web link gets all three. */
     @Test
     fun testLinkOffersOpenCopyShare() {
         val actions = MessageActions.build("https://example.com")
@@ -338,6 +338,16 @@ class MessageActionsTests {
             actions.map { it.key },
         )
         assertEquals(listOf("Open Link", "Copy Link", "Share Link"), actions.map { it.title })
+    }
+
+    /**
+     * A link the app won't hand to the system (`ExternalLink`) offers no Open: the menu says so
+     * by omission rather than offering a tap that does nothing.
+     */
+    @Test
+    fun testAnUnopenableLinkOffersCopyAndShareOnly() {
+        val actions = MessageActions.build("ftp://files.example.org/x")
+        assertEquals(listOf(MessageActionKey.CopyLink, MessageActionKey.ShareLink), actions.map { it.key })
     }
 
     @Test
