@@ -181,6 +181,14 @@ internal data class CompactMetrics(
          */
         val washBottomNudge: Dp = 1.dp
 
+        /**
+         * How much higher the avatar tile sits than centring it on the head and first body line
+         * puts it. Measured on a device against iOS, where the same centring draws the tile about
+         * this much closer to the nick line; nothing in the arithmetic accounts for the difference,
+         * so it is a correction, like [washBottomNudge], not a derivation.
+         */
+        val avatarLift: Dp = 4.dp
+
         /** Air above a reaction row, so chips don't sit flush against a matched line's wash. */
         val reactionTop: Dp = 6.dp
 
@@ -481,10 +489,12 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
         }
         val tile = plan.avatar
         if (avatars != null && tile != null) {
-            // Centred on the head and the first body line: past the wash, each line is one line height
-            // and the two sit a header gap apart; the tile is never taller than the two together.
+            // Centred on the head and the first body line, less the lift: past the wash, each line is
+            // one line height and the two sit a header gap apart; the tile is never taller than the
+            // two together, and never starts above the row (a tile two lines tall keeps its place).
             val headAndFirstLine = lineHeightDp * 2 + CompactMetrics.headerGap
-            val top = (if (plan.startsBlock) metrics.wash else 0.dp) + ((headAndFirstLine - avatars.size) / 2).coerceAtLeast(0.dp)
+            val centred = ((headAndFirstLine - avatars.size) / 2).coerceAtLeast(0.dp)
+            val top = (if (plan.startsBlock) metrics.wash else 0.dp) + (centred - CompactMetrics.avatarLift).coerceAtLeast(0.dp)
             NickAvatarTile(
                 spec = tile,
                 size = avatars.size,
