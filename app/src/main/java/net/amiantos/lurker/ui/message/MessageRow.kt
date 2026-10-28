@@ -47,6 +47,7 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
@@ -396,10 +397,13 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                 if (avatars == null) {
                     Modifier
                 } else {
-                    // Before the padding, so the line covers the gap under the block too.
+                    // Before the padding, so the line covers the gap under the block too. Mirrored
+                    // with the gutter in a right-to-left layout, where the start padding puts the
+                    // tile on the right.
                     Modifier.drawWithContent {
                         drawContent()
-                        val x = (CompactMetrics.side + AvatarColumn.hairline(avatars.size)).toPx()
+                        val inset = (CompactMetrics.side + AvatarColumn.hairline(avatars.size)).toPx()
+                        val x = if (layoutDirection == LayoutDirection.Rtl) size.width - inset else inset
                         drawLine(hairline, start = Offset(x, 0f), end = Offset(x, size.height), strokeWidth = 1.dp.toPx())
                     }
                 },
