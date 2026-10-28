@@ -18,7 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
-import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.Modifier
@@ -66,6 +66,7 @@ import net.amiantos.lurkerkit.model.MessageRows
 import net.amiantos.lurkerkit.model.Reactions
 import net.amiantos.lurkerkit.rendering.NickHighlighter
 import java.time.Instant
+import kotlin.math.roundToInt
 import java.time.LocalDate
 import java.time.ZoneOffset
 
@@ -162,6 +163,18 @@ internal data class CompactMetrics(
     /** The gap a marker carries below its text: the rest of the block gap and the nudge ([MarkerRow]). */
     val markerGapBelow: Dp get() = blockGap - wash + washBottomNudge
 
+    /**
+     * Where a run's first row puts its avatar tile, from the row's top: centred on the head and the
+     * first body line, then lifted. Past the wash, each line is one [lineHeight] and the two sit a
+     * [headerGap] apart. The tile is never taller than the two together, and never starts above the
+     * row: a tile two lines tall keeps its place, and the lift gives way before the row's edge.
+     */
+    fun avatarTop(startsBlock: Boolean, lineHeight: Dp, size: Dp, lift: Dp): Dp {
+        val headAndFirstLine = lineHeight * 2 + headerGap
+        val centred = ((headAndFirstLine - size) / 2).coerceAtLeast(0.dp)
+        return (if (startsBlock) wash else 0.dp) + (centred - lift).coerceAtLeast(0.dp)
+    }
+
     companion object {
         /** `look.message.compact.group_gap` at [density]'s font scale. */
         fun of(compact: CompactDensity, density: Density): CompactMetrics =
@@ -184,11 +197,13 @@ internal data class CompactMetrics(
 
         /**
          * How much higher the avatar tile sits than centring it on the head and first body line
-         * puts it. Measured on a device against iOS, where the same centring draws the tile about
-         * this much closer to the nick line; nothing in the arithmetic accounts for the difference,
-         * so it is a correction, like [washBottomNudge], not a derivation.
+         * puts it, in em of the compact face. Judged on a device against iOS, where the same
+         * centring draws the tile about four dp closer to the nick line at the default size;
+         * nothing in the arithmetic accounts for the difference — both platforms centre the leading
+         * — so what's left is where each face's ink sits in its box, which scales with the face.
+         * A correction, like [washBottomNudge], not a derivation.
          */
-        val avatarLift: Dp = 4.dp
+        const val avatarLiftEm: Float = 0.29f
 
         /** Air above a reaction row, so chips don't sit flush against a matched line's wash. */
         val reactionTop: Dp = 6.dp
@@ -382,9 +397,11 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
     // and narration too, so bodies stay on one edge — and only a run's first row draws a tile, centred
     // on its head and first body line, the two lines a short message's wash covers. The tile at the
     // side margin where the text otherwise starts, the web's `--space-4`, a hairline, then `--space-5`
-    // before the text. The hairline runs the row's whole height — the block gap it ends with included,
-    // so the rows abutting make it one line — and is drawn after the row's content, so a washed row
-    // doesn't cut it. On the row rather than the list, as the web's `.line::before` is.
+    // before the text. The hairline is the row's whole height, the block gap it ends with included,
+    // so the rows abutting make it one line: it has to be drawn on the outer column, outside that
+    // gap's padding, and after the content so a matched block's wash stays under it. On the row
+    // rather than the list, as the web's `.line::before` is; the web also paints a copy on the
+    // scroller that spans its dividers, which neither app does.
     val avatars = context.avatars
     val gutter = if (avatars != null) AvatarColumn.gutter(avatars.size) else 0.dp
     val hairline = colors.border
@@ -397,14 +414,19 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                 if (avatars == null) {
                     Modifier
                 } else {
-                    // Before the padding, so the line covers the gap under the block too. Mirrored
-                    // with the gutter in a right-to-left layout, where the start padding puts the
-                    // tile on the right.
-                    Modifier.drawWithContent {
-                        drawContent()
-                        val inset = (CompactMetrics.side + AvatarColumn.hairline(avatars.size)).toPx()
-                        val x = if (layoutDirection == LayoutDirection.Rtl) size.width - inset else inset
-                        drawLine(hairline, start = Offset(x, 0f), end = Offset(x, size.height), strokeWidth = 1.dp.toPx())
+                    // Mirrored with the gutter in a right-to-left layout, where the start padding
+                    // puts the tile on the right. Snapped to the pixel grid, as the web rounds its
+                    // offset: on a fractional density a line straddling two pixel columns paints
+                    // as two paler half-lines. The geometry is cached; it moves only with the size.
+                    Modifier.drawWithCache {
+                        val width = 1.dp.toPx().roundToInt().coerceAtLeast(1).toFloat()
+                        val inset = (CompactMetrics.side + AvatarColumn.hairline(avatars.size)).toPx().roundToInt()
+                        val edge = if (layoutDirection == LayoutDirection.Rtl) size.width.roundToInt() - inset else inset
+                        val x = edge + width / 2
+                        onDrawWithContent {
+                            drawContent()
+                            drawLine(hairline, start = Offset(x, 0f), end = Offset(x, size.height), strokeWidth = width)
+                        }
                     }
                 },
             )
@@ -493,12 +515,12 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
         }
         val tile = plan.avatar
         if (avatars != null && tile != null) {
-            // Centred on the head and the first body line, less the lift: past the wash, each line is
-            // one line height and the two sit a header gap apart; the tile is never taller than the
-            // two together, and never starts above the row (a tile two lines tall keeps its place).
-            val headAndFirstLine = lineHeightDp * 2 + CompactMetrics.headerGap
-            val centred = ((headAndFirstLine - avatars.size) / 2).coerceAtLeast(0.dp)
-            val top = (if (plan.startsBlock) metrics.wash else 0.dp) + (centred - CompactMetrics.avatarLift).coerceAtLeast(0.dp)
+            val top = metrics.avatarTop(
+                startsBlock = plan.startsBlock,
+                lineHeight = lineHeightDp,
+                size = avatars.size,
+                lift = with(LocalDensity.current) { (textStyle.fontSize.toPx() * CompactMetrics.avatarLiftEm).toDp() },
+            )
             NickAvatarTile(
                 spec = tile,
                 size = avatars.size,
