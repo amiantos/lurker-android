@@ -337,8 +337,16 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
      */
     var trace: ((() -> String) -> Unit)? = null
 
-    private fun log(line: () -> String) {
-        trace?.invoke(line)
+    /**
+     * Whether [trace] wants anything right now. Flipped by the screen on every frame from the
+     * trace's switch, so a switched-off trace costs this read and no closure: [log] is inline,
+     * and the lambda it hands [trace] is built only past this check.
+     */
+    var tracing: Boolean = false
+
+    @Suppress("NOTHING_TO_INLINE")
+    private inline fun log(noinline line: () -> String) {
+        if (tracing) trace?.invoke(line)
     }
 
     /**

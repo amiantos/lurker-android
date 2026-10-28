@@ -266,10 +266,7 @@ fun ConversationScreen(
     // buffer's ordinal label, only while the hidden switch is on. Installed on every machine,
     // restored ones included; the line is built only when the trace is on.
     val traceSource = remember(key.id) { ScrollTrace.label(key.id) }
-    fun trace(line: () -> String) {
-        if (ScrollTrace.isEnabled) ScrollTrace.note(traceSource, line())
-    }
-    remember(scroll) { scroll.trace = { line -> trace(line) }; true }
+    remember(scroll) { scroll.trace = { line -> ScrollTrace.note(traceSource, line()) }; true }
     val options = remember(scroll) { MutableStateFlow(scroll.options) }
     fun publishOptions() {
         options.value = scroll.options
@@ -345,6 +342,7 @@ fun ConversationScreen(
             // media source checks it live, see `MediaSource.of`.)
             instanceHasPreviews = model.features.linkPreviews
             val seq = frameSeq.next()
+            scroll.tracing = ScrollTrace.isEnabled
             // A pending jump hydrates through its `around` slice instead: asking for both would
             // double-fetch, and the latest slice would fight the jump.
             hydrate.check(state.connection, state.buffers[key.id], state.burstGeneration, jumpPending = scroll.jumpPending)
@@ -465,7 +463,7 @@ fun ConversationScreen(
             ConversationScroll.Landing.Idle, ConversationScroll.Landing.Wait -> Unit
             // Exact in one pass: the reverse layout puts item 0 at the bottom edge by construction.
             ConversationScroll.Landing.AtTail -> {
-                trace { "land at tail" }
+                traceGlue(traceSource) { "land at tail" }
                 listState.requestScrollToItem(0)
             }
             is ConversationScroll.Landing.Converge -> {
@@ -530,8 +528,9 @@ fun ConversationScreen(
         val wasNearBottom = ConversationScroll.nearBottomBefore(
             visible, drawn, firstIndex, firstOffset, followSlop, lastKnown = jobs.nearBottom,
         )
+        scroll.tracing = ScrollTrace.isEnabled
         val step = scroll.onRows(built, wasNearBottom)
-        trace {
+        traceGlue(traceSource) {
             "accept seq=${built.seq} rows=${built.rows.size} describes=${LayoutFacts.describes(visible, drawn)} first=$firstIndex/$firstOffset " +
                 "wasNearBottom=$wasNearBottom lastKnown=${jobs.nearBottom} follow=${step.follow}"
         }
@@ -555,7 +554,7 @@ fun ConversationScreen(
         if (step.follow) {
             listState.requestScrollToItem(0)
         } else if (hold != null) {
-            trace { "hold index=${hold.index} offset=${hold.scrollOffset} thenScrollBy=${hold.thenScrollBy}" }
+            traceGlue(traceSource) { "hold index=${hold.index} offset=${hold.scrollOffset} thenScrollBy=${hold.thenScrollBy}" }
             listState.requestScrollToItem(hold.index, hold.scrollOffset)
             if (hold.thenScrollBy != 0) {
                 scope.launch {
@@ -972,6 +971,12 @@ private fun scrollSaver(kind: BufferKind): Saver<ConversationScroll, Conversatio
     Saver(save = { it.memory() }, restore = { ConversationScroll(kind, it) })
 
 /** The laid-out items, in plain numbers. */
+/** A line of the glue's trace, built only while the trace is on — inline, so a switched-off trace allocates nothing. */
+@Suppress("NOTHING_TO_INLINE")
+private inline fun traceGlue(source: String, line: () -> String) {
+    if (ScrollTrace.isEnabled) ScrollTrace.note(source, line())
+}
+
 private fun visibleItems(listState: LazyListState): List<VisibleItem> =
     listState.layoutInfo.visibleItemsInfo.map { VisibleItem(it.key, it.index, it.offset, it.size) }
 

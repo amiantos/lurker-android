@@ -155,9 +155,12 @@ internal object LocalNetworking {
                 if (!ipv4Allowed || index != groups.lastIndex) return null
                 val quad = group.split(".")
                 if (quad.size != 4) return null
+                // Port note: the embedded tail is read as Darwin's `inet_pton(AF_INET6)` reads it
+                // — decimal octets, leading zeros allowed (`::ffff:010.0.0.1` is 10.0.0.1) —
+                // which is what the pinned Swift sees. The strict no-leading-zero rule is the
+                // BARE quad's (`isNumericLabel`), where a zero-padded spelling is a loophole.
                 for (label in quad) {
                     if (label.isEmpty() || label.any { it !in '0'..'9' }) return null
-                    if (label.length > 1 && label[0] == '0') return null
                     val octet = uint8(label) ?: return null
                     bytes.add(octet)
                 }

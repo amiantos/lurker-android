@@ -33,7 +33,7 @@ object ScrollTrace {
         private set
 
     private val lines = ArrayDeque<String>()
-    /** Ordinals in place of buffer keys: a key names a channel or a DM peer, and the file is meant to be handed over. */
+    /** Ordinals in place of buffer keys: a key names a channel or a DM peer, and the file is meant to be handed over. Per process. */
     private val labels = HashMap<String, String>()
     private val formatter: DateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
 
@@ -48,8 +48,9 @@ object ScrollTrace {
         if (on) {
             note("trace", "on $build")
         } else {
+            // The lines go; the labels stay. A conversation on screen remembers its label for the
+            // process, and a fresh map would hand the same ordinal to the next buffer opened.
             lines.clear()
-            labels.clear()
         }
     }
 

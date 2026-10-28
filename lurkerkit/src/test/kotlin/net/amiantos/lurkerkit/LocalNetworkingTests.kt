@@ -66,6 +66,8 @@ class LocalNetworkingTests {
         for (host in listOf(
             "0:0:0:0:0:0:0:1", "0000:0000:0000:0000:0000:0000:0000:0001", "::0001", "FE80::1",
             "fd12:3456:789a::1", "fc00::", "::ffff:192.168.1.5", "::ffff:10.0.0.1",
+            // Port-only: Darwin's inet_pton reads a mapped tail's octets as decimal, zeros and all.
+            "::ffff:010.0.0.1", "::ffff:192.168.001.005",
         )) {
             assertTrue(permits(host), "$host is local")
         }
