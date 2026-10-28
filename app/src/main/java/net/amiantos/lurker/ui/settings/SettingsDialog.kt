@@ -163,6 +163,7 @@ internal fun SettingsDialog(
     val about = remember(context) { AboutLines(version = versionLine(context), server = serverLine(uiPreferences)) }
 
     var confirmingSignOut by rememberSaveable { mutableStateOf(false) }
+    val shareScope = rememberCoroutineScope()
 
     FullScreenDialog(onDismissRequest = onDismiss) {
         SettingsContent(
@@ -202,7 +203,7 @@ internal fun SettingsDialog(
                     uiPreferences.setScrollTrace(on)
                     ScrollTrace.setEnabled(on, about.version)
                 },
-                onShareTrace = { ScrollTrace.share(context, about.version) },
+                onShareTrace = { shareScope.launch { ScrollTrace.share(context, about.version) } },
             ),
         )
         if (confirmingSignOut) {

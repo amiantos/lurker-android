@@ -252,7 +252,7 @@ internal class ReplyWatch(
             (!hydrated && nowHydrated) ||
             (detached && !nowDetached) ||
             (anchorId != null && list.orEmpty().any { it.id == anchorId })
-        rebase(list, row)
+        rebase(row)
         if (landed) arrivedAtSeq = seq
         return landed
     }
@@ -261,7 +261,7 @@ internal class ReplyWatch(
      * Take this frame as the new starting point without judging it — an older request's reply
      * landed in it, and the server answers in order, so it isn't this one's.
      */
-    fun rebase(list: List<Message>?, row: Buffer?) {
+    fun rebase(row: Buffer?) {
         revision = row?.historyRevision ?: 0
         hydrated = row?.hydrated == true
         detached = row?.hasMoreNewer == true
@@ -565,7 +565,7 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         var answered = false
         for (watch in strays + listOfNotNull(jump?.fetch, tailFetch)) {
             if (answered) {
-                watch.rebase(list, row)
+                watch.rebase(row)
             } else {
                 answered = watch.observe(list, row, seq)
                 if (answered) log { "reply landed seq=$seq revision=${row?.historyRevision ?: 0}" }
@@ -614,8 +614,11 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         val held = state.messages[key.id].orEmpty()
         // A row the `/clear` marker hides is held but not drawn — `onRows`' reveal resolves that.
         if (held.any { it.id == pending.anchorId }) return null
-        val row = state.buffers[key.id]
-        if (held.isEmpty() && row?.hydrated == true) return null
+        // Not before the buffer has a row: a reply is recognised on the row (its reply count), so
+        // one sent now could never be seen to land, and the jump would wait forever. The row
+        // arrives with the burst or the screen leaves (`BufferWatch`); the next frame asks.
+        val row = state.buffers[key.id] ?: return null
+        if (held.isEmpty() && row.hydrated) return null
         pending.fetch = ReplyWatch.from(state, key, anchorId = pending.anchorId)
         log { "around requested anchor=${pending.anchorId} generation=${state.burstGeneration}" }
         return pending.anchorId

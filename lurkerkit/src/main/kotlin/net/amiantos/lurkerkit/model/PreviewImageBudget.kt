@@ -8,36 +8,21 @@ package net.amiantos.lurkerkit.model
  *
  * The relay streams origin bytes unresized under an 8 MB byte cap, and bytes say nothing about
  * pixels: a uniform-colour PNG whose canvas is 20,000 on a side compresses to a few hundred KB
- * and decodes to 1.6 GB, which is jetsam for every reader whose client paints it — and, since
- * a still is painted during backlog restore, jetsam again on relaunch while that row is in the
- * visible backlog. Any channel peer can post such a link. So a still is judged by its DECLARED
- * canvas, read from the container's header before a pixel is decoded, and what passes is
- * decoded to a bounded edge, the way an animation's frames already were.
- *
- * This is only the rule. The header read and the downsampled decode are ImageIO and live in
- * the app (`PreviewImageLoader`), as `ImageShrink`'s redraw lives in `ImageConverter`.
- * /// Pixels a still may declare and still be decoded. 50 MP clears a phone's 48 MP frame
- * /// (8064×6048, a 3–6 MB HEIC or JPEG, so under the relay's byte cap) and most panoramas,
- * /// because a refusal is a blank tile with no fallback and must stay rare. The bound still
- * /// matters even though what passes is downsampled on the way in: ImageIO's thumbnail
- * /// decode is bounded, not free — measured on the host, a 49 MP PNG peaked at ~105 MB
- * /// resident against ~210 MB for the full decode, a 24 MP PNG or JPEG at ~70 MB, and the
- * /// header read itself at ~11 MB. Decodes run one at a time (`PreviewImageLoader`), so that
- * /// peak is the app's, not one row's.
- * /// Longest edge a passing still is decoded to: twice the widest preview column at 3× (a
- * /// lone image across a phone), and the viewer's full iPad width at 2×. A 2048² bitmap is
- * /// 16 MB where a 48 MP photo was 190 MB — the old path's cost for a perfectly ordinary
- * /// link, against a 32 MB decoded-image cache. ⚠ The viewer shows this same bitmap, so a
- * /// zoom past 2× on a very large photo is soft; that is the trade, and it is the one the
- * /// animation path already made at 720.
- * /// Whether a still declaring this canvas may be decoded at all.
+ * and decodes to 1.6 GB, which is jetsam for every reader whose client paints it — and, since a
+ * still is painted during backlog restore, jetsam again on relaunch while that row is in the
+ * backlog. So a still's canvas is judged from its header before a pixel is decoded, and a canvas
+ * past the bound is refused, however few bytes it took (lurker-ios#245).
  *
  * Port note: `Int` here is 32-bit where the Swift's is 64-bit; the division keeps the overflow
- * out either way, and a header past 2^31 reads as absent before it gets here (`Json`).
+ * out either way, and a header past 2^31 reads as absent before it gets here (`Json`). The app's
+ * own decode budgets (`ui/media/DecodeSize`, `PreviewImageLoader`) predate this and are stricter;
+ * this is the kit's rule, for parity and for the loader to adopt.
  */
 object PreviewImageBudget {
+    /** The most pixels a still may decode to: 50 MP, a 200 MB canvas as ARGB — a phone's photo passes, a bomb doesn't. */
     const val maxPixels: Int = 50_000_000
 
+    /** The longest edge a decoded still is sized down to, for the row's picture. */
     const val maxPixelSize: Int = 2048
 
     fun admits(pixelWidth: Int, pixelHeight: Int): Boolean {

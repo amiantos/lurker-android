@@ -489,6 +489,18 @@ class ConversationScrollTest {
     }
 
     @Test
+    fun `a jump before the buffer has a row waits for the row, then fetches`() {
+        val d = Drive()
+        // No row at all yet (a DM awaiting its row): a reply couldn't be seen to land, so no fetch.
+        d.frame(state(buffer = null))
+        d.scroll.jumpTo(4)
+        assertNull(d.scroll.requestAround(d.last, channel))
+        assertEquals(ConversationScroll.Landing.Wait, d.land())
+        // The row arrives: the fetch goes out on this frame.
+        assertEquals(4L, d.frame(state(row(hydrated = false))).loadAround)
+    }
+
+    @Test
     fun `a jump into a buffer the server says is empty lets go without a fetch`() {
         val d = Drive()
         d.frame(state(row(hydrated = true)))

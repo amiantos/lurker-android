@@ -269,7 +269,7 @@ fun ConversationScreen(
     fun trace(line: () -> String) {
         if (ScrollTrace.isEnabled) ScrollTrace.note(traceSource, line())
     }
-    remember(scroll) { scroll.trace = { line -> if (ScrollTrace.isEnabled) ScrollTrace.note(traceSource, line()) }; true }
+    remember(scroll) { scroll.trace = { line -> trace(line) }; true }
     val options = remember(scroll) { MutableStateFlow(scroll.options) }
     fun publishOptions() {
         options.value = scroll.options
@@ -305,8 +305,7 @@ fun ConversationScreen(
     // few lines parks those lines at the bottom with nothing above them until the top-up lands;
     // this says that the nothing is on its way, rather than that the buffer begins here.
     var olderLoading by remember(key) { mutableStateOf(false) }
-    fun refreshOlderLoading() {
-        val state = model.state
+    fun refreshOlderLoading(state: ChatState) {
         val buffer = state.buffers[key.id]
         olderLoading = buffer != null && (
             (buffer.hasMoreOlder && model.isLoadingOlder(key)) ||
@@ -352,7 +351,7 @@ fun ConversationScreen(
                 ?.let(model::hydrate)
             val step = scroll.onFrame(state, key, seq)
             jobs.lastFrame = state
-            refreshOlderLoading()
+            refreshOlderLoading(state)
             step.loadAround?.let { anchor -> model.loadAround(key, anchorId = anchor) }
             if (step.loadLatest) model.loadLatest(key)
             if (step.optionsChanged) publishOptions()
@@ -528,13 +527,12 @@ fun ConversationScreen(
         val visible = visibleItems(listState)
         val firstIndex = listState.firstVisibleItemIndex
         val firstOffset = listState.firstVisibleItemScrollOffset
-        val describes = LayoutFacts.describes(visible, drawn)
         val wasNearBottom = ConversationScroll.nearBottomBefore(
             visible, drawn, firstIndex, firstOffset, followSlop, lastKnown = jobs.nearBottom,
         )
         val step = scroll.onRows(built, wasNearBottom)
         trace {
-            "accept seq=${built.seq} rows=${built.rows.size} describes=$describes first=$firstIndex/$firstOffset " +
+            "accept seq=${built.seq} rows=${built.rows.size} describes=${LayoutFacts.describes(visible, drawn)} first=$firstIndex/$firstOffset " +
                 "wasNearBottom=$wasNearBottom lastKnown=${jobs.nearBottom} follow=${step.follow}"
         }
         if (step.optionsChanged) publishOptions()
@@ -570,7 +568,7 @@ fun ConversationScreen(
         // "Loading messages…" while the page is in the air rather than claiming the buffer is empty.
         forceLoading = scroll.wantsTopUp(built, online = ConversationScroll.mayWrite(model.state)) &&
             model.loadOlder(key, showingClearedHistory = scroll.options.showsClearedHistory)
-        refreshOlderLoading()
+        refreshOlderLoading(model.state)
         land()
     }
 
@@ -635,7 +633,7 @@ fun ConversationScreen(
                 }
                 if (step.loadOlder) model.loadOlder(key, showingClearedHistory = scroll.options.showsClearedHistory)
                 if (step.loadNewer) model.loadNewer(key)
-                if (step.loadOlder) refreshOlderLoading()
+                if (step.loadOlder) refreshOlderLoading(model.state)
             }
     }
 
@@ -1117,7 +1115,7 @@ internal fun ConversationContent(
     empty: StateModel,
     listState: LazyListState,
     pills: ConversationScroll.Pills = ConversationScroll.Pills(),
-    /** An older page (or the first backlog) is on its way: a spinner past the oldest row. */
+    /** An older page (or the first backlog) is on its way: a spinner over the list's top edge. */
     olderLoading: Boolean = false,
     flash: RowFlash? = null,
     onConnectionBannerShown: (Boolean) -> Unit = {},
@@ -1236,14 +1234,6 @@ internal fun ConversationContent(
                             // A long press is the row's own (`MessageListContext.onLongPress`).
                             MessageListRow(rows[index], index, context, modifier = modifier)
                         }
-                        // Past the oldest row — the reverse layout's last item is the screen's top.
-                        if (olderLoading && rows.isNotEmpty()) {
-                            item(key = "older-loading", contentType = "spinner") {
-                                Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), contentAlignment = Alignment.Center) {
-                                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                                }
-                            }
-                        }
                     }
                 }
                 // The ground behind the transparent top bar, fading out under it.
@@ -1260,6 +1250,17 @@ internal fun ConversationContent(
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = top + 8.dp, start = 16.dp, end = 16.dp),
                     onShownChange = onConnectionBannerShown,
                 )
+                // Older history on its way: over the list's top edge, where the page will land. An
+                // overlay rather than a list item, because the position machine reads the lazy
+                // list's layout on the promise that every laid-out item is one of `rows`
+                // (`LayoutFacts.describes`, `awaitLayoutOf`); a spinner item would blind it for
+                // exactly as long as it showed. The banners' slot wins when either wants it.
+                if (olderLoading && rows.isNotEmpty() && banner == ConnectionBannerState.Hidden && !pills.showsUnread) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.align(Alignment.TopCenter).padding(top = top + 12.dp).size(20.dp),
+                        strokeWidth = 2.dp,
+                    )
+                }
                 UnreadBanner(
                     visible = pills.showsUnread,
                     onClick = onJumpToUnread,

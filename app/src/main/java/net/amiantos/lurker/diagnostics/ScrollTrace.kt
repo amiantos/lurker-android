@@ -6,6 +6,8 @@ package net.amiantos.lurker.diagnostics
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
@@ -19,9 +21,9 @@ import java.time.format.DateTimeFormatter
  * a burst from one person, the unread banner missing — are rare and were never caught by reading
  * the code. The trace has to already be running when it happens, on the device it happens on.
  *
- * Off by default and costs nothing off: callers check [isEnabled] before building a line. Bounded,
- * so a long session never grows it past a few hundred kilobytes; lines carry a buffer's ordinal
- * label and a timestamp — never a key (a channel or a DM peer's name) and never message text.
+ * Off by default and costs nothing off: callers check [isEnabled] before building a line. Bounded
+ * at a few thousand lines — about a megabyte of text at most; lines carry a buffer's ordinal label
+ * and a timestamp — never a key (a channel or a DM peer's name) and never message text.
  */
 object ScrollTrace {
     private const val CAPACITY = 4000
@@ -64,9 +66,6 @@ object ScrollTrace {
         lines.addLast("${LocalTime.now().format(formatter)} [$source] $line")
     }
 
-    val isEmpty: Boolean
-        @Synchronized get() = lines.isEmpty()
-
     /** Everything held, newest last, with a header saying which build wrote it. */
     @Synchronized
     fun export(build: String): String = (listOf("Lurker scroll trace — $build", "") + lines).joinToString("\n") + "\n"
@@ -76,10 +75,11 @@ object ScrollTrace {
      * file rather than a string, so it arrives as an attachment and not a wall of text (and never
      * trips the transaction size limit a long trace would as an extra).
      */
-    fun share(context: Context, build: String) {
-        val directory = File(context.cacheDir, "diagnostics").apply { mkdirs() }
-        val file = File(directory, "lurker-scroll-trace.txt")
-        file.writeText(export(build))
+    suspend fun share(context: Context, build: String) {
+        val file = withContext(Dispatchers.IO) {
+            val directory = File(context.cacheDir, "diagnostics").apply { mkdirs() }
+            File(directory, "lurker-scroll-trace.txt").also { it.writeText(export(build)) }
+        }
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
         val send = Intent(Intent.ACTION_SEND)
             .setType("text/plain")
