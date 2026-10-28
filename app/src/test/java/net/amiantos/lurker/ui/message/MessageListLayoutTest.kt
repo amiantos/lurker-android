@@ -21,6 +21,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import net.amiantos.lurker.ui.media.MediaSource
 import net.amiantos.lurkerkit.model.AvatarInk
@@ -361,5 +362,21 @@ class MessageListLayoutTest {
         // Android 14 at 200%: 14sp converts to ~26dp while 31.5sp would convert to ~39dp; the em is
         // taken of the converted size, so the tile keeps its proportion to the text.
         assertEquals(58.dp, AvatarColumn.size(fontDp = 26.dp, lineHeightDp = 40.3.dp, wide = false))
+    }
+
+    @Test
+    fun `the tile is centred on the head and first line, lifted, and never above the row`() {
+        val metrics = CompactMetrics(blockGap = 12.dp)
+        fun top(startsBlock: Boolean, lineHeight: Dp, size: Dp, lift: Dp = 4.dp): Float =
+            metrics.avatarTop(startsBlock = startsBlock, lineHeight = lineHeight, size = size, lift = lift).value
+        // Room to lift: two lines of 30 and the gap are 61, a 37 tile centres 12 down, less 4, past the wash.
+        assertEquals(4f + 8f, top(startsBlock = true, lineHeight = 30.dp, size = 37.dp), 0.01f)
+        // A continuation's header carries no wash.
+        assertEquals(8f, top(startsBlock = false, lineHeight = 30.dp, size = 37.dp), 0.01f)
+        // The default: 14sp at 155% centres 3.7 down, and the lift gives way at the row's edge.
+        assertEquals(4f, top(startsBlock = true, lineHeight = 21.7.dp, size = 37.dp), 0.01f)
+        // A tile two lines tall keeps its place.
+        assertEquals(4f, top(startsBlock = true, lineHeight = 14.dp, size = 28.dp), 0.01f)
+        assertEquals(0f, top(startsBlock = false, lineHeight = 14.dp, size = 28.dp), 0.01f)
     }
 }
