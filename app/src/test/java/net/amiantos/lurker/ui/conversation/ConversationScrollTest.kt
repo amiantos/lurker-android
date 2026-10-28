@@ -79,10 +79,11 @@ class ConversationScrollTest {
         burstGeneration: Int = 1,
         ignores: IgnoreSet = IgnoreSet.empty,
         settings: Settings = Settings(),
+        backlogComplete: Boolean = true,
     ) = ChatState(
         connection = connection,
         snapshotSinceOpen = true,
-        backlogComplete = true,
+        backlogComplete = backlogComplete,
         networks = mapOf(1 to libera),
         buffers = if (buffer == null) emptyMap() else mapOf(buffer.key.id to buffer),
         messages = mapOf(key.id to messages),
@@ -491,13 +492,38 @@ class ConversationScrollTest {
     @Test
     fun `a jump before the buffer has a row waits for the row, then fetches`() {
         val d = Drive()
-        // No row at all yet (a DM awaiting its row): a reply couldn't be seen to land, so no fetch.
-        d.frame(state(buffer = null))
+        // No row yet (a key opened by a notification tap before its burst): an anchor-missing reply
+        // into it would leave no trace, so no fetch goes out. The burst is still running, so the
+        // roster hasn't settled and the row may yet come.
+        d.frame(state(buffer = null, backlogComplete = false))
         d.scroll.jumpTo(4)
         assertNull(d.scroll.requestAround(d.last, channel))
         assertEquals(ConversationScroll.Landing.Wait, d.land())
         // The row arrives: the fetch goes out on this frame.
         assertEquals(4L, d.frame(state(row(hydrated = false))).loadAround)
+    }
+
+    @Test
+    fun `a jump into a buffer the roster settled without lets go`() {
+        val d = Drive()
+        // A stray slice holds lines but no row, and the burst has listed everything: nothing is
+        // coming for this key, so the jump gives up — at the tail of what's drawn.
+        d.frame(state(buffer = null, messages = msgs(100L..110L)))
+        d.scroll.jumpTo(4)
+        assertNull(d.scroll.requestAround(d.last, channel))
+        assertEquals(ConversationScroll.Landing.AtTail, d.land())
+        assertFalse(d.scroll.jumpPending)
+    }
+
+    @Test
+    fun `a re-attach before the buffer has a row waits for the row too`() {
+        val d = Drive()
+        d.frame(state(row(hasMoreNewer = true), msgs(1L..10L)))
+        d.built()
+        assertEquals(ConversationScroll.ToLatest.Reattach, d.scroll.jumpToLatest(hasRows = true, detached = true))
+        // The row drops out under a reconciliation burst: no fetch until it's back.
+        assertFalse(d.frame(state(buffer = null, messages = msgs(1L..10L))).loadLatest)
+        assertTrue(d.frame(state(row(hasMoreNewer = true), msgs(1L..10L))).loadLatest)
     }
 
     @Test
