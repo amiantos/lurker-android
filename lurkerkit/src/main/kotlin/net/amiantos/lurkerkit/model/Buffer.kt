@@ -77,6 +77,19 @@ data class Buffer(
      */
     val hasMoreNewer: Boolean = false,
     /**
+     * How many slice-replacing `history` replies (`around`, `latest`) the store has spliced into
+     * this buffer — the kit saying "a reply landed", which nothing else said. Pages (`before`,
+     * `after`) don't count: nothing waits on one by count, and one already in flight when a jump
+     * starts would otherwise be taken for the jump's reply (lurker-ios#246).
+     *
+     * The screen's jump and re-attach machinery (`ReplyWatch`) tells a reply from a live append
+     * with it, exactly, where inferring one from the held objects missed a reply that held every
+     * id already held and a page landing mid-jump. Bumped only by `applyHistory`: a backlog is
+     * the burst's, not an answer to anything the screen asked. Carried across a backlog and a
+     * rename, like the paging state — a reset would hide the next reply behind a lower count.
+     */
+    val historyRevision: Int = 0,
+    /**
      * The `/clear` marker's boundary: the highest message id hidden from the live view
      * (lurker-ios#121). 0 means the buffer has never been cleared, or the user undid it.
      *
@@ -181,6 +194,7 @@ data class Buffer(
             readStateKnown = readStateKnown,
             hasMoreOlder = hasMoreOlder,
             hasMoreNewer = hasMoreNewer,
+            historyRevision = historyRevision,
             clearedBeforeId = clearedBeforeId,
             clearedAt = clearedAt,
             topic = topic,

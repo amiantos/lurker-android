@@ -51,6 +51,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -77,6 +78,7 @@ import kotlinx.coroutines.flow.combine
 import androidx.lifecycle.viewmodel.compose.viewModel
 import java.util.UUID
 import net.amiantos.lurker.platform.findActivity
+import net.amiantos.lurker.diagnostics.ScrollTrace
 import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormActionRow
@@ -151,19 +153,28 @@ internal fun SettingsDialog(
 
     val autocapitalizes by uiPreferences.composerAutocapitalizes.collectAsStateWithLifecycle()
     val enterSends by uiPreferences.composerEnterSends.collectAsStateWithLifecycle()
+    val scrollTrace by uiPreferences.scrollTrace.collectAsStateWithLifecycle()
+    // Taps on the version row so far — five reveal the diagnostics section, which also shows
+    // whenever the trace is on.
+    var aboutTaps by remember { mutableIntStateOf(0) }
+    var showsDiagnostics by rememberSaveable { mutableStateOf(false) }
     val noAppPush by model.appPushUnavailable.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val about = remember(context) { AboutLines(version = versionLine(context), server = serverLine(uiPreferences)) }
 
     var confirmingSignOut by rememberSaveable { mutableStateOf(false) }
+    val shareScope = rememberCoroutineScope()
 
     FullScreenDialog(onDismissRequest = onDismiss) {
         SettingsContent(
-            sections = SettingsModel.sections(inputs),
+            sections = SettingsModel.sections(inputs, showsDiagnostics = showsDiagnostics || scrollTrace),
             settings = inputs.settings,
             avatarSets = inputs.avatarSets,
             edits = writer.edits,
-            device = DeviceToggles(autocapitalizes = autocapitalizes, enterSends = enterSends, noAppPush = noAppPush),
+            device = DeviceToggles(
+                autocapitalizes = autocapitalizes, enterSends = enterSends, noAppPush = noAppPush,
+                scrollTrace = scrollTrace,
+            ),
             about = about,
             actions = SettingsActions(
                 onClose = onDismiss,
@@ -184,6 +195,15 @@ internal fun SettingsDialog(
                     )
                 },
                 onSignOut = { confirmingSignOut = true },
+                onVersionTap = {
+                    aboutTaps += 1
+                    if (aboutTaps >= 5) showsDiagnostics = true
+                },
+                onScrollTrace = { on ->
+                    uiPreferences.setScrollTrace(on)
+                    ScrollTrace.setEnabled(on, about.version)
+                },
+                onShareTrace = { shareScope.launch { ScrollTrace.share(context, about.version) } },
             ),
         )
         if (confirmingSignOut) {
@@ -244,6 +264,10 @@ internal class SettingsActions(
     /** A kind's sound pull-down: Off (`SettingsModel.SOUND_OFF`) or a sound's name. */
     val onPickSound: (kind: StatusNotification.Kind, choice: String) -> Unit,
     val onSignOut: () -> Unit,
+    /** The version row, tapped: five reveal the Diagnostics section. */
+    val onVersionTap: () -> Unit = {},
+    val onScrollTrace: (Boolean) -> Unit = {},
+    val onShareTrace: () -> Unit = {},
 ) {
     companion object {
         val None = SettingsActions({}, {}, { _, _ -> }, { _, _ -> }, {}, {}, { _, _ -> }, {})
@@ -260,6 +284,8 @@ internal data class DeviceToggles(
     val autocapitalizes: Boolean,
     val enterSends: Boolean,
     val noAppPush: AppPushUnavailable? = null,
+    /** The message list's trace, on (`ScrollTrace`). */
+    val scrollTrace: Boolean = false,
 )
 
 @Composable
@@ -346,7 +372,13 @@ private fun LazyListScope.section(
         SettingsSection.Account -> item(key = id) {
             FormActionRow(title = "Sign Out", onClick = actions.onSignOut, destructive = true)
         }
-        SettingsSection.About -> item(key = id) { AboutRows(about) }
+        SettingsSection.About -> item(key = id) { AboutRows(about, onVersionTap = actions.onVersionTap) }
+        SettingsSection.Diagnostics -> item(key = id) {
+            Column {
+                FormSwitchRow(label = "Scroll trace", checked = device.scrollTrace, onCheckedChange = actions.onScrollTrace)
+                FormActionRow(title = "Share trace…", onClick = actions.onShareTrace, enabled = device.scrollTrace)
+            }
+        }
     }
     val footer = SettingsModel.footer(section, device.noAppPush)
     if (footer != null) item(key = "$id.footer") { FormSectionFooter(footer) }
@@ -393,10 +425,12 @@ private fun UnavailableRow(loaded: Boolean) {
 }
 
 @Composable
-private fun AboutRows(about: AboutLines) {
+private fun AboutRows(about: AboutLines, onVersionTap: () -> Unit = {}) {
     Column {
         ListItem(
-            modifier = Modifier.semantics(mergeDescendants = true) {},
+            modifier = Modifier
+                .clickable(onClick = onVersionTap)
+                .semantics(mergeDescendants = true) {},
             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
             headlineContent = { Text("Lurker") },
             supportingContent = { Text(about.version) },

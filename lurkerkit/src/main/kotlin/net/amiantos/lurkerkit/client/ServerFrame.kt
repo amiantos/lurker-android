@@ -136,6 +136,12 @@ internal sealed interface ServerFrame {
         val hasMoreOlder: Boolean,
         val hasMoreNewer: Boolean,
         val speakers: List<Speaker>?,
+        /**
+         * An `around` reply whose anchor the server no longer has (pruned since it was quoted).
+         * The server answers it with an empty slice and no history either side, which is not a
+         * description of the buffer — the store leaves what it holds alone.
+         */
+        val anchorMissing: Boolean = false,
     ) : ServerFrame
 
     /**

@@ -18,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import net.amiantos.lurker.ui.shell.SafeUriHandler
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -134,7 +135,9 @@ internal fun UserProfilePage(
     val clipboard = LocalClipboard.current
     val events = LocalAppEvents.current
     val scope = rememberCoroutineScope()
-    val uriHandler = LocalUriHandler.current
+    // Through the app's one link door (`SafeUriHandler`): a profile's homepage is a peer's string.
+    val platform = LocalUriHandler.current
+    val uriHandler = remember(platform) { SafeUriHandler(platform) }
     UserProfileContent(
         title = state.nick,
         sections = sections,

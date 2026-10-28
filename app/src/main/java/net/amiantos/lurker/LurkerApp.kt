@@ -26,6 +26,7 @@ import net.amiantos.lurker.platform.push.PushNotifier
 import net.amiantos.lurker.platform.push.PushRegistrar
 import net.amiantos.lurker.prefs.PrefsDefaultsStorage
 import net.amiantos.lurker.prefs.SharedStringPrefs
+import net.amiantos.lurker.diagnostics.ScrollTrace
 import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.dcc.DccOffers
 import net.amiantos.lurker.ui.media.PreviewImageLoader
@@ -125,6 +126,7 @@ class LurkerApp : Application() {
         super.onCreate()
         val defaults = PrefsDefaultsStorage(SharedStringPrefs(prefs(PrefsDefaultsStorage.FILE)))
         uiPreferences = UiPreferences(SharedStringPrefs(prefs(UiPreferences.FILE)))
+        ScrollTrace.restore(uiPreferences.scrollTrace.value)
 
         // Restore runs in the view model's init, so the session is known as soon as this returns —
         // the activity builds the right screen first time, with no sign-in flash on a restored session.

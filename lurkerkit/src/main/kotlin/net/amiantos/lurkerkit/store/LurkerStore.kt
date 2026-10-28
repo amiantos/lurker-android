@@ -1653,6 +1653,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                         state, networkId = frame.networkId, target = frame.target,
                         events = frame.events, mode = frame.mode, hasMoreOlder = frame.hasMoreOlder,
                         hasMoreNewer = frame.hasMoreNewer, speakers = frame.speakers,
+                        anchorMissing = frame.anchorMissing,
                     )
                 is ServerFrame.ReadState ->
                     applyReadState(
@@ -2271,6 +2272,8 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                 // …and never un-know the read state, for the same reason: a frame that omits
                 // `lastReadId` hasn't retracted one we were already told.
                 readStateKnown = frameBuffer.readStateKnown || prior?.readStateKnown == true,
+                // The reply count is the screen's bookkeeping, not the frame's to reset.
+                historyRevision = prior?.historyRevision ?: 0,
             )
             // Which also means keeping the VALUES a pointer-less frame would otherwise overwrite
             // with its defaults. `frameBuffer` replaces `prior` wholesale, and all three of these
@@ -2631,11 +2634,21 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             hasMoreOlder: Boolean,
             hasMoreNewer: Boolean,
             speakers: List<Speaker>?,
+            anchorMissing: Boolean = false,
         ): ChatState {
             var next = state
-            next = next.noteBookmarks(events, networkId = networkId)
-            next = next.noteReactions(events, networkId = networkId, key = BufferKey(networkId = networkId, target = target).id)
             val key = BufferKey(networkId = networkId, target = target).id
+            // An `around` for a message the server no longer has answers with an empty slice and
+            // "no history either side" — about the anchor, not the buffer. Installing it used to
+            // replace a loaded buffer with nothing, hydrated, nowhere to page, and refuse the
+            // next jump's fetch on the strength of it. Only the reply count moves, so the
+            // screen's watch sees its answer and the jump gives up where the reader already is.
+            if (mode == HistoryMode.Around && anchorMissing) {
+                val held = next.buffers[key] ?: return next
+                return next.copy(buffers = next.buffers + (key to held.copy(historyRevision = held.historyRevision + 1)))
+            }
+            next = next.noteBookmarks(events, networkId = networkId)
+            next = next.noteReactions(events, networkId = networkId, key = key)
             next = next.seedSpeakers(speakers, key = key)
             val existing = next.messages[key].orEmpty()
             val wasDetached = next.buffers[key]?.hasMoreNewer == true
@@ -2662,6 +2675,10 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             val held = next.buffers[key]
             if (held != null) {
                 var buffer = held.copy(hydrated = true)
+                // The slice-replacing modes only — the ones a screen waits on by count.
+                if (mode == HistoryMode.Around || mode == HistoryMode.Latest) {
+                    buffer = buffer.copy(historyRevision = buffer.historyRevision + 1)
+                }
                 if (mode != HistoryMode.After) buffer = buffer.copy(hasMoreOlder = hasMoreOlder) // `after` pages newer
                 // Detach state (lurker-ios#42): an `around` slice may sit below the tail →
                 // detached; `latest` is the tail → re-attached; `after` carries whether newer

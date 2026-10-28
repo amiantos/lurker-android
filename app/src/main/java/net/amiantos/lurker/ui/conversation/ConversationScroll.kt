@@ -213,31 +213,14 @@ internal data class LayoutFacts(
 
 /**
  * A history fetch in flight — `around` for a jump, `latest` for a re-attach — and whether its reply
- * has landed, judged frame by frame from this buffer's message list. lurker-ios's
- * `aroundSliceArrived` and its baseline, made robust.
+ * has landed, judged frame by frame.
  *
- * ⚠ The kit says nothing when a `history` reply lands; the store just applies it. So the reply is
- * recognised by what it does to the list, against what a live event does:
- *
- *  - **A live append** keeps every held `Message` OBJECT and adds newer ones behind them
- *    (`existing + message`). So does a page that brought nothing new.
- *  - **A history reply** builds the list from the frame's freshly parsed messages (`around`
- *    replaces outright; `latest` is the slice plus whatever newer was held). Its prefix is new
- *    objects even where every id is one already held — which is the case iOS's "the ids held at
- *    request time are gone" test missed: a small, fully loaded buffer whose `around` reply lacks a
- *    pruned anchor is a superset of what was held, replaces nothing, and left the jump pending
- *    for good, holding off paging, the follow and the banner.
- *
- * So it has landed when the list changed and isn't an append of the previous frame's — or the
- * anchor appeared, or an unhydrated buffer hydrated (an empty reply into a shell changes no list
- * anyone could compare), or a detached buffer re-attached (an empty `latest` keeps the old
- * objects but clears the flag). NOT "the buffer has messages": a small connect backlog tripped
- * that and gave the jump up before its real slice arrived.
- *
- * Known limit: anything else that rebuilds the list in between reads as the reply — a `/clear`
- * dropping its ephemerals, a full backlog replacing a hydrated buffer during a burst (a resume's
- * gap slice appends; a fresh connect's rows are shells). The jump then gives up early and lands at
- * the bottom, which is the safe way to be wrong.
+ * The store counts the slice-replacing `history` replies it splices in (`Buffer.historyRevision`,
+ * S9), so a reply is the count advancing — exact, where this used to infer one from the held
+ * objects and missed a reply that held every id already held, and took a page landing mid-jump for
+ * the jump's reply. The three older tells are kept beside it: an unhydrated buffer hydrating (an
+ * empty reply into a shell), a detached buffer re-attaching, and the anchor itself appearing (a
+ * live line or a page can carry it, and the landing may as well go straight there).
  *
  * Fed every frame, strictly in order ([ConversationScroll.onFrame]); [arrivedAtSeq] is the frame
  * the reply landed in, so a build of an earlier frame — still in the pipeline — isn't mistaken for
@@ -246,7 +229,8 @@ internal data class LayoutFacts(
 internal class ReplyWatch(
     /** The burst the request went out in — a new burst voids it. */
     val generation: Int,
-    private var last: List<Message>?,
+    /** `Buffer.historyRevision` as of the frame the request went out after. */
+    private var revision: Int,
     private var hydrated: Boolean,
     private var detached: Boolean,
     private val anchorId: Long? = null,
@@ -261,13 +245,14 @@ internal class ReplyWatch(
      */
     fun observe(list: List<Message>?, row: Buffer?, seq: Long): Boolean {
         if (arrivedAtSeq != null) return false
+        val nowRevision = row?.historyRevision ?: 0
         val nowHydrated = row?.hydrated == true
         val nowDetached = row?.hasMoreNewer == true
-        val landed = (!hydrated && nowHydrated) ||
+        val landed = nowRevision > revision ||
+            (!hydrated && nowHydrated) ||
             (detached && !nowDetached) ||
-            (anchorId != null && list.orEmpty().any { it.id == anchorId }) ||
-            (list !== last && !isAppend(last, list))
-        rebase(list, row)
+            (anchorId != null && list.orEmpty().any { it.id == anchorId })
+        rebase(row)
         if (landed) arrivedAtSeq = seq
         return landed
     }
@@ -276,8 +261,8 @@ internal class ReplyWatch(
      * Take this frame as the new starting point without judging it — an older request's reply
      * landed in it, and the server answers in order, so it isn't this one's.
      */
-    fun rebase(list: List<Message>?, row: Buffer?) {
-        last = list
+    fun rebase(row: Buffer?) {
+        revision = row?.historyRevision ?: 0
         hydrated = row?.hydrated == true
         detached = row?.hasMoreNewer == true
     }
@@ -291,25 +276,11 @@ internal class ReplyWatch(
             val row = state.buffers[key.id]
             return ReplyWatch(
                 generation = state.burstGeneration,
-                last = state.messages[key.id],
+                revision = row?.historyRevision ?: 0,
                 hydrated = row?.hydrated == true,
                 detached = row?.hasMoreNewer == true,
                 anchorId = anchorId,
             )
-        }
-
-        /**
-         * Whether [now] is [previous] with things added behind it — every held object still there,
-         * by identity, in place. An empty or absent previous list says nothing either way (the
-         * hydrate flag does); a list that went away isn't an append.
-         */
-        fun isAppend(previous: List<Message>?, now: List<Message>?): Boolean {
-            if (previous.isNullOrEmpty()) return true
-            if (now == null || now.size < previous.size) return false
-            for (index in previous.indices) {
-                if (now[index] !== previous[index]) return false
-            }
-            return true
         }
     }
 }
@@ -358,6 +329,25 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
     /** What the next build must use. Changes are announced by the steps that make them. */
     var options: RowOptions = memory.options
         private set
+
+    /**
+     * Lines of the decisions as they're made, for the diagnostics trace (lurker-ios#137). The
+     * consumer is handed the line unbuilt and decides whether to build it, so an installed but
+     * switched-off trace costs a call and no string.
+     */
+    var trace: ((() -> String) -> Unit)? = null
+
+    /**
+     * Whether [trace] wants anything right now. Flipped by the screen on every frame from the
+     * trace's switch, so a switched-off trace costs this read and no closure: [log] is inline,
+     * and the lambda it hands [trace] is built only past this check.
+     */
+    var tracing: Boolean = false
+
+    @Suppress("NOTHING_TO_INLINE")
+    private inline fun log(noinline line: () -> String) {
+        if (tracing) trace?.invoke(line)
+    }
 
     /**
      * Latched once the divider has been on screen in the buffer's real history: the reader has seen
@@ -493,6 +483,7 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         tailFetch = null
         jump = PendingJump(anchorId, flashesFirstUnread)
         options = options.copy(keeping = anchorId)
+        log { "jump begin anchor=$anchorId unread=$flashesFirstUnread" }
     }
 
     /** What jump-to-latest does. */
@@ -532,8 +523,10 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
             landsAtTail = true
             retire(tailFetch)
             tailFetch = null
+            log { "jump to latest: reattach" }
             return ToLatest.Reattach
         }
+        log { "jump to latest: scroll down" }
         return ToLatest.ScrollDown
     }
 
@@ -559,8 +552,9 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
      * a stream that skips nothing.
      *
      * ⚠⚠ The latch waits for `Buffer.readStateKnown`, never a row merely existing or `hydrated`.
-     * Three paths materialize a row carrying nothing but defaults (the connect `snapshot`, a live
-     * event for an unseen target, a `history` reply), and under all of them `lastReadId` is 0 —
+     * Three paths leave a row carrying nothing but defaults (the connect `snapshot`, a live event
+     * for an unseen target, a channel join) and a fourth flips `hydrated` on one without a pointer
+     * (a `history` reply); under all of them `lastReadId` is 0 —
      * indistinguishable from "read nothing". Latching there pinned the divider at 0 for the visit:
      * no divider and no banner however many unreads. `hydrated` was the first fix and was inert:
      * `history mode:latest` sets it without carrying a pointer. Only `backlog` and `read-state` set
@@ -579,7 +573,12 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         // this frame's change, and the rest take it as their new starting point.
         var answered = false
         for (watch in strays + listOfNotNull(jump?.fetch, tailFetch)) {
-            if (answered) watch.rebase(list, row) else answered = watch.observe(list, row, seq)
+            if (answered) {
+                watch.rebase(row)
+            } else {
+                answered = watch.observe(list, row, seq)
+                if (answered) log { "reply landed seq=$seq revision=${row?.historyRevision ?: 0}" }
+            }
         }
         strays.removeAll { it.arrivedAtSeq != null }
         // After the replies are accounted for, so a request made now watches from this frame on.
@@ -588,6 +587,7 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         if (options.dividerAfterId == null && row != null && row.readStateKnown) {
             options = options.copy(dividerAfterId = row.lastReadId)
             changed = true
+            log { "divider latched after=${row.lastReadId} seq=$seq" }
         }
         val latest = requestLatest(state, key)
         return FrameStep(loadAround = around, loadLatest = latest, optionsChanged = changed)
@@ -623,9 +623,16 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         val held = state.messages[key.id].orEmpty()
         // A row the `/clear` marker hides is held but not drawn — `onRows`' reveal resolves that.
         if (held.any { it.id == pending.anchorId }) return null
-        val row = state.buffers[key.id]
-        if (held.isEmpty() && row?.hydrated == true) return null
+        // Not before the buffer has a row. A reply is recognised on the row's reply count — a
+        // `history` reply never creates a row, so one that comes back WITHOUT the anchor
+        // (`anchorMissing`, a pruned line) would leave no trace at all, and the jump would wait
+        // forever. (One carrying the anchor would still be seen, by the anchor itself.) The row
+        // arrives with the burst, or the roster settles without it and `abandons` lets go; the
+        // next frame asks.
+        val row = state.buffers[key.id] ?: return null
+        if (held.isEmpty() && row.hydrated) return null
         pending.fetch = ReplyWatch.from(state, key, anchorId = pending.anchorId)
+        log { "around requested anchor=${pending.anchorId} generation=${state.burstGeneration}" }
         return pending.anchorId
     }
 
@@ -641,7 +648,11 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         }
         if (tailFetch?.generation?.let { it != state.burstGeneration } == true) tailFetch = null
         if (tailFetch != null) return false
+        // The same wait as `requestAround`'s: a `latest` reply into a buffer with no row moves
+        // nothing a watch could see (no anchor to appear, no row to hydrate or re-attach).
+        if (state.buffers[key.id] == null) return false
         tailFetch = ReplyWatch.from(state, key)
+        log { "latest requested generation=${state.burstGeneration}" }
         return true
     }
 
@@ -713,6 +724,10 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         previousVisible = built.visible
 
         val follow = !landingPending && wasNearBottom && !wasDetached && !nowDetached
+        log {
+            "rows seq=${built.seq} rows=${built.rows.size} nearBottom=$wasNearBottom " +
+                "detached=$wasDetached->$nowDetached landing=$landingPending follow=$follow badge=$newWhileAway"
+        }
         wasDetached = nowDetached
         return RowsStep(follow = follow, optionsChanged = changed)
     }
@@ -777,9 +792,11 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
             if (jumpTargetRow(current) == null) {
                 if (!abandons(pending, current)) return Landing.Wait
                 jump = null
+                log { "jump abandoned anchor=${pending.anchorId}" }
                 return if (current.rows.isNotEmpty()) Landing.AtTail else Landing.Idle
             }
             pending.converging = true
+            log { "jump converging anchor=${pending.anchorId}" }
             return Landing.Converge(pending)
         }
         if (landsAtTail) {
@@ -790,6 +807,7 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
             if (!fetch.landedIn(current) || current.detached) return Landing.Wait
             landsAtTail = false
             tailFetch = null
+            log { "reattach slice landed seq=${current.seq}" }
             return Landing.AtTail
         }
         return Landing.Idle
@@ -804,7 +822,11 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         val held = current.inputs.messages.orEmpty()
         if (held.any { it.id == pending.anchorId }) return true
         if (!kind.hydratesOnDemand) return current.historyLanded
-        return held.isEmpty() && current.inputs.buffer?.hydrated == true
+        // No row, and the roster settled without one: nothing is coming for this key. The screen
+        // leaves on the same evidence (`BufferWatch`); the machine lets go on its own too, so a
+        // jump never holds the hydrate, the follow and the banner for a visit.
+        val buffer = current.inputs.buffer ?: return current.inputs.rosterSettled
+        return held.isEmpty() && buffer.hydrated
     }
 
     /**
@@ -852,6 +874,7 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         if (jump !== token) return Finish.Release
         val target = if (interrupted) null else jumpTargetRow(current)
         jump = null
+        log { "jump finished interrupted=$interrupted target=$target" }
         return when {
             // The reader's own scroll ended it: no pulse on a row they're dragging away from.
             interrupted || (target == null && current.rows.isEmpty()) -> Finish.Release
@@ -921,7 +944,10 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         online: Boolean,
     ): LayoutStep {
         if (facts.nearBottom) newWhileAway = 0
-        if (!jumpPending && current.historyLanded && facts.dividerVisible) dividerSeen = true
+        if (!jumpPending && current.historyLanded && facts.dividerVisible && !dividerSeen) {
+            dividerSeen = true
+            log { "dividerSeen latched seq=${current.seq}" }
+        }
         val hasRows = current.rows.isNotEmpty()
         val pills = Pills(
             showsLatest = (detached || !facts.nearBottom) && hasRows,

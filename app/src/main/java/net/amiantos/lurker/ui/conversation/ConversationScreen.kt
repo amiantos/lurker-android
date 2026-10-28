@@ -21,12 +21,15 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -126,6 +129,7 @@ import net.amiantos.lurker.ui.message.RowPress
 import net.amiantos.lurker.ui.message.previewMessageRows
 import net.amiantos.lurker.ui.message.rememberMessageTextStyle
 import net.amiantos.lurker.ui.shell.ConnectionBanner
+import net.amiantos.lurker.diagnostics.ScrollTrace
 import net.amiantos.lurker.ui.shell.JumpLedger
 import net.amiantos.lurker.ui.shell.JumpRequest
 import net.amiantos.lurker.ui.shell.SafeUriHandler
@@ -146,6 +150,7 @@ import net.amiantos.lurkerkit.model.StatusToast
 import net.amiantos.lurkerkit.rendering.NickHighlighter
 import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.store.ChatState
+import net.amiantos.lurkerkit.store.SocketStatus
 import java.time.Duration
 import java.time.Instant
 import java.time.LocalDate
@@ -257,6 +262,11 @@ fun ConversationScreen(
             jump?.takeIf(jumps::claim)?.let { machine.jumpTo(it.messageId) }
         }
     }
+    // The diagnostics trace (lurker-ios#137): the machine's decisions and the glue's, under this
+    // buffer's ordinal label, only while the hidden switch is on. Installed on every machine,
+    // restored ones included; the line is built only when the trace is on.
+    val traceSource = remember(key.id) { ScrollTrace.label(key.id) }
+    remember(scroll) { scroll.trace = { line -> ScrollTrace.note(traceSource, line()) }; true }
     val options = remember(scroll) { MutableStateFlow(scroll.options) }
     fun publishOptions() {
         options.value = scroll.options
@@ -287,6 +297,18 @@ fun ConversationScreen(
     // The two things the screen must DO about every frame, rather than draw, in iOS's order: notice
     // the buffer disappearing (or moving), ask for its history, ask for a jump's slice, latch the
     // read boundary, and mark read. Side effects, never Compose state — straight off the publisher.
+    // A spinner at the far end — the oldest loaded line's side — while an older page or the
+    // buffer's first backlog is in the air (lurker-ios#247). A window the event filters thin to a
+    // few lines parks those lines at the bottom with nothing above them until the top-up lands;
+    // this says that the nothing is on its way, rather than that the buffer begins here.
+    var olderLoading by remember(key) { mutableStateOf(false) }
+    fun refreshOlderLoading(state: ChatState) {
+        val buffer = state.buffers[key.id]
+        olderLoading = buffer != null && (
+            (buffer.hasMoreOlder && model.isLoadingOlder(key)) ||
+                (kind.hydratesOnDemand && !buffer.hydrated && state.connection == SocketStatus.Connected)
+            )
+    }
     val currentOnGone by rememberUpdatedState(onGone)
     val currentOnMoved by rememberUpdatedState(onMoved)
     LaunchedEffect(model, key) {
@@ -320,12 +342,14 @@ fun ConversationScreen(
             // media source checks it live, see `MediaSource.of`.)
             instanceHasPreviews = model.features.linkPreviews
             val seq = frameSeq.next()
+            scroll.tracing = ScrollTrace.isEnabled
             // A pending jump hydrates through its `around` slice instead: asking for both would
             // double-fetch, and the latest slice would fight the jump.
             hydrate.check(state.connection, state.buffers[key.id], state.burstGeneration, jumpPending = scroll.jumpPending)
                 ?.let(model::hydrate)
             val step = scroll.onFrame(state, key, seq)
             jobs.lastFrame = state
+            refreshOlderLoading(state)
             step.loadAround?.let { anchor -> model.loadAround(key, anchorId = anchor) }
             if (step.loadLatest) model.loadLatest(key)
             if (step.optionsChanged) publishOptions()
@@ -438,7 +462,10 @@ fun ConversationScreen(
         when (val landing = scroll.landing(current)) {
             ConversationScroll.Landing.Idle, ConversationScroll.Landing.Wait -> Unit
             // Exact in one pass: the reverse layout puts item 0 at the bottom edge by construction.
-            ConversationScroll.Landing.AtTail -> listState.requestScrollToItem(0)
+            ConversationScroll.Landing.AtTail -> {
+                traceGlue(traceSource) { "land at tail" }
+                listState.requestScrollToItem(0)
+            }
             is ConversationScroll.Landing.Converge -> {
                 // A superseded chain would stop on its own at its next pass; it needn't scroll first.
                 jobs.converging?.cancel()
@@ -501,7 +528,12 @@ fun ConversationScreen(
         val wasNearBottom = ConversationScroll.nearBottomBefore(
             visible, drawn, firstIndex, firstOffset, followSlop, lastKnown = jobs.nearBottom,
         )
+        scroll.tracing = ScrollTrace.isEnabled
         val step = scroll.onRows(built, wasNearBottom)
+        traceGlue(traceSource) {
+            "accept seq=${built.seq} rows=${built.rows.size} describes=${LayoutFacts.describes(visible, drawn)} first=$firstIndex/$firstOffset " +
+                "wasNearBottom=$wasNearBottom lastKnown=${jobs.nearBottom} follow=${step.follow}"
+        }
         if (step.optionsChanged) publishOptions()
         val hold = if (step.follow || scroll.landingPending) {
             null
@@ -522,6 +554,7 @@ fun ConversationScreen(
         if (step.follow) {
             listState.requestScrollToItem(0)
         } else if (hold != null) {
+            traceGlue(traceSource) { "hold index=${hold.index} offset=${hold.scrollOffset} thenScrollBy=${hold.thenScrollBy}" }
             listState.requestScrollToItem(hold.index, hold.scrollOffset)
             if (hold.thenScrollBy != 0) {
                 scope.launch {
@@ -534,6 +567,7 @@ fun ConversationScreen(
         // "Loading messages…" while the page is in the air rather than claiming the buffer is empty.
         forceLoading = scroll.wantsTopUp(built, online = ConversationScroll.mayWrite(model.state)) &&
             model.loadOlder(key, showingClearedHistory = scroll.options.showsClearedHistory)
+        refreshOlderLoading(model.state)
         land()
     }
 
@@ -585,8 +619,20 @@ fun ConversationScreen(
                     online = ConversationScroll.mayWrite(model.state),
                 )
                 pills = step.pills
+                if (ScrollTrace.isEnabled) {
+                    val body = "layout near=${facts.nearBottom} divVisible=${facts.dividerVisible} divAbove=${facts.dividerAbove} " +
+                        "older=${facts.pagesOlder} newer=${facts.pagesNewer} rows=${rows.rows.size} " +
+                        "first=${info.visibleItemsInfo.firstOrNull()?.index}/${info.visibleItemsInfo.firstOrNull()?.offset} " +
+                        "seen=${scroll.dividerSeen} landing=${scroll.landingPending} jump=${scroll.jumpPending} " +
+                        "-> latest=${step.pills.showsLatest} unread=${step.pills.showsUnread} badge=${step.pills.newCount}"
+                    if (body != jobs.lastTraceBody) {
+                        jobs.lastTraceBody = body
+                        ScrollTrace.note(traceSource, body)
+                    }
+                }
                 if (step.loadOlder) model.loadOlder(key, showingClearedHistory = scroll.options.showsClearedHistory)
                 if (step.loadNewer) model.loadNewer(key)
+                if (step.loadOlder) refreshOlderLoading(model.state)
             }
     }
 
@@ -834,6 +880,7 @@ fun ConversationScreen(
         empty = ConversationModel.emptyState(kind, inputs.buffer?.target ?: key.target),
         listState = listState,
         pills = pills,
+        olderLoading = olderLoading,
         flash = flash,
         onJumpToUnread = { if (scroll.jumpToFirstUnread()) startJump() },
         onJumpToLatest = ::jumpToLatest,
@@ -903,6 +950,9 @@ private class Jobs(
 
     /** The last frame the frame stream processed — what a tap's request is judged against. */
     var lastFrame: ChatState? = null
+
+    /** The last layout line the trace wrote, so a scroll's hundred unchanged ticks write nothing. */
+    var lastTraceBody: String = ""
 }
 
 /** What the layout stream reads, in one value, so a change to any of it re-decides. */
@@ -921,6 +971,12 @@ private fun scrollSaver(kind: BufferKind): Saver<ConversationScroll, Conversatio
     Saver(save = { it.memory() }, restore = { ConversationScroll(kind, it) })
 
 /** The laid-out items, in plain numbers. */
+/** A line of the glue's trace, built only while the trace is on — inline, so a switched-off trace allocates nothing. */
+@Suppress("NOTHING_TO_INLINE")
+private inline fun traceGlue(source: String, line: () -> String) {
+    if (ScrollTrace.isEnabled) ScrollTrace.note(source, line())
+}
+
 private fun visibleItems(listState: LazyListState): List<VisibleItem> =
     listState.layoutInfo.visibleItemsInfo.map { VisibleItem(it.key, it.index, it.offset, it.size) }
 
@@ -1064,6 +1120,8 @@ internal fun ConversationContent(
     empty: StateModel,
     listState: LazyListState,
     pills: ConversationScroll.Pills = ConversationScroll.Pills(),
+    /** An older page (or the first backlog) is on its way: a spinner over the list's top edge. */
+    olderLoading: Boolean = false,
     flash: RowFlash? = null,
     onConnectionBannerShown: (Boolean) -> Unit = {},
     onJumpToUnread: () -> Unit = {},
@@ -1197,6 +1255,17 @@ internal fun ConversationContent(
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = top + 8.dp, start = 16.dp, end = 16.dp),
                     onShownChange = onConnectionBannerShown,
                 )
+                // Older history on its way: over the list's top edge, where the page will land. An
+                // overlay rather than a list item, because the position machine reads the lazy
+                // list's layout on the promise that every laid-out item is one of `rows`
+                // (`LayoutFacts.describes`, `awaitLayoutOf`); a spinner item would blind it for
+                // exactly as long as it showed. The banners' slot wins when either wants it.
+                if (olderLoading && rows.isNotEmpty() && banner == ConnectionBannerState.Hidden && !pills.showsUnread) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.align(Alignment.TopCenter).padding(top = top + 12.dp).size(20.dp),
+                        strokeWidth = 2.dp,
+                    )
+                }
                 UnreadBanner(
                     visible = pills.showsUnread,
                     onClick = onJumpToUnread,
