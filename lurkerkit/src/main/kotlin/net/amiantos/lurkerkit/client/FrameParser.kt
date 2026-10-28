@@ -1468,6 +1468,7 @@ internal object FrameParser {
             hasMoreOlder = obj.bool("hasMoreOlder", obj.bool("hasMore")),
             hasMoreNewer = obj.bool("hasMoreNewer"),
             speakers = parseSpeakers(obj),
+            anchorMissing = obj.bool("anchorMissing"),
         )
     }
 

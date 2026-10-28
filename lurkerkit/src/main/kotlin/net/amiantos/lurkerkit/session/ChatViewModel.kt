@@ -1961,6 +1961,12 @@ class ChatViewModel(
      * any second apply before the reply landed — a filtered live message, a read-state frame —
      * re-asked, got false, and resolved the placeholder to empty.
      */
+    /**
+     * Whether an older page for [key] is in the air — what a screen shows a spinner for at the far
+     * end of a list the filters thinned (lurker-ios#247).
+     */
+    fun isLoadingOlder(key: BufferKey): Boolean = loadingOlder.contains(key.id)
+
     fun loadOlder(key: BufferKey, showingClearedHistory: Boolean = false): Boolean {
         if (loadingOlder.contains(key.id)) return true
         val buffer = store.state.buffers[key.id]

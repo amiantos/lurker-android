@@ -433,6 +433,17 @@ class FrameParserTests {
         assertEquals(listOf("old"), events.map { it.text })
         assertTrue(hasMoreOlder)
         assertFalse(hasMoreNewer)
+        assertFalse(frame.anchorMissing, "absent means the anchor was found")
+    }
+
+    @Test
+    fun testHistoryAroundCarriesAnchorMissing() {
+        val frame = FrameParser.parseWs(
+            """{"kind":"history","networkId":1,"target":"#lurker","mode":"around","hasMoreOlder":false,"hasMoreNewer":false,"anchorMissing":true,"events":[]}""",
+        )
+        if (frame !is ServerFrame.History) fail("expected history, got $frame")
+        assertEquals(HistoryMode.Around, frame.mode)
+        assertTrue(frame.anchorMissing)
     }
 
     @Test

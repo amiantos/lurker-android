@@ -66,10 +66,12 @@ class LurkerStoreTests {
         hasMoreOlder: Boolean,
         hasMoreNewer: Boolean,
         speakers: List<Speaker>? = null,
+        anchorMissing: Boolean = false,
     ): ServerFrame =
         ServerFrame.History(
             networkId = 1, target = "#lurker", events = events,
             mode = mode, hasMoreOlder = hasMoreOlder, hasMoreNewer = hasMoreNewer, speakers = speakers,
+            anchorMissing = anchorMissing,
         )
 
     private val emptySnapshot: ServerFrame =
@@ -196,6 +198,59 @@ class LurkerStoreTests {
             ),
         )
         assertEquals(listOf("z"), texts(store))
+    }
+
+    // `Buffer.historyRevision` is the kit saying "a reply landed" — what `ReplyWatch` matches a jump's or
+    // a re-attach's request against. Only the slice-replacing modes count: a page already in flight when
+    // a jump starts must not answer the jump. A backlog (the burst's, not an answer to anything) carries
+    // the count rather than resetting it, or the next reply would hide behind a lower number.
+    @Test
+    fun testSliceReplacingHistoryRepliesAdvanceTheRevisionAndABacklogCarriesIt() {
+        val store = LurkerStore()
+        store.apply(channelBuffer(hydrated = true, messages = listOf(msg(5, "e"), msg(6, "f"))))
+        assertEquals(0, store.state.buffers[chanKey]!!.historyRevision)
+        store.apply(history(events = listOf(msg(3, "c"), msg(4, "d")), mode = HistoryMode.Before, hasMoreOlder = true, hasMoreNewer = false))
+        assertEquals(0, store.state.buffers[chanKey]!!.historyRevision, "a page is not a reply anyone counts")
+        // A reply that changes nothing in the list still counts — that is the whole point.
+        store.apply(
+            history(
+                events = listOf(msg(3, "c"), msg(4, "d"), msg(5, "e"), msg(6, "f")),
+                mode = HistoryMode.Around, hasMoreOlder = true, hasMoreNewer = false,
+            ),
+        )
+        assertEquals(1, store.state.buffers[chanKey]!!.historyRevision)
+        store.apply(history(events = listOf(msg(7, "g")), mode = HistoryMode.After, hasMoreOlder = true, hasMoreNewer = false))
+        assertEquals(1, store.state.buffers[chanKey]!!.historyRevision, "nor is a newer page")
+        store.apply(
+            history(
+                events = listOf(msg(5, "e"), msg(6, "f"), msg(7, "g")),
+                mode = HistoryMode.Latest, hasMoreOlder = true, hasMoreNewer = false,
+            ),
+        )
+        assertEquals(2, store.state.buffers[chanKey]!!.historyRevision)
+        store.apply(live("#lurker", msg(8, "h")))
+        assertEquals(2, store.state.buffers[chanKey]!!.historyRevision, "a live line is not a reply")
+        store.apply(channelBuffer(hydrated = true, messages = listOf(msg(8, "h"))))
+        assertEquals(2, store.state.buffers[chanKey]!!.historyRevision, "a backlog carries the count")
+    }
+
+    // A pruned anchor's reply says nothing about the buffer; it used to wipe one.
+    @Test
+    fun testAnchorMissingAroundReplyLeavesTheBufferAloneAndCountsAsAReply() {
+        val store = LurkerStore()
+        store.apply(channelBuffer(hydrated = true, messages = listOf(msg(5, "e"), msg(6, "f"))))
+        store.apply(history(events = emptyList(), mode = HistoryMode.Around, hasMoreOlder = false, hasMoreNewer = false, anchorMissing = true))
+        val buffer = store.state.buffers[chanKey]!!
+        assertEquals(listOf("e", "f"), texts(store))
+        assertTrue(buffer.hasMoreOlder, "the reply's 'no history' is about the anchor, not the buffer")
+        assertFalse(buffer.hasMoreNewer)
+        assertEquals(1, buffer.historyRevision)
+        // A shell stays a shell, so the hydrate still asks for the latest slice afterwards.
+        val shell = LurkerStore()
+        shell.apply(channelBuffer(hydrated = false, messages = emptyList()))
+        shell.apply(history(events = emptyList(), mode = HistoryMode.Around, hasMoreOlder = false, hasMoreNewer = false, anchorMissing = true))
+        assertFalse(shell.state.buffers[chanKey]!!.hydrated)
+        assertEquals(1, shell.state.buffers[chanKey]!!.historyRevision)
     }
 
     @Test
