@@ -18,7 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.remember
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.Modifier
@@ -373,8 +373,9 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
     // and narration too, so bodies stay on one edge — and only a run's first row draws a tile, centred
     // on its head and first body line, the two lines a short message's wash covers. The tile at the
     // side margin where the text otherwise starts, the web's `--space-4`, a hairline, then `--space-5`
-    // before the text. The hairline runs the row's whole height, gaps included, so the cells abutting
-    // make it one line — on the row rather than the list, so a washed row doesn't cut it.
+    // before the text. The hairline runs the row's whole height — the block gap it ends with included,
+    // so the rows abutting make it one line — and is drawn after the row's content, so a washed row
+    // doesn't cut it. On the row rather than the list, as the web's `.line::before` is.
     val avatars = context.avatars
     val gutter = if (avatars != null) AvatarColumn.gutter(avatars.size) else 0.dp
     val hairline = colors.border
@@ -383,23 +384,25 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
         modifier
             .then(pressable)
             .fillMaxWidth()
+            .then(
+                if (avatars == null) {
+                    Modifier
+                } else {
+                    // Before the padding, so the line covers the gap under the block too.
+                    Modifier.drawWithContent {
+                        drawContent()
+                        val x = (CompactMetrics.side + AvatarColumn.hairline(avatars.size)).toPx()
+                        drawLine(hairline, start = Offset(x, 0f), end = Offset(x, size.height), strokeWidth = 1.dp.toPx())
+                    }
+                },
+            )
             .padding(bottom = if (plan.endsBlock) metrics.blockGap - metrics.wash * 2 else 0.dp),
     ) {
         Box(
             Modifier
                 .fillMaxWidth()
                 // No zebra: the author header marks where a block starts. Only a matched rule paints.
-                .background(if (plan.highlighted) colors.highlightBubble else Color.Transparent)
-                .then(
-                    if (avatars == null) {
-                        Modifier
-                    } else {
-                        Modifier.drawBehind {
-                            val x = (CompactMetrics.side + AvatarColumn.hairline(avatars.size)).toPx()
-                            drawLine(hairline, start = Offset(x, 0f), end = Offset(x, size.height), strokeWidth = 1.dp.toPx())
-                        }
-                    },
-                ),
+                .background(if (plan.highlighted) colors.highlightBubble else Color.Transparent),
         ) {
         Column(
             Modifier
