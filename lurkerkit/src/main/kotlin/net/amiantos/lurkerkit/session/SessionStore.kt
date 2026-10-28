@@ -66,7 +66,10 @@ data class PendingSignIn(
  *
  * Best-effort, as the Keychain calls are: no method may throw. A failure is a no-op for
  * [write] and [delete] and `null` for [read] — at worst the user signs in again next launch,
- * and it must never crash sign-in.
+ * and it must never crash sign-in. ⚠ But a failed [write] is loud in the log, status only —
+ * never the data: a device where the write fails is signed out on every launch with nothing to
+ * explain it, and that line is the one trace that says why (LurkerKit logs the Keychain's
+ * `OSStatus` at the same point; here the implementation holds the failure, so it logs it).
  */
 interface SecureStorage {
     /** The blob stored under [account], or null when there is none (or it can't be read). */
@@ -98,7 +101,9 @@ class SessionStore(private val storage: SecureStorage) {
     fun save(session: PersistedSession) {
         val data = SessionCodec.encode(session) ?: return
         // Replace any existing item. Port note: on iOS a Keychain add fails on a duplicate, so
-        // LurkerKit deletes first; `SecureStorage.write` replaces, so one call does both.
+        // LurkerKit deletes first; `SecureStorage.write` replaces, so one call does both. A write
+        // that fails is logged by the implementation (`SecureStorage`), where LurkerKit logs the
+        // add's `OSStatus` here.
         storage.write(account, data)
     }
 
