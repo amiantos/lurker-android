@@ -95,6 +95,7 @@ import net.amiantos.lurker.platform.LocalAppEvents
 import net.amiantos.lurker.platform.LocalToastCenter
 import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.actions.MessageActionsHost
+import net.amiantos.lurker.ui.actions.MessageActionsModel
 import net.amiantos.lurker.ui.actions.rememberMessageActionsState
 import net.amiantos.lurker.ui.composer.ComposerBar
 import net.amiantos.lurker.ui.composer.ComposerModel
@@ -105,6 +106,7 @@ import net.amiantos.lurker.ui.feeds.ConversationViewsActions
 import net.amiantos.lurker.ui.composer.rememberComposerState
 import net.amiantos.lurker.ui.media.MediaSource
 import net.amiantos.lurkerkit.model.AvatarSets
+import net.amiantos.lurkerkit.model.MessageActions
 import net.amiantos.lurker.ui.message.rememberAvatarSize
 import net.amiantos.lurker.ui.message.AvatarSpec
 import net.amiantos.lurker.ui.message.AvatarContext
@@ -126,6 +128,7 @@ import net.amiantos.lurker.ui.message.MessageListLayout
 import net.amiantos.lurker.ui.message.MessageListRow
 import net.amiantos.lurker.ui.message.ReactionContext
 import net.amiantos.lurker.ui.message.RowPress
+import net.amiantos.lurker.ui.message.SwipeReply
 import net.amiantos.lurker.ui.message.previewMessageRows
 import net.amiantos.lurker.ui.message.rememberMessageTextStyle
 import net.amiantos.lurker.ui.shell.ConnectionBanner
@@ -732,11 +735,43 @@ fun ConversationScreen(
         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
     }
 
+
+    // Server errors are `MainScaffold`'s (`ServerErrorDialog`): always composed, so one never waits
+    // unseen behind the buffer list on a phone and surfaces later over an unrelated conversation.
+
+    // MARK: - Composer
+
+    // Carry the reader to where the composer's line will be: a send, or the keyboard coming up to write
+    // one. Detached, re-attach (the line won't be in the slice); else down to the tail, unless they
+    // asked to keep their place up in history (`chat.keep_position_on_send`). "At the tail" is the
+    // layout's own answer (`jobs.nearBottom`, which counts the bar's reservation), not one re-derived
+    // here from the first visible item.
+    fun carryToComposer() {
+        val detached = model.state.buffers[key.id]?.hasMoreNewer == true
+        val keeps = ComposerModel.keepsPositionWhileReading(model.state.settings, nearBottom = jobs.nearBottom)
+        when (ComposerModel.sendScroll(detached = detached, keepsPosition = keeps)) {
+            SendScroll.Reattach -> jumpToLatest()
+            // The echo lands a moment later, over the socket; being at the tail when it does is what
+            // makes the build follow it rather than count it on the pill.
+            SendScroll.ToBottom -> if (current.rows.isNotEmpty() && !scroll.landingPending) listState.requestScrollToItem(0)
+            SendScroll.Stay -> Unit
+        }
+    }
+
+    val composer = rememberComposerState(
+        model = model,
+        key = key,
+        kind = kind,
+        onWillSend = ::carryToComposer,
+        onOpenBuffer = onOpenBuffer,
+        onShowProfile = onShowProfile,
+    )
+
     // Keyed on everything the resolvers capture, the sheets' state and the keyboard's included.
     // Which previews draw: both settings and the instance's flag (`PreviewToggles`). A preview landing
     // doesn't come through here — each row reads its own URLs' versions (`PreviewUpdates`).
     val previewToggles = PreviewToggles.resolve(instanceHasPreviews, inputs.settings)
-    val context = remember(rows, inputs, highlighter, style, day, actions, keyboard, focusManager, haptics, previewToggles, media, openMedia, avatars) {
+    val context = remember(rows, inputs, highlighter, style, day, actions, keyboard, focusManager, haptics, previewToggles, media, openMedia, avatars, composer) {
         MessageListContext(
             style = style,
             networkName = { message -> ConversationModel.networkName(message, key, inputs.networks) },
@@ -773,43 +808,20 @@ fun ConversationScreen(
                 onOpen = { message -> if (actions.showReactions(message)) beforeSheet() },
             ),
             onLongPress = ::onLongPress,
+            // The same Reply the sheet's row runs, without the sheet: the menu's own rule says which
+            // lines take one, and the composer's `startReply` is where it lands.
+            swipeReply = SwipeReply(
+                offers = { message ->
+                    MessageActions.replyAction(message, MessageActionsModel.scope(model.state, key, isBookmarked = false)) != null
+                },
+                reply = composer::startReply,
+            ),
             zone = day.zone,
             today = day.today,
             previews = previewToggles?.let { PreviewContext(model.linkPreviews, media, it) },
             onOpenMedia = openMedia,
         )
     }
-
-    // Server errors are `MainScaffold`'s (`ServerErrorDialog`): always composed, so one never waits
-    // unseen behind the buffer list on a phone and surfaces later over an unrelated conversation.
-
-    // MARK: - Composer
-
-    // Carry the reader to where the composer's line will be: a send, or the keyboard coming up to write
-    // one. Detached, re-attach (the line won't be in the slice); else down to the tail, unless they
-    // asked to keep their place up in history (`chat.keep_position_on_send`). "At the tail" is the
-    // layout's own answer (`jobs.nearBottom`, which counts the bar's reservation), not one re-derived
-    // here from the first visible item.
-    fun carryToComposer() {
-        val detached = model.state.buffers[key.id]?.hasMoreNewer == true
-        val keeps = ComposerModel.keepsPositionWhileReading(model.state.settings, nearBottom = jobs.nearBottom)
-        when (ComposerModel.sendScroll(detached = detached, keepsPosition = keeps)) {
-            SendScroll.Reattach -> jumpToLatest()
-            // The echo lands a moment later, over the socket; being at the tail when it does is what
-            // makes the build follow it rather than count it on the pill.
-            SendScroll.ToBottom -> if (current.rows.isNotEmpty() && !scroll.landingPending) listState.requestScrollToItem(0)
-            SendScroll.Stay -> Unit
-        }
-    }
-
-    val composer = rememberComposerState(
-        model = model,
-        key = key,
-        kind = kind,
-        onWillSend = ::carryToComposer,
-        onOpenBuffer = onOpenBuffer,
-        onShowProfile = onShowProfile,
-    )
 
     // In-app notifications in the status row (lurker#1098). Whether the row can be seen: this screen
     // is the destination, started, with nothing over it — neither a dialog from either pane, nor a

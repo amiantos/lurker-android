@@ -77,6 +77,11 @@ class MessageListContext(
      * Null on screens with no actions sheet; the rows then take no long press at all.
      */
     val onLongPress: ((RowPress) -> Unit)? = null,
+    /**
+     * Swipe a line toward the trailing edge to reply to it (lurker#1248), or null on screens with no
+     * composer to reply from — see [SwipeReply].
+     */
+    val swipeReply: SwipeReply? = null,
     /** Which time zone a header's time and a day are read in. */
     val zone: ZoneId = ZoneId.systemDefault(),
     /** Today, as the day labels read it — the screen advances it at midnight. */

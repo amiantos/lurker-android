@@ -160,32 +160,7 @@ object MessageActions {
     fun build(message: Message, scope: MessageActionScope): List<MessageAction> {
         val actions = mutableListOf<MessageAction>()
 
-        // Reply stays speech-only: narration names its actor inside the sentence rather than
-        // speaking, and a line with no nick has nobody to answer.
-        //
-        // To someone else in a channel it always does something — at the least it addresses them,
-        // and the address is what a line without its reply tag still says. On your own line ("to
-        // clarify what I said above", lurker#997) or in a DM (lurker#1015) there's no address, so
-        // the reply TAG is all it is, and it's offered only where one would go out: a line the
-        // server stamped, on a network that carries a reply's tag right now (`canReply` — not
-        // `canAddReaction`: irc.so takes the reply tag without echo-message). The web's rule.
-        val nick = message.nick
-        if (message.type.isSpeech && nick != null && nick.isNotEmpty()) {
-            val unaddressed = message.isSelf || Replies.isPrivate(scope.target)
-            if (!unaddressed) {
-                actions.add(
-                    MessageAction(key = MessageActionKey.Reply, title = "Reply to $nick", symbol = "arrowshape.turn.up.left")
-                )
-            } else if (scope.support.canReply && Replies.replyable(message, target = scope.target)) {
-                actions.add(
-                    MessageAction(
-                        key = MessageActionKey.Reply,
-                        title = if (message.isSelf) "Reply to yourself" else "Reply to $nick",
-                        symbol = "arrowshape.turn.up.left",
-                    )
-                )
-            }
-        }
+        replyAction(message, scope)?.let(actions::add)
 
         // React (lurker-ios#183): a reaction names the line's msgid, so it needs a line the
         // server stamped, in a conversation, not encrypted, on a network that takes a new one
@@ -277,6 +252,37 @@ object MessageActions {
         }
 
         return actions
+    }
+
+    /**
+     * The Reply row for [message], or null where the line offers none — the one answer both ways
+     * in share: the long-press menu ([build]) and the swipe on a row (lurker#1248). A swipe on a
+     * line this says null for doesn't move, so the two can't drift: whatever the menu would
+     * offer, the swipe does.
+     *
+     * Reply stays speech-only: narration names its actor inside the sentence rather than
+     * speaking, and a line with no nick has nobody to answer.
+     *
+     * To someone else in a channel it always does something — at the least it addresses them,
+     * and the address is what a line without its reply tag still says. On your own line ("to
+     * clarify what I said above", lurker#997) or in a DM (lurker#1015) there's no address, so
+     * the reply TAG is all it is, and it's offered only where one would go out: a line the
+     * server stamped, on a network that carries a reply's tag right now (`canReply` — not
+     * `canAddReaction`: irc.so takes the reply tag without echo-message). The web's rule.
+     */
+    fun replyAction(message: Message, scope: MessageActionScope): MessageAction? {
+        val nick = message.nick
+        if (!message.type.isSpeech || nick.isNullOrEmpty()) return null
+        val unaddressed = message.isSelf || Replies.isPrivate(scope.target)
+        if (!unaddressed) {
+            return MessageAction(key = MessageActionKey.Reply, title = "Reply to $nick", symbol = "arrowshape.turn.up.left")
+        }
+        if (!scope.support.canReply || !Replies.replyable(message, target = scope.target)) return null
+        return MessageAction(
+            key = MessageActionKey.Reply,
+            title = if (message.isSelf) "Reply to yourself" else "Reply to $nick",
+            symbol = "arrowshape.turn.up.left",
+        )
     }
 
     /**
