@@ -283,24 +283,32 @@ class MessageActionsTests {
         val dm = MessageActionScope(networkId = 1, isBookmarked = false, target = "alice", support = support)
         val dmNoTag = MessageActionScope(networkId = 1, isBookmarked = false, target = "alice")
         val stamped = Message(id = 1, type = EventType.Message, nick = "alice", text = "hi", msgid = "m1")
+        val stampedSelf = Message(id = 1, type = EventType.Message, nick = "alice", text = "hi", isSelf = true, msgid = "m1")
         val lines = listOf(
             msg() to scope(),
             msg(type = EventType.Notice) to scope(),
+            msg(type = EventType.Action) to scope(),
             msg(type = EventType.Join) to scope(),
             msg(nick = null) to scope(),
             msg(isSelf = true) to scope(),
             msg(isSelf = true) to channel,
-            Message(id = 1, type = EventType.Message, nick = "alice", text = "hi", isSelf = true, msgid = "m1") to channel,
+            stampedSelf to channel,
             stamped to dm,
             stamped to dmNoTag,
+            stampedSelf to dm,
+            stampedSelf to dmNoTag,
         )
         var offered = 0
         for ((message, scope) in lines) {
             val menu = MessageActions.build(message, scope).firstOrNull { it.key == MessageActionKey.Reply }
             assertEquals(menu, MessageActions.replyAction(message, scope), "${message.type} in ${scope.target}")
+            assertEquals(
+                menu, MessageActions.replyAction(message, target = scope.target, canReply = scope.support.canReply),
+                "the narrow form, ${message.type} in ${scope.target}",
+            )
             if (menu != null) offered += 1
         }
-        assertEquals(4, offered, "the fixture should cover both answers")
+        assertTrue(offered > 0 && offered < lines.size, "the fixture should cover both answers ($offered of ${lines.size})")
     }
 
     // MARK: - Running

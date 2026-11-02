@@ -60,6 +60,7 @@ import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -95,7 +96,6 @@ import net.amiantos.lurker.platform.LocalAppEvents
 import net.amiantos.lurker.platform.LocalToastCenter
 import net.amiantos.lurker.prefs.UiPreferences
 import net.amiantos.lurker.ui.actions.MessageActionsHost
-import net.amiantos.lurker.ui.actions.MessageActionsModel
 import net.amiantos.lurker.ui.actions.rememberMessageActionsState
 import net.amiantos.lurker.ui.composer.ComposerBar
 import net.amiantos.lurker.ui.composer.ComposerModel
@@ -771,7 +771,8 @@ fun ConversationScreen(
     // Which previews draw: both settings and the instance's flag (`PreviewToggles`). A preview landing
     // doesn't come through here — each row reads its own URLs' versions (`PreviewUpdates`).
     val previewToggles = PreviewToggles.resolve(instanceHasPreviews, inputs.settings)
-    val context = remember(rows, inputs, highlighter, style, day, actions, keyboard, focusManager, haptics, previewToggles, media, openMedia, avatars, composer) {
+    val replyArrow = rememberVectorPainter(LurkerIcons.Reply)
+    val context = remember(rows, inputs, highlighter, style, day, actions, keyboard, focusManager, haptics, previewToggles, media, openMedia, avatars, composer, replyArrow) {
         MessageListContext(
             style = style,
             networkName = { message -> ConversationModel.networkName(message, key, inputs.networks) },
@@ -811,8 +812,9 @@ fun ConversationScreen(
             // The same Reply the sheet's row runs, without the sheet: the menu's own rule says which
             // lines take one, and the composer's `startReply` is where it lands.
             swipeReply = SwipeReply(
+                arrow = replyArrow,
                 offers = { message ->
-                    MessageActions.replyAction(message, MessageActionsModel.scope(model.state, key, isBookmarked = false)) != null
+                    MessageActions.replyAction(message, target = key.target, canReply = model.state.canReply(networkId = key.networkId)) != null
                 },
                 reply = composer::startReply,
             ),

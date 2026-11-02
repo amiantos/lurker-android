@@ -404,11 +404,17 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
     // scroller that spans its dividers, which neither app does.
     // Swipe to reply (lurker#1248): only a row standing for one message, and only where the screen
     // has a composer to reply from. Whether THIS line takes one is asked when a swipe takes hold.
+    val blockGapBelow = if (plan.endsBlock) metrics.blockGap - metrics.wash * 2 else 0.dp
     val swipeReply = context.swipeReply
     val swipeable = if (swipeReply == null || message == null) {
         Modifier
     } else {
-        Modifier.swipeToReply(offers = { swipeReply.offers(message) }, onReply = { swipeReply.reply(message) })
+        Modifier.swipeToReply(
+            arrow = swipeReply.arrow,
+            bottomInset = blockGapBelow,
+            offers = { swipeReply.offers(message) },
+            onReply = { swipeReply.reply(message) },
+        )
     }
 
     val avatars = context.avatars
@@ -441,7 +447,7 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                     }
                 },
             )
-            .padding(bottom = if (plan.endsBlock) metrics.blockGap - metrics.wash * 2 else 0.dp),
+            .padding(bottom = blockGapBelow),
     ) {
         Box(
             Modifier

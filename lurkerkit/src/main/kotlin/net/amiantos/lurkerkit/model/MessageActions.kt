@@ -270,14 +270,22 @@ object MessageActions {
      * server stamped, on a network that carries a reply's tag right now (`canReply` — not
      * `canAddReaction`: irc.so takes the reply tag without echo-message). The web's rule.
      */
-    fun replyAction(message: Message, scope: MessageActionScope): MessageAction? {
+    fun replyAction(message: Message, scope: MessageActionScope): MessageAction? =
+        replyAction(message, target = scope.target, canReply = scope.support.canReply)
+
+    /**
+     * [replyAction] on the two things the rule reads — the buffer's target and whether a reply's
+     * tag goes out on its network right now — so a caller with no menu to build (the swipe)
+     * needn't invent the rest of a scope to ask.
+     */
+    fun replyAction(message: Message, target: String, canReply: Boolean): MessageAction? {
         val nick = message.nick
         if (!message.type.isSpeech || nick.isNullOrEmpty()) return null
-        val unaddressed = message.isSelf || Replies.isPrivate(scope.target)
+        val unaddressed = message.isSelf || Replies.isPrivate(target)
         if (!unaddressed) {
             return MessageAction(key = MessageActionKey.Reply, title = "Reply to $nick", symbol = "arrowshape.turn.up.left")
         }
-        if (!scope.support.canReply || !Replies.replyable(message, target = scope.target)) return null
+        if (!canReply || !Replies.replyable(message, target = target)) return null
         return MessageAction(
             key = MessageActionKey.Reply,
             title = if (message.isSelf) "Reply to yourself" else "Reply to $nick",
