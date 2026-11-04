@@ -402,6 +402,21 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
     // gap's padding, and after the content so a matched block's wash stays under it. On the row
     // rather than the list, as the web's `.line::before` is; the web also paints a copy on the
     // scroller that spans its dividers, which neither app does.
+    // Swipe to reply (lurker#1248): only a row standing for one message, and only where the screen
+    // has a composer to reply from. Whether THIS line takes one is asked when a swipe takes hold.
+    val blockGapBelow = if (plan.endsBlock) metrics.blockGap - metrics.wash * 2 else 0.dp
+    val swipeReply = context.swipeReply
+    val swipeable = if (swipeReply == null || message == null) {
+        Modifier
+    } else {
+        Modifier.swipeToReply(
+            arrow = swipeReply.arrow,
+            bottomInset = blockGapBelow,
+            offers = { swipeReply.offers(message) },
+            onReply = { swipeReply.reply(message) },
+        )
+    }
+
     val avatars = context.avatars
     val gutter = if (avatars != null) AvatarColumn.gutter(avatars.size) else 0.dp
     val hairline = colors.border
@@ -409,6 +424,8 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
     Column(
         modifier
             .then(pressable)
+            // Inside the press and outside the rest: the hairline and the wash slide with the text.
+            .then(swipeable)
             .fillMaxWidth()
             .then(
                 if (avatars == null) {
@@ -430,7 +447,7 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                     }
                 },
             )
-            .padding(bottom = if (plan.endsBlock) metrics.blockGap - metrics.wash * 2 else 0.dp),
+            .padding(bottom = blockGapBelow),
     ) {
         Box(
             Modifier

@@ -22,11 +22,14 @@ import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
+import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
@@ -60,6 +63,7 @@ import androidx.compose.ui.focus.focusTarget
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.vector.rememberVectorPainter
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -105,6 +109,7 @@ import net.amiantos.lurker.ui.feeds.ConversationViewsActions
 import net.amiantos.lurker.ui.composer.rememberComposerState
 import net.amiantos.lurker.ui.media.MediaSource
 import net.amiantos.lurkerkit.model.AvatarSets
+import net.amiantos.lurkerkit.model.MessageActions
 import net.amiantos.lurker.ui.message.rememberAvatarSize
 import net.amiantos.lurker.ui.message.AvatarSpec
 import net.amiantos.lurker.ui.message.AvatarContext
@@ -126,6 +131,7 @@ import net.amiantos.lurker.ui.message.MessageListLayout
 import net.amiantos.lurker.ui.message.MessageListRow
 import net.amiantos.lurker.ui.message.ReactionContext
 import net.amiantos.lurker.ui.message.RowPress
+import net.amiantos.lurker.ui.message.SwipeReply
 import net.amiantos.lurker.ui.message.previewMessageRows
 import net.amiantos.lurker.ui.message.rememberMessageTextStyle
 import net.amiantos.lurker.ui.shell.ConnectionBanner
@@ -578,10 +584,14 @@ fun ConversationScreen(
     }
     // MARK: - Layouts
 
-    // The reader taking hold of the list releases a converging jump — see `onUserDrag`.
+    // The reader taking hold of the list releases a converging jump — see `onUserDrag` — and a
+    // reveal still waiting on the keyboard (counted, so the wait can tell a drag happened).
+    val userDrags = remember { intArrayOf(0) }
     LaunchedEffect(listState, scroll) {
         listState.interactionSource.interactions.collect { interaction ->
-            if (interaction is DragInteraction.Start && scroll.onUserDrag()) jobs.converging?.cancel()
+            if (interaction !is DragInteraction.Start) return@collect
+            userDrags[0]++
+            if (scroll.onUserDrag()) jobs.converging?.cancel()
         }
     }
     LaunchedEffect(listState, scroll) {
@@ -732,11 +742,65 @@ fun ConversationScreen(
         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
     }
 
+
+    // Server errors are `MainScaffold`'s (`ServerErrorDialog`): always composed, so one never waits
+    // unseen behind the buffer list on a phone and surfaces later over an unrelated conversation.
+
+    // MARK: - Composer
+
+    // Carry the reader to where the composer's line will be: a send, or the keyboard coming up to write
+    // one. Detached, re-attach (the line won't be in the slice); else down to the tail, unless they
+    // asked to keep their place up in history (`chat.keep_position_on_send`). "At the tail" is the
+    // layout's own answer (`jobs.nearBottom`, which counts the bar's reservation), not one re-derived
+    // here from the first visible item.
+    fun carryToComposer() {
+        val detached = model.state.buffers[key.id]?.hasMoreNewer == true
+        val keeps = ComposerModel.keepsPositionWhileReading(model.state.settings, nearBottom = jobs.nearBottom)
+        when (ComposerModel.sendScroll(detached = detached, keepsPosition = keeps)) {
+            SendScroll.Reattach -> jumpToLatest()
+            // The echo lands a moment later, over the socket; being at the tail when it does is what
+            // makes the build follow it rather than count it on the pill.
+            SendScroll.ToBottom -> if (current.rows.isNotEmpty() && !scroll.landingPending) listState.requestScrollToItem(0)
+            SendScroll.Stay -> Unit
+        }
+    }
+
+    val composer = rememberComposerState(
+        model = model,
+        key = key,
+        kind = kind,
+        onWillSend = ::carryToComposer,
+        onOpenBuffer = onOpenBuffer,
+        onShowProfile = onShowProfile,
+    )
+
+    // The keyboard is up for the composer — not for a dialog's field (`isImeVisible` is true for any),
+    // and not a hardware keyboard, which raises no IME.
+    val composing = composer.isFocused && imeVisible()
+    val composingNow by rememberUpdatedState(composing)
+    // The line a Reply is being started on, for the keyboard it raises (lurker#1248): that arrival
+    // keeps the reader's place instead of carrying them down — see the arrival effect below. Set only
+    // for an arrival the Reply will cause: a keyboard already up moves nobody, and a marker left set
+    // would hold the next ordinary tap on the field to a place it should carry the reader out of.
+    val replyKeepsPlaceFor = remember { arrayOfNulls<Long>(1) }
+    val startReply: (Message) -> Unit = remember(composer) {
+        { message ->
+            val raises = !composingNow
+            val asked = composer.startReply(message)
+            replyKeepsPlaceFor[0] = if (raises && asked) message.id else null
+        }
+    }
+    // A Reply whose keyboard never came (a hardware keyboard) leaves the marker; it goes with the
+    // focus, or with the reply (cancelled, sent) — a later keyboard isn't that reply's.
+    LaunchedEffect(composer.isFocused) { if (!composer.isFocused) replyKeepsPlaceFor[0] = null }
+    LaunchedEffect(composer.reply) { if (composer.reply == null) replyKeepsPlaceFor[0] = null }
+
     // Keyed on everything the resolvers capture, the sheets' state and the keyboard's included.
     // Which previews draw: both settings and the instance's flag (`PreviewToggles`). A preview landing
     // doesn't come through here — each row reads its own URLs' versions (`PreviewUpdates`).
     val previewToggles = PreviewToggles.resolve(instanceHasPreviews, inputs.settings)
-    val context = remember(rows, inputs, highlighter, style, day, actions, keyboard, focusManager, haptics, previewToggles, media, openMedia, avatars) {
+    val replyArrow = rememberVectorPainter(LurkerIcons.Reply)
+    val context = remember(rows, inputs, highlighter, style, day, actions, keyboard, focusManager, haptics, previewToggles, media, openMedia, avatars, composer, replyArrow, startReply) {
         MessageListContext(
             style = style,
             networkName = { message -> ConversationModel.networkName(message, key, inputs.networks) },
@@ -773,43 +837,21 @@ fun ConversationScreen(
                 onOpen = { message -> if (actions.showReactions(message)) beforeSheet() },
             ),
             onLongPress = ::onLongPress,
+            // The same Reply the sheet's row runs, without the sheet: the menu's own rule says which
+            // lines take one, and the composer's `startReply` is where it lands.
+            swipeReply = SwipeReply(
+                arrow = replyArrow,
+                offers = { message ->
+                    MessageActions.replyAction(message, target = key.target, canReply = model.state.canReply(networkId = key.networkId)) != null
+                },
+                reply = startReply,
+            ),
             zone = day.zone,
             today = day.today,
             previews = previewToggles?.let { PreviewContext(model.linkPreviews, media, it) },
             onOpenMedia = openMedia,
         )
     }
-
-    // Server errors are `MainScaffold`'s (`ServerErrorDialog`): always composed, so one never waits
-    // unseen behind the buffer list on a phone and surfaces later over an unrelated conversation.
-
-    // MARK: - Composer
-
-    // Carry the reader to where the composer's line will be: a send, or the keyboard coming up to write
-    // one. Detached, re-attach (the line won't be in the slice); else down to the tail, unless they
-    // asked to keep their place up in history (`chat.keep_position_on_send`). "At the tail" is the
-    // layout's own answer (`jobs.nearBottom`, which counts the bar's reservation), not one re-derived
-    // here from the first visible item.
-    fun carryToComposer() {
-        val detached = model.state.buffers[key.id]?.hasMoreNewer == true
-        val keeps = ComposerModel.keepsPositionWhileReading(model.state.settings, nearBottom = jobs.nearBottom)
-        when (ComposerModel.sendScroll(detached = detached, keepsPosition = keeps)) {
-            SendScroll.Reattach -> jumpToLatest()
-            // The echo lands a moment later, over the socket; being at the tail when it does is what
-            // makes the build follow it rather than count it on the pill.
-            SendScroll.ToBottom -> if (current.rows.isNotEmpty() && !scroll.landingPending) listState.requestScrollToItem(0)
-            SendScroll.Stay -> Unit
-        }
-    }
-
-    val composer = rememberComposerState(
-        model = model,
-        key = key,
-        kind = kind,
-        onWillSend = ::carryToComposer,
-        onOpenBuffer = onOpenBuffer,
-        onShowProfile = onShowProfile,
-    )
 
     // In-app notifications in the status row (lurker#1098). Whether the row can be seen: this screen
     // is the destination, started, with nothing over it — neither a dialog from either pane, nor a
@@ -852,13 +894,45 @@ fun ConversationScreen(
     // leaving moves nobody — and only the composer's: `isImeVisible` is true for any field, and a
     // dialog's (Settings, Join, a network form, side by side over this pane) is no reason to move the
     // conversation. A hardware keyboard raises no IME, and moves nothing, as on iOS.
-    val composing = composer.isFocused && imeVisible()
+    //
+    // Except a keyboard raised by a Reply (lurker#1248), which keeps the reader's place: the line they
+    // pointed at is the context, and carrying them down loses it. The reverse layout already holds the
+    // rows where they were relative to the composer as the keyboard pushes them up (Discord's list
+    // does the same); what's left is a line high enough that the push carried it under the bar, which
+    // is scrolled back once the keyboard has settled — a row in view as the arrival starts may not be
+    // when the animation ends. iOS's `keepPlace`.
+    val ime = WindowInsets.ime
+    val imeTarget = imeAnimationTarget()
     val composingWas = remember { booleanArrayOf(composing) }
     LaunchedEffect(composing) {
         val arrived = composing && !composingWas[0]
         composingWas[0] = composing
+        // One-shot: any change in the keyboard's state spends it.
+        val held = replyKeepsPlaceFor[0]
+        replyKeepsPlaceFor[0] = null
         if (!arrived || current.rows.isEmpty() || scroll.landingPending) return@LaunchedEffect
-        carryToComposer()
+        if (held == null) return@LaunchedEffect carryToComposer()
+        val dragsBefore = userDrags[0]
+        withTimeoutOrNull(LAYOUT_WAIT_MS) {
+            snapshotFlow { ime.getBottom(density) == imeTarget.getBottom(density) }.first { it }
+            // The inset settling is a state write; the composer measures against it a frame later
+            // and the list takes the composer's height the frame after that. Read the rows only
+            // once the list's padding has stopped moving — with animations off the whole push is
+            // one step, and a read before it sees the row in view and does nothing.
+            var padding = listState.layoutInfo.beforeContentPadding
+            while (true) {
+                withFrameNanos {}
+                withFrameNanos {}
+                val now = listState.layoutInfo.beforeContentPadding
+                if (now == padding) break
+                padding = now
+            }
+        }
+        // The reader who scrolled while the keyboard was still coming has taken the list: no reveal
+        // snaps it back from under their drag or their fling.
+        if (userDrags[0] != dragsBefore || listState.isScrollInProgress) return@LaunchedEffect
+        val built = current
+        built.rowIndex(containing = held)?.let { row -> reveal(listState, built, row) }
     }
 
     val placeholder = ConversationModel.placeholder(hasRows = rows.isNotEmpty(), inputs = inputs, forceLoading = forceLoading)
@@ -902,7 +976,7 @@ fun ConversationScreen(
                 key = key,
                 // The line as the list shows it — a relayed line as the person inside it — which is
                 // whom the Reply addresses.
-                onReply = composer::startReply,
+                onReply = startReply,
                 onShowProfile = onShowProfile,
             )
         },
@@ -997,24 +1071,45 @@ private suspend fun awaitLayoutOf(listState: LazyListState, rows: BuiltRows) {
 }
 
 /**
+ * [row]'s laid-out item, brought on screen first if it isn't: the list's scroll-to-item puts an item
+ * at its START, which in a reverse layout is the bottom edge. Null when the list has no such row.
+ */
+private suspend fun onScreen(listState: LazyListState, rows: BuiltRows, row: Int): LazyListItemInfo? {
+    val key = rows.keys[row]
+    listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }?.let { return it }
+    listState.scrollToItem(rows.itemIndex(row))
+    return listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+}
+
+/**
  * Put [row] in the middle of the viewport — clamped near an edge, as centred as it can be (a recent
  * row with little below it lands lower). Brought on screen first if it isn't, then nudged by the
- * difference: the list's scroll-to-item puts an item at its START, which in a reverse layout is
- * the bottom edge, and takes no negative offset to lift it from there.
+ * difference: scroll-to-item takes no negative offset to lift an item from the bottom edge.
  */
 private suspend fun centre(listState: LazyListState, rows: BuiltRows, row: Int) {
-    val key = rows.keys[row]
-    var item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
-    if (item == null) {
-        listState.scrollToItem(rows.itemIndex(row))
-        item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key } ?: return
-    }
+    val item = onScreen(listState, rows, row) ?: return
     val info = listState.layoutInfo
     val contentEnd = info.viewportEndOffset - info.afterContentPadding
     val wanted = (contentEnd - item.size) / 2
     // Forward is toward older rows, which lowers every offset — so forward by how far above the
     // middle it sits (a negative amount, backward, when it's below).
     listState.scrollBy((item.offset - wanted).toFloat())
+}
+
+/**
+ * Bring [row] back under the bar when the keyboard's push carried it off the top: the least scroll
+ * that shows the whole of it, and none when it's already in view. Pushed off altogether, it's brought
+ * on screen at the bottom edge and lifted to the bar from there, where the push left it nearest.
+ */
+private suspend fun reveal(listState: LazyListState, rows: BuiltRows, row: Int) {
+    val wasOn = listState.layoutInfo.visibleItemsInfo.any { it.key == rows.keys[row] }
+    val item = onScreen(listState, rows, row) ?: return
+    val info = listState.layoutInfo
+    val contentEnd = info.viewportEndOffset - info.afterContentPadding
+    // Forward is toward older rows, which lowers every offset — by how far past the bar's edge it sits
+    // (a negative amount, backward, lifts the row just brought on at the bottom).
+    val past = item.offset + item.size - contentEnd
+    if (past > 0 || !wasOn) listState.scrollBy(past.toFloat())
 }
 
 /** iOS's `isNearBottom`: within 80pt of the newest row still counts as following the conversation. */
@@ -1345,3 +1440,8 @@ private fun EmptyPreviewDark() = ConversationPreview(dark = true, empty = true)
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun imeVisible(): Boolean = WindowInsets.isImeVisible
+
+/** Where the keyboard is heading — `WindowInsets.imeAnimationTarget`, behind the same opt-in. */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun imeAnimationTarget(): WindowInsets = WindowInsets.imeAnimationTarget

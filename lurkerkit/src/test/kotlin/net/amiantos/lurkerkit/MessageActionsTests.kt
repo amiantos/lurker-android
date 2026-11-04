@@ -11,6 +11,7 @@ import net.amiantos.lurkerkit.model.MessageActionContext
 import net.amiantos.lurkerkit.model.MessageActionKey
 import net.amiantos.lurkerkit.model.MessageActionScope
 import net.amiantos.lurkerkit.model.MessageActions
+import net.amiantos.lurkerkit.model.TagSupport
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -268,6 +269,46 @@ class MessageActionsTests {
             listOf(MessageActionKey.Reply, MessageActionKey.Bookmark, MessageActionKey.Profile),
             build(msg(text = "")).map { it.key },
         )
+    }
+
+    /**
+     * The swipe on a row (lurker#1248) asks `replyAction` alone, so it has to agree with the menu
+     * on every line: a swipe that replied where the menu wouldn't, or sat still where it would, is
+     * the drift this guards against.
+     */
+    @Test
+    fun testReplyActionIsTheMenusReplyRow() {
+        val support = TagSupport(canAddReaction = true, canRemoveReaction = true, canReply = true)
+        val channel = MessageActionScope(networkId = 1, isBookmarked = false, target = "#a", support = support)
+        val dm = MessageActionScope(networkId = 1, isBookmarked = false, target = "alice", support = support)
+        val dmNoTag = MessageActionScope(networkId = 1, isBookmarked = false, target = "alice")
+        val stamped = Message(id = 1, type = EventType.Message, nick = "alice", text = "hi", msgid = "m1")
+        val stampedSelf = Message(id = 1, type = EventType.Message, nick = "alice", text = "hi", isSelf = true, msgid = "m1")
+        val lines = listOf(
+            msg() to scope(),
+            msg(type = EventType.Notice) to scope(),
+            msg(type = EventType.Action) to scope(),
+            msg(type = EventType.Join) to scope(),
+            msg(nick = null) to scope(),
+            msg(isSelf = true) to scope(),
+            msg(isSelf = true) to channel,
+            stampedSelf to channel,
+            stamped to dm,
+            stamped to dmNoTag,
+            stampedSelf to dm,
+            stampedSelf to dmNoTag,
+        )
+        var offered = 0
+        for ((message, scope) in lines) {
+            val menu = MessageActions.build(message, scope).firstOrNull { it.key == MessageActionKey.Reply }
+            assertEquals(menu, MessageActions.replyAction(message, scope), "${message.type} in ${scope.target}")
+            assertEquals(
+                menu, MessageActions.replyAction(message, target = scope.target, canReply = scope.support.canReply),
+                "the narrow form, ${message.type} in ${scope.target}",
+            )
+            if (menu != null) offered += 1
+        }
+        assertTrue(offered > 0 && offered < lines.size, "the fixture should cover both answers ($offered of ${lines.size})")
     }
 
     // MARK: - Running

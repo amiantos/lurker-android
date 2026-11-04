@@ -865,9 +865,12 @@ internal class ComposerState(
      * Reply to [message] — the seam U6's message actions call (lurker-ios#60). Pass the line as the
      * list SHOWS it (a relayed line as the person inside it), since that's whom the Reply addresses
      * and a cancel un-addresses. See `ComposerModel.replyPlan` for the rules.
+     *
+     * @return whether it asked for the keyboard — what the screen's keep-place (lurker#1248) arms on:
+     * a Reply the plan refused, or one landing under the colour editor, raises none.
      */
-    fun startReply(message: Message) {
-        val plan = ComposerModel.replyPlan(message, key, model.state, reply) ?: return
+    fun startReply(message: Message): Boolean {
+        val plan = ComposerModel.replyPlan(message, key, model.state, reply) ?: return false
         var focuses = false
         batch {
             if (plan.cancelFirst) cancelReply()
@@ -885,7 +888,7 @@ internal class ComposerState(
                 focuses = true
             }
         }
-        if (focuses) focus()
+        return focuses && focus()
     }
 
     /**
@@ -934,12 +937,14 @@ internal class ComposerState(
         if (result.focuses) focus()
     }
 
-    private fun focus() {
+    /** Put the caret in the field and ask for the keyboard; false when the colour editor has the caret. */
+    private fun focus(): Boolean {
         // The colour editor is where the user is writing; a finished upload's link lands without
         // pulling the keyboard back to the bar under it.
-        if (editorOpen) return
+        if (editorOpen) return false
         focusRequester.requestFocus()
         keyboard?.show()
+        return true
     }
 
     // MARK: - Away (lurker-ios#135)
