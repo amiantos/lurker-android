@@ -132,6 +132,7 @@ internal fun Modifier.swipeToReply(arrow: Painter, bottomInset: Dp, offers: () -
                     if (down.isConsumed) return@awaitEachGesture
                     // Decide once, at the slop.
                     var locked = false
+                    var claim = down.position
                     while (!locked) {
                         val event = awaitPointerEvent(PointerEventPass.Initial)
                         val change = event.changes.firstOrNull { it.id == down.id } ?: return@awaitEachGesture
@@ -146,6 +147,7 @@ internal fun Modifier.swipeToReply(arrow: Painter, bottomInset: Dp, offers: () -
                             // and start a scroll under it. (Asked whether the line takes a Reply first,
                             // so a line that doesn't leaves the move for the list, untouched.)
                             change.consume()
+                            claim = change.position
                             locked = true
                         }
                         if (!locked && awaitPointerEvent(PointerEventPass.Final).changes.any { it.isConsumed }) return@awaitEachGesture
@@ -156,6 +158,22 @@ internal fun Modifier.swipeToReply(arrow: Painter, bottomInset: Dp, offers: () -
                     // A row still springing home from the last swipe carries on from where it is,
                     // as if the finger had already brought it that far — not snapped to rest first.
                     val carried = SwipeToReplyModel.travelFor(offset, reach)
+                    fun travel(position: Offset) = carried + (position.x - down.position.x) * sign
+                    // The finger's position, as the row and the thumb should see it.
+                    fun follow(position: Offset) {
+                        val toward = travel(position)
+                        offset = SwipeToReplyModel.offsetFor(toward, reach)
+                        val past = toward >= reach
+                        if (past != crossed) {
+                            crossed = past
+                            // On every crossing out, not once: coming back under the reach un-arms
+                            // the reply, and the tap on the way out again says it is armed again.
+                            if (past) haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
+                        }
+                    }
+                    // The move that claimed the swipe is its first move — a fast flick's first move
+                    // can already be past the reach, with the lift the next event.
+                    follow(claim)
                     var replies = false
                     try {
                         while (true) {
@@ -170,16 +188,12 @@ internal fun Modifier.swipeToReply(arrow: Painter, bottomInset: Dp, offers: () -
                             event.changes.forEach { it.consume() }
                             if (change == null) break
                             if (lifted) {
-                                replies = crossed && !cancelled
+                                // Where the finger LIFTED decides, as on iOS — not the last move, which
+                                // a lift can land short of or past.
+                                replies = !cancelled && travel(change.position) >= reach
                                 break
                             }
-                            val toward = carried + (change.position.x - down.position.x) * sign
-                            offset = SwipeToReplyModel.offsetFor(toward, reach)
-                            val past = toward >= reach
-                            if (past != crossed) {
-                                crossed = past
-                                if (past) haptics.performHapticFeedback(HapticFeedbackType.GestureThresholdActivate)
-                            }
+                            follow(change.position)
                         }
                     } finally {
                         // A reset pointer stream (the row left composition) lands here too: the row

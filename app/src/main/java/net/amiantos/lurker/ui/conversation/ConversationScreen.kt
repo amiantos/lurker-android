@@ -584,10 +584,14 @@ fun ConversationScreen(
     }
     // MARK: - Layouts
 
-    // The reader taking hold of the list releases a converging jump — see `onUserDrag`.
+    // The reader taking hold of the list releases a converging jump — see `onUserDrag` — and a
+    // reveal still waiting on the keyboard (counted, so the wait can tell a drag happened).
+    val userDrags = remember { intArrayOf(0) }
     LaunchedEffect(listState, scroll) {
         listState.interactionSource.interactions.collect { interaction ->
-            if (interaction is DragInteraction.Start && scroll.onUserDrag()) jobs.converging?.cancel()
+            if (interaction !is DragInteraction.Start) return@collect
+            userDrags[0]++
+            if (scroll.onUserDrag()) jobs.converging?.cancel()
         }
     }
     LaunchedEffect(listState, scroll) {
@@ -786,8 +790,10 @@ fun ConversationScreen(
             replyKeepsPlaceFor[0] = if (raises && asked) message.id else null
         }
     }
-    // A Reply whose keyboard never came (a hardware keyboard) leaves the marker; it goes with the focus.
+    // A Reply whose keyboard never came (a hardware keyboard) leaves the marker; it goes with the
+    // focus, or with the reply (cancelled, sent) — a later keyboard isn't that reply's.
     LaunchedEffect(composer.isFocused) { if (!composer.isFocused) replyKeepsPlaceFor[0] = null }
+    LaunchedEffect(composer.reply) { if (composer.reply == null) replyKeepsPlaceFor[0] = null }
 
     // Keyed on everything the resolvers capture, the sheets' state and the keyboard's included.
     // Which previews draw: both settings and the instance's flag (`PreviewToggles`). A preview landing
@@ -906,6 +912,7 @@ fun ConversationScreen(
         replyKeepsPlaceFor[0] = null
         if (!arrived || current.rows.isEmpty() || scroll.landingPending) return@LaunchedEffect
         if (held == null) return@LaunchedEffect carryToComposer()
+        val dragsBefore = userDrags[0]
         withTimeoutOrNull(LAYOUT_WAIT_MS) {
             snapshotFlow { ime.getBottom(density) == imeTarget.getBottom(density) }.first { it }
             // The inset settling is a state write; the composer measures against it a frame later
@@ -921,6 +928,9 @@ fun ConversationScreen(
                 padding = now
             }
         }
+        // The reader who scrolled while the keyboard was still coming has taken the list: no reveal
+        // snaps it back from under their drag or their fling.
+        if (userDrags[0] != dragsBefore || listState.isScrollInProgress) return@LaunchedEffect
         val built = current
         built.rowIndex(containing = held)?.let { row -> reveal(listState, built, row) }
     }
