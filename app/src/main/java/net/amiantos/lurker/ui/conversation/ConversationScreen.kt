@@ -29,6 +29,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
+import androidx.compose.foundation.lazy.LazyListItemInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.CircularProgressIndicator
@@ -780,8 +781,9 @@ fun ConversationScreen(
     val replyKeepsPlaceFor = remember { arrayOfNulls<Long>(1) }
     val startReply: (Message) -> Unit = remember(composer) {
         { message ->
-            replyKeepsPlaceFor[0] = if (composingNow) null else message.id
-            composer.startReply(message)
+            val raises = !composingNow
+            val asked = composer.startReply(message)
+            replyKeepsPlaceFor[0] = if (raises && asked) message.id else null
         }
     }
     // A Reply whose keyboard never came (a hardware keyboard) leaves the marker; it goes with the focus.
@@ -906,10 +908,21 @@ fun ConversationScreen(
         if (held == null) return@LaunchedEffect carryToComposer()
         withTimeoutOrNull(LAYOUT_WAIT_MS) {
             snapshotFlow { ime.getBottom(density) == imeTarget.getBottom(density) }.first { it }
+            // The inset settling is a state write; the composer measures against it a frame later
+            // and the list takes the composer's height the frame after that. Read the rows only
+            // once the list's padding has stopped moving — with animations off the whole push is
+            // one step, and a read before it sees the row in view and does nothing.
+            var padding = listState.layoutInfo.beforeContentPadding
+            while (true) {
+                withFrameNanos {}
+                withFrameNanos {}
+                val now = listState.layoutInfo.beforeContentPadding
+                if (now == padding) break
+                padding = now
+            }
         }
         val built = current
-        val row = built.rows.indexOfFirst { it.message?.id == held }
-        if (row >= 0) reveal(listState, built, row)
+        built.rowIndex(containing = held)?.let { row -> reveal(listState, built, row) }
     }
 
     val placeholder = ConversationModel.placeholder(hasRows = rows.isNotEmpty(), inputs = inputs, forceLoading = forceLoading)
@@ -1048,18 +1061,23 @@ private suspend fun awaitLayoutOf(listState: LazyListState, rows: BuiltRows) {
 }
 
 /**
+ * [row]'s laid-out item, brought on screen first if it isn't: the list's scroll-to-item puts an item
+ * at its START, which in a reverse layout is the bottom edge. Null when the list has no such row.
+ */
+private suspend fun onScreen(listState: LazyListState, rows: BuiltRows, row: Int): LazyListItemInfo? {
+    val key = rows.keys[row]
+    listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }?.let { return it }
+    listState.scrollToItem(rows.itemIndex(row))
+    return listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
+}
+
+/**
  * Put [row] in the middle of the viewport — clamped near an edge, as centred as it can be (a recent
  * row with little below it lands lower). Brought on screen first if it isn't, then nudged by the
- * difference: the list's scroll-to-item puts an item at its START, which in a reverse layout is
- * the bottom edge, and takes no negative offset to lift it from there.
+ * difference: scroll-to-item takes no negative offset to lift an item from the bottom edge.
  */
 private suspend fun centre(listState: LazyListState, rows: BuiltRows, row: Int) {
-    val key = rows.keys[row]
-    var item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
-    if (item == null) {
-        listState.scrollToItem(rows.itemIndex(row))
-        item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key } ?: return
-    }
+    val item = onScreen(listState, rows, row) ?: return
     val info = listState.layoutInfo
     val contentEnd = info.viewportEndOffset - info.afterContentPadding
     val wanted = (contentEnd - item.size) / 2
@@ -1070,22 +1088,18 @@ private suspend fun centre(listState: LazyListState, rows: BuiltRows, row: Int) 
 
 /**
  * Bring [row] back under the bar when the keyboard's push carried it off the top: the least scroll
- * that shows the whole of it, and none when it's already in view. Off screen altogether, it's put at
- * the bottom edge first (where scroll-to-item lands an item in a reverse layout) and lifted from there,
- * as `centre` does.
+ * that shows the whole of it, and none when it's already in view. Pushed off altogether, it's brought
+ * on screen at the bottom edge and lifted to the bar from there, where the push left it nearest.
  */
 private suspend fun reveal(listState: LazyListState, rows: BuiltRows, row: Int) {
-    val key = rows.keys[row]
-    var item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }
-    if (item == null) {
-        listState.scrollToItem(rows.itemIndex(row))
-        item = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key } ?: return
-    }
+    val wasOn = listState.layoutInfo.visibleItemsInfo.any { it.key == rows.keys[row] }
+    val item = onScreen(listState, rows, row) ?: return
     val info = listState.layoutInfo
     val contentEnd = info.viewportEndOffset - info.afterContentPadding
-    // Forward is toward older rows, which lowers every offset — by how far past the bar's edge it sits.
+    // Forward is toward older rows, which lowers every offset — by how far past the bar's edge it sits
+    // (a negative amount, backward, lifts the row just brought on at the bottom).
     val past = item.offset + item.size - contentEnd
-    if (past > 0) listState.scrollBy(past.toFloat())
+    if (past > 0 || !wasOn) listState.scrollBy(past.toFloat())
 }
 
 /** iOS's `isNearBottom`: within 80pt of the newest row still counts as following the conversation. */

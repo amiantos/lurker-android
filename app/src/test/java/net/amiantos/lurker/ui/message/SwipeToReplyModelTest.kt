@@ -52,4 +52,14 @@ class SwipeToReplyModelTest {
         assertEquals(64f, SwipeToReplyModel.offsetFor(toward = 64f, reach = 64f), 0f)
         assertEquals(74f, SwipeToReplyModel.offsetFor(toward = 94f, reach = 64f), 0f)
     }
+
+    /** A swipe resumed on a row still springing home carries on from the travel that put it there. */
+    @Test
+    fun theTravelForAnOffsetUndoesTheCurve() {
+        for (toward in listOf(0f, 30f, 64f, 94f, 200f)) {
+            val offset = SwipeToReplyModel.offsetFor(toward, reach = 64f)
+            assertEquals(toward, SwipeToReplyModel.travelFor(offset, reach = 64f), 0.001f)
+        }
+        assertEquals(0f, SwipeToReplyModel.travelFor(offset = -5f, reach = 64f), 0f)
+    }
 }

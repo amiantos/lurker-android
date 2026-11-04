@@ -54,8 +54,13 @@ class SwipeReply(val arrow: Painter, val offers: (Message) -> Boolean, val reply
 
 /**
  * The gesture: drag the row toward the trailing edge, and a release past [SWIPE_REACH] replies.
- * Discord's and Telegram's, and iOS's `SwipeToReplyRecognizer` — toward the trailing edge because the
- * leading one is the system's back gesture on both platforms.
+ * Discord's and Telegram's, and iOS's `SwipeToReplyRecognizer`, whose direction this shares so the
+ * two apps agree: on iOS the leading edge is the system's back gesture. On Android with gesture
+ * navigation BOTH edges are back, so a swipe begun inside the trailing edge's inset is the system's
+ * — it arrives here as a cancel (the row springs home, nothing replies) and the screen goes back.
+ * That is the trade-off taken, as Discord takes it; the alternative, the leading edge, collides the
+ * same way on the other side and disagrees with iOS. Not fixable per row: the exclusion rects a view
+ * may ask for are capped well under a list's height.
  *
  * ⚠ Hand-rolled, not `SwipeToDismissBox` or `draggable`. The buffer list's swipe-to-part was one of
  * those, and people parted channels scrolling past a row (lurker#1102): Compose's horizontal drag
@@ -148,7 +153,9 @@ internal fun Modifier.swipeToReply(arrow: Painter, bottomInset: Dp, offers: () -
                     homing?.cancel()
                     homing = null
                     crossed = false
-                    offset = 0f
+                    // A row still springing home from the last swipe carries on from where it is,
+                    // as if the finger had already brought it that far — not snapped to rest first.
+                    val carried = SwipeToReplyModel.travelFor(offset, reach)
                     var replies = false
                     try {
                         while (true) {
@@ -166,7 +173,7 @@ internal fun Modifier.swipeToReply(arrow: Painter, bottomInset: Dp, offers: () -
                                 replies = crossed && !cancelled
                                 break
                             }
-                            val toward = (change.position.x - down.position.x) * sign
+                            val toward = carried + (change.position.x - down.position.x) * sign
                             offset = SwipeToReplyModel.offsetFor(toward, reach)
                             val past = toward >= reach
                             if (past != crossed) {
@@ -212,6 +219,13 @@ internal object SwipeToReplyModel {
         toward <= 0f -> 0f
         toward <= reach -> toward
         else -> reach + (toward - reach) / 3f
+    }
+
+    /** The travel that would put the row at [offset]: [offsetFor] inverted, for a swipe resumed mid-spring. */
+    fun travelFor(offset: Float, reach: Float): Float = when {
+        offset <= 0f -> 0f
+        offset <= reach -> offset
+        else -> reach + (offset - reach) * 3f
     }
 }
 
