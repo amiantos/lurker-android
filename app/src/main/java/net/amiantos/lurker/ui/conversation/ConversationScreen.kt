@@ -353,9 +353,10 @@ fun ConversationScreen(
             // double-fetch, and the latest slice would fight the jump.
             hydrate.check(state.connection, state.buffers[key.id], state.burstGeneration, jumpPending = scroll.jumpPending)
                 ?.let(model::hydrate)
-            // `reading` is the mark-read gate below: a live line moves the boundary to the tail only
-            // while the screen can be seen.
-            val step = scroll.onFrame(state, key, seq, reading = lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED))
+            // A live line moves the boundary to the tail only while the screen is being SEEN — RESUMED,
+            // stricter than the mark below's STARTED, which another activity or the lock screen over
+            // ours still satisfies: the pointer may move for those lines, the divider waits.
+            val step = scroll.onFrame(state, key, seq, reading = lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED))
             jobs.lastFrame = state
             refreshOlderLoading(state)
             step.loadAround?.let { anchor -> model.loadAround(key, anchorId = anchor) }
