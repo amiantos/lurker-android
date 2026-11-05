@@ -292,6 +292,30 @@ class ConversationScrollTest {
     }
 
     @Test
+    fun `a word built before a page revealed unread lines, or before a rule change, is not taken`() {
+        // Boundary 5 with only an ignored sender's lines loaded past it: the list draws nothing.
+        val ignores = IgnoreSet(byNetwork = mapOf(1 to listOf(IgnoreRule(id = 1, mask = "spammer"))))
+        val pointer = row(readStateKnown = true, lastReadId = 5)
+        val hidden = (8L..10L).map { msg(it, nick = "spammer") }
+        val scroll = machine()
+        scroll.onFrame(state(pointer, hidden, ignores = ignores), channel, 1)
+        scroll.onRows(build(scroll, state(pointer, hidden, ignores = ignores), seq = 1), wasNearBottom = true)
+        // An older page prepends real unread under the boundary; the newest id doesn't move.
+        val revealed = msgs(6L..7L) + hidden
+        scroll.onFrame(state(pointer, revealed, ignores = ignores), channel, 2)
+        // A live line before that page's build: the word is about the old list.
+        scroll.onFrame(state(pointer, revealed + msg(11), ignores = ignores), channel, 3)
+        assertEquals(5L, scroll.options.dividerAfterId)
+        // Likewise an unignore that reveals what was hidden.
+        val unignore = machine()
+        unignore.onFrame(state(pointer, hidden, ignores = ignores), channel, 1)
+        unignore.onRows(build(unignore, state(pointer, hidden, ignores = ignores), seq = 1), wasNearBottom = true)
+        unignore.onFrame(state(pointer, hidden), channel, 2)
+        unignore.onFrame(state(pointer, hidden + msg(11)), channel, 3)
+        assertEquals(5L, unignore.options.dividerAfterId)
+    }
+
+    @Test
     fun `a word built under another boundary is not taken`() {
         val scroll = machine()
         // Hydrated by a `history` reply, so the list builds (and says "no divider") before the read

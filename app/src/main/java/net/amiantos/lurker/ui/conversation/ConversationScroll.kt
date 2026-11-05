@@ -12,6 +12,9 @@ import net.amiantos.lurkerkit.model.EventFilter
 import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageRow
+import net.amiantos.lurkerkit.model.Network
+import net.amiantos.lurkerkit.model.RelayBotSet
+import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.model.SpeakerMap
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
@@ -441,6 +444,8 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
      * @param detached a slice below the live tail, which holds live traffic out: what grows it is a page.
      * @param first the oldest held id, ephemerals (id 0) aside; null for an empty list.
      * @param newest the newest held id, ephemerals aside; 0 for an empty list.
+     * @param visible what the rows are built from, as [ConversationInputs.same] compares it, for
+     *   judging whether a build's word is about this frame's list.
      */
     private data class Tail(
         val generation: Int,
@@ -450,17 +455,28 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         val detached: Boolean,
         val first: Long?,
         val newest: Long,
+        val visible: Visible,
     ) {
         companion object {
-            fun of(state: ChatState, key: BufferKey, kind: BufferKind): Tail {
+            /**
+             * [last]'s extrema are reused when the list is the same object: this runs for every
+             * frame the store publishes, for every buffer, over a history that is uncapped.
+             */
+            fun of(state: ChatState, key: BufferKey, kind: BufferKind, last: Tail?): Tail {
                 val row = state.buffers[key.id]
+                val list = state.messages[key.id]
                 var first: Long? = null
                 var newest = 0L
-                for (message in state.messages[key.id].orEmpty()) {
-                    val id = message.id
-                    if (id == 0L) continue
-                    if (first == null || id < first) first = id
-                    if (id > newest) newest = id
+                if (last != null && list === last.visible.messages) {
+                    first = last.first
+                    newest = last.newest
+                } else {
+                    for (message in list.orEmpty()) {
+                        val id = message.id
+                        if (id == 0L) continue
+                        if (first == null || id < first) first = id
+                        if (id > newest) newest = id
+                    }
                 }
                 return Tail(
                     generation = state.burstGeneration,
@@ -475,6 +491,15 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
                     detached = row?.hasMoreNewer == true,
                     first = first,
                     newest = newest,
+                    visible = Visible(
+                        messages = list,
+                        buffer = row,
+                        networks = state.networks,
+                        settings = state.settings,
+                        ignores = state.ignores,
+                        relayBots = state.relayBots,
+                        speakers = state.speakers[key.id],
+                    ),
                 )
             }
         }
@@ -482,12 +507,33 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
     private var lastTail: Tail? = null
 
     /**
-     * The list's word on whether it is drawing the unread divider, from the last build that had the
-     * history: which boundary it was built under and how far its list reached, so a build that lags
-     * the frames — they're asynchronous, and pause while the screen is stopped — is known to answer
-     * a different question ([onFrame]).
+     * The inputs that decide which rows a build draws, compared as [ConversationInputs.same] does:
+     * the list by identity (the store replaces one it changed — a page, a restored row), the rules
+     * by identity, the rest by value.
      */
-    private data class Word(val boundary: Long?, val newest: Long, val drawn: Boolean)
+    private class Visible(
+        val messages: List<Message>?,
+        val buffer: Buffer?,
+        val networks: Map<Int, Network>,
+        val settings: Settings,
+        val ignores: IgnoreSet,
+        val relayBots: RelayBotSet,
+        val speakers: SpeakerMap?,
+    ) {
+        fun same(inputs: ConversationInputs): Boolean =
+            inputs.messages === messages && inputs.buffer == buffer && inputs.networks == networks &&
+                inputs.settings == settings && inputs.ignores === ignores && inputs.relayBots === relayBots &&
+                inputs.speakers == speakers
+    }
+
+    /**
+     * The list's word on whether it is drawing the unread divider, from the last build that had the
+     * history: which boundary it was built under and what it was built from, so a build that lags
+     * the frames — they're asynchronous, and pause while the screen is stopped — is known to answer
+     * a different question ([onFrame]). iOS builds every frame it processes and keys its word on
+     * the frame instead.
+     */
+    private class Word(val boundary: Long?, val inputs: ConversationInputs, val drawn: Boolean)
     private var word: Word? = null
 
     /**
@@ -671,7 +717,7 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         }
         // The tail rule, on a boundary latched BEFORE this frame: the frame that latches has no
         // previous shape to tell a live line by.
-        val tail = Tail.of(state, key, kind)
+        val tail = Tail.of(state, key, kind, lastTail)
         val previous = lastTail
         if (reading && latched && state.connection == SocketStatus.Connected && previous != null &&
             previous.landed && previous.settled && tail.settled && !previous.detached && !tail.detached &&
@@ -680,8 +726,9 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         ) {
             val boundary = options.dividerAfterId ?: 0L
             // The list's word counts only when it answers this question: built under this boundary,
-            // over a list that reached the previous frame's newest line.
-            val says = word?.takeIf { it.boundary == options.dividerAfterId && it.newest >= previous.newest }?.drawn
+            // from what the previous frame held — a page that revealed unread lines or a rule change
+            // since then is a different list.
+            val says = word?.takeIf { it.boundary == options.dividerAfterId && previous.visible.same(it.inputs) }?.drawn
             val noBoundary = if (says == null) boundary >= previous.newest else !says
             if (noBoundary) {
                 options = options.copy(dividerAfterId = tail.newest)
@@ -823,15 +870,7 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
             ).size
         }
         previousVisible = built.visible
-        word = if (built.historyLanded) {
-            Word(
-                boundary = built.options.dividerAfterId,
-                newest = built.inputs.messages.orEmpty().maxOfOrNull { it.id } ?: 0L,
-                drawn = built.dividerRow != null,
-            )
-        } else {
-            null
-        }
+        word = if (built.historyLanded) Word(built.options.dividerAfterId, built.inputs, built.dividerRow != null) else null
 
         val follow = !landingPending && wasNearBottom && !wasDetached && !nowDetached
         log {
