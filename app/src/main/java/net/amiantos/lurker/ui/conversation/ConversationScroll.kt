@@ -26,9 +26,12 @@ import kotlin.math.abs
  */
 internal data class RowOptions(
     /**
-     * The read boundary, latched the first time the server states it and held for the visit — the
-     * divider must not move as the screen marks messages read live. Null is "not told yet", which
-     * is not the same as 0, "nothing read". iOS's `dividerAfterId`.
+     * The read boundary, latched the first time the server states it — the divider must not move
+     * as the screen marks messages read live, so the pointer coming back never moves it. From then
+     * on it moves only with the reader: a live line that lands while they're reading takes it to
+     * the tail, unless the list is drawing a divider they may not have reached
+     * ([ConversationScroll.onFrame]). Null is "not told yet", which is not the same as 0, "nothing
+     * read". iOS's `dividerAfterId`.
      */
     val dividerAfterId: Long? = null,
     /**
@@ -429,6 +432,35 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
     private var lastIgnores: IgnoreSet? = null
 
     /**
+     * The held list's shape as of the previous frame, for telling a live line from everything else
+     * that makes the list longer ([onFrame]'s tail rule).
+     *
+     * @param first the oldest held id, ephemerals (id 0) aside; null for an empty list.
+     * @param newest the newest held id, ephemerals aside; 0 for an empty list.
+     */
+    private data class Tail(val generation: Int, val revision: Int, val first: Long?, val newest: Long) {
+        companion object {
+            fun of(state: ChatState, key: BufferKey): Tail {
+                val ids = state.messages[key.id].orEmpty().asSequence().map { it.id }.filter { it != 0L }
+                return Tail(
+                    generation = state.burstGeneration,
+                    revision = state.buffers[key.id]?.historyRevision ?: 0,
+                    first = ids.minOrNull(),
+                    newest = ids.maxOrNull() ?: 0L,
+                )
+            }
+        }
+    }
+    private var lastTail: Tail? = null
+
+    /**
+     * The list's word on whether it is drawing the unread divider, as of the previous build: null
+     * before there is one, and while the history hasn't landed — a stub of live events that outran
+     * the backlog hasn't the rows the boundary is for.
+     */
+    private var listDrawsDivider: Boolean? = null
+
+    /**
      * The jump-to-latest pill's badge: live messages that landed below while the reader was up in
      * history. Zeroed the moment they're back at the bottom, however they got there. iOS's
      * `newWhileDetached`.
@@ -559,8 +591,20 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
      * no divider and no banner however many unreads. `hydrated` was the first fix and was inert:
      * `history mode:latest` sets it without carrying a pointer. Only `backlog` and `read-state` set
      * `readStateKnown`.
+     *
+     * **A live line moves the boundary to the tail** while the reader is reading — the web's rule
+     * (lurker#1236; the apps' half is lurker#1235) — unless the list is drawing a divider, which the
+     * reader may not have reached yet. Whether one is drawn is the list's answer, after its own
+     * filters ([listDrawsDivider]): a boundary with nothing visible under it isn't one. Latched at
+     * the newest line and left there, the boundary would sit under an ignored sender's line, a reply
+     * the thread panel holds or a join the event tier drops, and the divider would land over the
+     * next line that IS visible, the reader's own included. [reading] is the screen being seen, the
+     * same gate as its mark-read: a line that lands while the screen is covered is unread, and the
+     * divider waits above it for the reader's return. Only a live append counts: a page prepends, a
+     * slice reply moves the revision, and a reconnect's backlog starts a new burst — the lines
+     * missed across a drop keep their divider.
      */
-    fun onFrame(state: ChatState, key: BufferKey, seq: Long): FrameStep {
+    fun onFrame(state: ChatState, key: BufferKey, seq: Long, reading: Boolean = true): FrameStep {
         val list = state.messages[key.id]
         val row = state.buffers[key.id]
         // A drop or a new burst voids what was asked over the old socket — no reply is coming.
@@ -584,11 +628,25 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         // After the replies are accounted for, so a request made now watches from this frame on.
         val around = requestAround(state, key)
         var changed = false
+        val latched = options.dividerAfterId != null
         if (options.dividerAfterId == null && row != null && row.readStateKnown) {
             options = options.copy(dividerAfterId = row.lastReadId)
             changed = true
             log { "divider latched after=${row.lastReadId} seq=$seq" }
         }
+        // The tail rule, on a boundary latched BEFORE this frame: the frame that latches has no
+        // previous shape to tell a live line by.
+        val tail = Tail.of(state, key)
+        val previous = lastTail
+        if (reading && latched && state.connection == SocketStatus.Connected && listDrawsDivider == false &&
+            previous != null && tail.generation == previous.generation && tail.revision == previous.revision &&
+            tail.newest > previous.newest && (previous.first == null || tail.first == previous.first)
+        ) {
+            options = options.copy(dividerAfterId = tail.newest)
+            changed = true
+            log { "divider follows tail after=${tail.newest} seq=$seq" }
+        }
+        lastTail = tail
         val latest = requestLatest(state, key)
         return FrameStep(loadAround = around, loadLatest = latest, optionsChanged = changed)
     }
@@ -722,6 +780,7 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
             ).size
         }
         previousVisible = built.visible
+        listDrawsDivider = if (built.historyLanded) built.dividerRow != null else null
 
         val follow = !landingPending && wasNearBottom && !wasDetached && !nowDetached
         log {
