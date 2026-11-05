@@ -435,18 +435,46 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
      * The held list's shape as of the previous frame, for telling a live line from everything else
      * that makes the list longer ([onFrame]'s tail rule).
      *
+     * @param landed the buffer's real history is loaded — [BuiltRows.historyLanded]'s rule.
+     * @param settled no burst in progress: a reconnect's snapshot and the backlog that follows it
+     *   come as separate frames, and the backlog appends to the list like live lines would.
+     * @param detached a slice below the live tail, which holds live traffic out: what grows it is a page.
      * @param first the oldest held id, ephemerals (id 0) aside; null for an empty list.
      * @param newest the newest held id, ephemerals aside; 0 for an empty list.
      */
-    private data class Tail(val generation: Int, val revision: Int, val first: Long?, val newest: Long) {
+    private data class Tail(
+        val generation: Int,
+        val revision: Int,
+        val landed: Boolean,
+        val settled: Boolean,
+        val detached: Boolean,
+        val first: Long?,
+        val newest: Long,
+    ) {
         companion object {
-            fun of(state: ChatState, key: BufferKey): Tail {
-                val ids = state.messages[key.id].orEmpty().asSequence().map { it.id }.filter { it != 0L }
+            fun of(state: ChatState, key: BufferKey, kind: BufferKind): Tail {
+                val row = state.buffers[key.id]
+                var first: Long? = null
+                var newest = 0L
+                for (message in state.messages[key.id].orEmpty()) {
+                    val id = message.id
+                    if (id == 0L) continue
+                    if (first == null || id < first) first = id
+                    if (id > newest) newest = id
+                }
                 return Tail(
                     generation = state.burstGeneration,
-                    revision = state.buffers[key.id]?.historyRevision ?: 0,
-                    first = ids.minOrNull(),
-                    newest = ids.maxOrNull() ?: 0L,
+                    revision = row?.historyRevision ?: 0,
+                    landed = BufferPlaceholder.historyLanded(
+                        hydrated = row?.hydrated == true,
+                        hydratesOnDemand = kind.hydratesOnDemand,
+                        bufferExists = row != null,
+                        rosterSettled = state.rosterSettled,
+                    ),
+                    settled = state.rosterSettled,
+                    detached = row?.hasMoreNewer == true,
+                    first = first,
+                    newest = newest,
                 )
             }
         }
@@ -454,11 +482,13 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
     private var lastTail: Tail? = null
 
     /**
-     * The list's word on whether it is drawing the unread divider, as of the previous build: null
-     * before there is one, and while the history hasn't landed — a stub of live events that outran
-     * the backlog hasn't the rows the boundary is for.
+     * The list's word on whether it is drawing the unread divider, from the last build that had the
+     * history: which boundary it was built under and how far its list reached, so a build that lags
+     * the frames — they're asynchronous, and pause while the screen is stopped — is known to answer
+     * a different question ([onFrame]).
      */
-    private var listDrawsDivider: Boolean? = null
+    private data class Word(val boundary: Long?, val newest: Long, val drawn: Boolean)
+    private var word: Word? = null
 
     /**
      * The jump-to-latest pill's badge: live messages that landed below while the reader was up in
@@ -595,14 +625,19 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
      * **A live line moves the boundary to the tail** while the reader is reading — the web's rule
      * (lurker#1236; the apps' half is lurker#1235) — unless the list is drawing a divider, which the
      * reader may not have reached yet. Whether one is drawn is the list's answer, after its own
-     * filters ([listDrawsDivider]): a boundary with nothing visible under it isn't one. Latched at
-     * the newest line and left there, the boundary would sit under an ignored sender's line, a reply
-     * the thread panel holds or a join the event tier drops, and the divider would land over the
-     * next line that IS visible, the reader's own included. [reading] is the screen being seen, the
-     * same gate as its mark-read: a line that lands while the screen is covered is unread, and the
-     * divider waits above it for the reader's return. Only a live append counts: a page prepends, a
-     * slice reply moves the revision, and a reconnect's backlog starts a new burst — the lines
-     * missed across a drop keep their divider.
+     * filters ([word]): a boundary with nothing visible under it isn't one. Latched at the newest
+     * line and left there, the boundary would sit under an ignored sender's line, a reply the thread
+     * panel holds or a join the event tier drops, and the divider would land over the next line that
+     * IS visible, the reader's own included. With no word that answers — none yet, one built under
+     * another boundary, or one that hasn't seen the last frame's lines — the older rule stands: a
+     * boundary at or past everything held was no boundary, and a real one is never dropped.
+     * [reading] is the screen being seen, the same gate as its mark-read: a line that lands while
+     * the screen is covered is unread, and the divider waits above it for the reader's return. Only
+     * a live append counts: a page prepends, a slice reply moves the revision, a reconnect's backlog
+     * arrives inside a burst (its snapshot is one frame and the appended lines another), a detached
+     * slice holds live traffic out (what grows it is a page the reader pulled, and the re-attach
+     * splices what was held out), and a stub before the history lands isn't the list the boundary
+     * is for — so the lines missed across a drop, or while away in a slice, keep their divider.
      */
     fun onFrame(state: ChatState, key: BufferKey, seq: Long, reading: Boolean = true): FrameStep {
         val list = state.messages[key.id]
@@ -636,15 +671,23 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         }
         // The tail rule, on a boundary latched BEFORE this frame: the frame that latches has no
         // previous shape to tell a live line by.
-        val tail = Tail.of(state, key)
+        val tail = Tail.of(state, key, kind)
         val previous = lastTail
-        if (reading && latched && state.connection == SocketStatus.Connected && listDrawsDivider == false &&
-            previous != null && tail.generation == previous.generation && tail.revision == previous.revision &&
+        if (reading && latched && state.connection == SocketStatus.Connected && previous != null &&
+            previous.landed && previous.settled && tail.settled && !previous.detached && !tail.detached &&
+            tail.generation == previous.generation && tail.revision == previous.revision &&
             tail.newest > previous.newest && (previous.first == null || tail.first == previous.first)
         ) {
-            options = options.copy(dividerAfterId = tail.newest)
-            changed = true
-            log { "divider follows tail after=${tail.newest} seq=$seq" }
+            val boundary = options.dividerAfterId ?: 0L
+            // The list's word counts only when it answers this question: built under this boundary,
+            // over a list that reached the previous frame's newest line.
+            val says = word?.takeIf { it.boundary == options.dividerAfterId && it.newest >= previous.newest }?.drawn
+            val noBoundary = if (says == null) boundary >= previous.newest else !says
+            if (noBoundary) {
+                options = options.copy(dividerAfterId = tail.newest)
+                changed = true
+                log { "divider follows tail after=${tail.newest} word=${says ?: "none"} seq=$seq" }
+            }
         }
         lastTail = tail
         val latest = requestLatest(state, key)
@@ -780,7 +823,15 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
             ).size
         }
         previousVisible = built.visible
-        listDrawsDivider = if (built.historyLanded) built.dividerRow != null else null
+        word = if (built.historyLanded) {
+            Word(
+                boundary = built.options.dividerAfterId,
+                newest = built.inputs.messages.orEmpty().maxOfOrNull { it.id } ?: 0L,
+                drawn = built.dividerRow != null,
+            )
+        } else {
+            null
+        }
 
         val follow = !landingPending && wasNearBottom && !wasDetached && !nowDetached
         log {
