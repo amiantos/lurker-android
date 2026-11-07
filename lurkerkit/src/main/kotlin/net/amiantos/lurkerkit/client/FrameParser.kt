@@ -197,7 +197,6 @@ internal object FrameParser {
                         messageId = messageId,
                         by = obj.string("by"),
                         reason = obj.stringOrNull("reason"),
-                        isSelf = obj.bool("self"),
                         time = obj.stringOrNull("time"),
                     ),
                 )

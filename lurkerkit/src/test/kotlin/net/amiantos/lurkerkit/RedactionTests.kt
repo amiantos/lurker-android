@@ -3,10 +3,15 @@
 
 package net.amiantos.lurkerkit
 
+import net.amiantos.lurkerkit.client.ChannelSnapshot
 import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.HistoryMode
 import net.amiantos.lurkerkit.client.NetworkSnapshot
 import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.client.UploadLimits
+import net.amiantos.lurkerkit.commands.CommandEffect
+import net.amiantos.lurkerkit.commands.CommandParser
+import net.amiantos.lurkerkit.commands.ParsedInput
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
@@ -30,6 +35,7 @@ import net.amiantos.lurkerkit.model.ReplyContext
 import net.amiantos.lurkerkit.model.ReplyParent
 import net.amiantos.lurkerkit.model.ReplyQuote
 import net.amiantos.lurkerkit.model.TagSupport
+import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.store.LurkerStore
 import net.amiantos.lurkerkit.support.Result
 import kotlin.test.Test
@@ -73,7 +79,7 @@ class RedactionTests {
     private fun redacted(id: Long, by: String = "alice", reason: String? = null, target: String = "#lurker"): ServerFrame =
         ServerFrame.MessageRedacted(
             RedactionChange(
-                networkId = 1, target = target, messageId = id, by = by, reason = reason, isSelf = false,
+                networkId = 1, target = target, messageId = id, by = by, reason = reason,
                 time = "2026-11-05T00:00:00Z",
             ),
         )
@@ -101,7 +107,7 @@ class RedactionTests {
         assertEquals(
             ServerFrame.MessageRedacted(
                 RedactionChange(
-                    networkId = 1, target = "#lurker", messageId = 42, by = "bob", reason = "oops", isSelf = true,
+                    networkId = 1, target = "#lurker", messageId = 42, by = "bob", reason = "oops",
                     time = "2026-11-05T00:00:00Z",
                 ),
             ),
@@ -203,23 +209,62 @@ class RedactionTests {
         assertEquals("hi", store.state.messages[key.id]?.get(0)?.text, "the stored row is never patched")
     }
 
+    /**
+     * The feeds show lines outside any buffer, so a mark for one is kept — but only a buffer that
+     * holds the line is told to redraw.
+     */
     @Test
-    fun testAFrameForALineNobodyHoldsIsDropped() {
+    fun testAFrameForALineNobodyHoldsIsKeptWithoutARedraw() {
         val store = LurkerStore()
         store.apply(backlog(listOf(line(1))))
+        val before = store.state.reactionsRevision(key)
         store.apply(redacted(7))
-        assertTrue(store.state.redactions.isEmpty(), "the row brings its mark with it when it's fetched")
+        assertEquals(mark, store.state.redactions[7L], "a bookmark or a search hit can show it")
+        assertEquals(before, store.state.reactionsRevision(key), "nothing on this screen changed")
         store.apply(redacted(1, target = "#other"))
-        assertTrue(store.state.redactions.isEmpty(), "and a buffer that doesn't hold it says nothing about it")
+        assertEquals(mark, store.state.redactions[1L])
+        assertEquals(before, store.state.reactionsRevision(key), "the frame named another buffer")
+    }
+
+    /** A page read before the REDACT landed can arrive after the frame that applied it. */
+    @Test
+    fun testAStalePageNeverUndeletesALine() {
+        val store = LurkerStore()
+        store.apply(backlog(listOf(line(1))))
+        store.apply(redacted(1))
+        store.apply(
+            ServerFrame.History(
+                networkId = 1, target = "#lurker", events = listOf(line(1)), mode = HistoryMode.Around,
+                hasMoreOlder = false, hasMoreNewer = false, speakers = null,
+            ),
+        )
+        assertEquals(mark, store.state.redaction(line(1), networkId = 1), "a deletion is for good")
     }
 
     @Test
     fun testTheSyncAnswerDeletesWhatItNames() {
         val store = LurkerStore()
         store.apply(backlog(listOf(line(1), line(2))))
-        store.apply(ServerFrame.ReactionsSync(messageIds = listOf(1, 2), reactions = emptyMap(), redactions = mapOf(2L to mark)))
+        val before = store.state.reactionsRevision(key)
+        store.apply(
+            ServerFrame.ReactionsSync(
+                messageIds = listOf(1, 2),
+                reactions = mapOf(1L to listOf(MessageReaction(nick = "bob", value = "👍", isSelf = false))),
+                redactions = mapOf(2L to mark),
+            ),
+        )
         assertNull(store.state.redaction(line(1), networkId = 1))
         assertEquals(mark, store.state.redaction(line(2), networkId = 1))
+        assertTrue(store.state.reactionGroups(2).isEmpty())
+        assertEquals(1, store.state.reactionGroups(1).size, "its neighbour keeps its chips")
+        assertNotEquals(before, store.state.reactionsRevision(key))
+    }
+
+    @Test
+    fun testPresentingReturnsTheSameListWhenNothingInItIsDeleted() {
+        val lines = listOf(line(1), line(2))
+        assertTrue(Redactions.presenting(lines, redactions = mapOf(9L to mark)) === lines)
+        assertNull(Redactions.presenting(listOf(line(1, text = null, redaction = mark)), redactions = emptyMap()).first().text)
     }
 
     @Test
@@ -373,5 +418,81 @@ class RedactionTests {
     fun testReactCommandRefusesADeletedLine() {
         val result = Reactions.commandTarget(listOf(line(1), line(2).deleted(mark)))
         assertEquals(Result.Failure(Reactions.CommandRefusal("can't react to a deleted message")), result)
+    }
+
+    // MARK: - Through the view model
+
+    private fun model(): ChatViewModel {
+        val model = testViewModel()
+        model.handle(ServerFrame.SocketOpen)
+        model.handle(
+            ServerFrame.Snapshot(
+                listOf(
+                    NetworkSnapshot(
+                        id = 1, state = ConnectionState.Connected, nick = "me",
+                        channels = listOf(ChannelSnapshot(name = "#lurker", topic = null, members = emptyList())),
+                        tagSupport = TagSupport(canAddReaction = true, canRemoveReaction = true, canReply = true, canRedact = true),
+                    ),
+                ),
+                globalIgnores = emptyList(), uploadLimits = UploadLimits.unstated,
+            ),
+        )
+        return model
+    }
+
+    private fun lastLocal(model: ChatViewModel): String? =
+        model.state.messages[key.id]?.lastOrNull { it.id == 0L }?.text
+
+    /** The stored rows carry no mark, so the command has to look at the lines as shown. */
+    @Test
+    fun testReactCommandSkipsALineDeletedWhileHeld() {
+        val model = model()
+        val sent = mutableListOf<String>()
+        model.reactSeam = { id, value, _ -> sent.add("$id $value"); true }
+        model.handle(backlog(listOf(line(1, nick = "bob"), line(2, nick = "bob"))))
+        model.handle(redacted(2, by = "bob"))
+        model.send(key, "/react 👍")
+        assertEquals(emptyList(), sent)
+        assertEquals("can't react to a deleted message", lastLocal(model))
+    }
+
+    @Test
+    fun testDeleteCommandTakesYourNewestStandingLineWithItsReason() {
+        val model = model()
+        val sent = mutableListOf<String>()
+        model.redactSeam = { id, reason -> sent.add("$id ${reason ?: "-"}"); true }
+        model.handle(backlog(listOf(line(1, isSelf = true), line(2, nick = "bob"), line(3, isSelf = true))))
+        model.send(key, "/delete")
+        model.send(key, "/delete  typo  ")
+        assertEquals(listOf("3 -", "3 typo"), sent)
+        // Deleted while held: the next /delete reaches past it.
+        model.handle(redacted(3, by = "me"))
+        model.send(key, "/delete")
+        assertEquals("1 -", sent.last())
+        assertNull(lastLocal(model), "nothing prints on success")
+    }
+
+    @Test
+    fun testDeleteCommandSaysWhyWhenItCant() {
+        val model = model()
+        model.redactSeam = { _, _ -> fail("nothing should go out") }
+        model.handle(backlog(listOf(line(1, nick = "bob"))))
+        model.send(key, "/delete")
+        assertEquals("nothing of yours here to delete", lastLocal(model))
+        model.handle(backlog(listOf(line(1, nick = "bob"), line(2, isSelf = true, msgid = null))))
+        model.send(key, "/delete")
+        assertEquals("can't delete that line (no message id)", lastLocal(model))
+        model.handle(ServerFrame.ReactSupport(networkId = 1, support = TagSupport.all))
+        model.send(key, "/delete")
+        assertEquals("this network can't delete messages", lastLocal(model))
+    }
+
+    @Test
+    fun testDeleteParsesItsOptionalReason() {
+        val bare = CommandParser.parse("/delete", networkId = 1, target = "#lurker", formatted = { it.toString() })
+        val reasoned = CommandParser.parse("/delete  oops ", networkId = 1, target = "#lurker", formatted = { it.toString() })
+        if (bare !is ParsedInput.Command || reasoned !is ParsedInput.Command) fail("a command")
+        assertEquals(listOf(CommandEffect.Delete(reason = null)), bare.effects)
+        assertEquals(listOf(CommandEffect.Delete(reason = "oops")), reasoned.effects)
     }
 }

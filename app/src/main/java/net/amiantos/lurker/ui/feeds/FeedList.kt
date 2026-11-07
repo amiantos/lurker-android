@@ -146,16 +146,21 @@ internal fun FeedList(
     val day by rememberDayClock()
     // The rows read the store as they're rendered, so a display name that changes while the feed is
     // open (a profile edit, the setting) would show on the rows rendered since and not on the ones
-    // already drawn (lurker#1203). The set is only ever replaced, so its identity is the signal.
+    // already drawn (lurker#1203). The set is only ever replaced, so its identity is the signal. A
+    // deletion (lurker#1013) is the other live change a drawn row has to follow — its words become
+    // the placeholder, a reaction row quoting it goes — and that map is replaced the same way.
     val namesFlow = remember(model) {
         model.statePublisher
-            .map { it.userMetadata to it.settings.bool(ChatState.displayNamesKey, default = true) }
-            .distinctUntilChanged { a, b -> a.first === b.first && a.second == b.second }
+            .map { Triple(it.userMetadata, it.settings.bool(ChatState.displayNamesKey, default = true), it.redactions) }
+            .distinctUntilChanged { a, b -> a.first === b.first && a.second == b.second && a.third === b.third }
     }
     val names by namesFlow.collectAsStateWithLifecycle(
-        initialValue = model.state.userMetadata to model.state.settings.bool(ChatState.displayNamesKey, default = true),
+        initialValue = Triple(
+            model.state.userMetadata, model.state.settings.bool(ChatState.displayNamesKey, default = true),
+            model.state.redactions,
+        ),
     )
-    val namesKey = remember(names.first, names.second) { Any() }
+    val namesKey = remember(names.first, names.second, names.third) { Any() }
     // Rendered once per row for the life of an answer: dropped when a new first page lands or the face
     // changes, the moments a row's rendering can change (`FeedRowCache`).
     val cache = remember(snapshot.epoch, style, day.zone, namesKey) {

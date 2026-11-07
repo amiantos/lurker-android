@@ -294,6 +294,12 @@ object CommandParser {
                 }
                 return listOf(CommandEffect.React(value = value))
             }
+            "delete" -> {
+                // The web's `/delete [reason]`: your most recent line here, no confirm — typing the
+                // command is the ask; the sheet's Delete confirms because a tap is not.
+                val reason = argLine.trimmingWhitespaces()
+                return listOf(CommandEffect.Delete(reason = reason.ifEmpty { null }))
+            }
             "slap" -> {
                 val who = rest.firstOrNull() ?: return listOf(CommandEffect.Info("usage: /slap <nick>"))
                 return listOf(

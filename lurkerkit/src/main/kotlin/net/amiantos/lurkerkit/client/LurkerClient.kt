@@ -1017,11 +1017,13 @@ internal class LurkerClient(
      * echoed to this call: the network's own REDACT comes back as a `message-redacted` frame, a
      * refusal as an `error` line in that buffer — so, like a reaction, never rendered optimistically.
      */
-    fun redact(messageId: Long): Boolean =
+    fun redact(messageId: Long, reason: String? = null): Boolean =
         send(
             buildJsonObject {
                 put("type", "redact")
                 put("messageId", messageId)
+                // Sent as given; the server trims and caps it, and leaves it off on an E2E channel.
+                if (!reason.isNullOrEmpty()) put("reason", reason)
             },
             surfacesFailure = true,
         )

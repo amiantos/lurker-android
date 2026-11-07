@@ -238,13 +238,17 @@ data class ChatState(
      * The lines we've seen that were deleted, by message id (lurker#1013). **Read through
      * [redaction]**, or draw after `Redactions.presenting`.
      *
-     * Beside the rows for the reason [reactions] is, and fed the same two ways: each row that
-     * arrives is authoritative for itself (its `redaction`, or none), and a live
-     * `message-redacted` frame marks one. Network lines only, and only lines a buffer HOLDS — a
-     * frame for a line nobody loaded is dropped, since the row brings its mark with it when it's
-     * fetched — so [dropBuffers] can free a buffer's share. A change here bumps the buffer's
+     * Beside the rows for the reason [reactions] is, and fed the same two ways: a row that arrives
+     * deleted marks itself, and a live `message-redacted` frame marks one. Network lines only.
+     * A deletion is for good, so a mark is never taken back — not by a stale page that read the
+     * line before its REDACT landed (the web's overlay would; this one keeps the stronger rule).
+     * Unlike [reactions], a frame for a line no buffer holds is kept: the feeds (bookmarks,
+     * activity, search) show lines outside any buffer and draw from here too. Bounded by how
+     * many lines get deleted, which is few; [dropBuffers] frees a closed buffer's share (its rows
+     * bring their marks back when fetched). A change to a held line bumps its buffer's
      * [reactionsRevisions] entry: the deletion takes the line's reactions down with it, and the
-     * screen's redraw gate already watches that integer.
+     * screen's redraw gate already watches that integer. ⚠ Replaced, never mutated: the composer
+     * dedupes on its identity.
      */
     val redactions: Map<Long, Redaction> = emptyMap(),
     /**
@@ -1165,8 +1169,9 @@ data class ChatState(
     }
 
     /**
-     * Reconcile [redactions] against a page of rows (lurker#1013) — [noteReactions]' contract:
-     * each row says whether it was deleted, and silence about an id is not a restoration.
+     * Seed [redactions] from a page of rows (lurker#1013): a row that arrived deleted marks
+     * itself. Additive only — a row WITHOUT a mark says nothing, since a page read before a
+     * REDACT landed can arrive after the frame that applied it (see [redactions]).
      */
     internal fun noteRedactions(messages: List<Message>, networkId: Int?, key: String): ChatState {
         if (networkId == null) return this
@@ -1174,48 +1179,44 @@ data class ChatState(
         var changed = false
         for (message in messages) {
             if (message.id == 0L) continue
-            val redaction = message.redaction
-            if (redaction != null) {
-                if (redactions[message.id] != redaction) {
-                    redactions[message.id] = redaction
-                    changed = true
-                }
-            } else if (redactions.remove(message.id) != null) {
-                changed = true
-            }
+            val redaction = message.redaction ?: continue
+            if (redactions[message.id] == redaction) continue
+            redactions[message.id] = redaction
+            changed = true
         }
         if (!changed) return this
         return copy(redactions = redactions, reactionsRevisions = reactionsRevisions.bumped(key))
     }
 
     /**
-     * A line was deleted while held (lurker#1013) — a `message-redacted` frame, or a
-     * `reactions-sync` naming it. Its reactions came down with it on the server, so they do
-     * here. Only for a line its buffer holds (see [redactions]); a deletion is for good, so
-     * nothing here is ever taken back.
+     * A line was deleted (lurker#1013) — a `message-redacted` frame. Its reactions came down with
+     * it on the server, so they do here. Marked whether or not a buffer holds the line (see
+     * [redactions]); the buffer that does is told to redraw.
      */
     internal fun applyRedaction(redaction: Redaction, messageId: Long, networkId: Int, target: String): ChatState {
         val key = BufferKey(networkId = networkId, target = target).id
-        if (messages[key]?.any { it.id == messageId } != true) return this
+        val held = messages[key]?.any { it.id == messageId } == true
         return copy(
             redactions = redactions + (messageId to redaction),
             reactions = reactions - messageId,
-            reactionsRevisions = reactionsRevisions.bumped(key),
+            reactionsRevisions = if (held) reactionsRevisions.bumped(key) else reactionsRevisions,
         )
     }
 
-    /** The deletions a `reactions-sync` named (lurker#1013), each applied as its frame would be. */
+    /**
+     * The deletions a `reactions-sync` named (lurker#1013), applied as their frames would be — in
+     * one pass: the marks and the dropped reactions first, then one revision bump per buffer that
+     * holds any of the lines.
+     */
     internal fun applyRedactionsSync(found: Map<Long, Redaction>): ChatState {
         if (found.isEmpty()) return this
-        var next = this
+        val marks = found.filterKeys { it != 0L }
+        var revisions = reactionsRevisions
         for ((key, buffer) in buffers) {
-            val networkId = buffer.networkId ?: continue
-            for (message in messages[key].orEmpty()) {
-                val redaction = found[message.id] ?: continue
-                next = next.applyRedaction(redaction, messageId = message.id, networkId = networkId, target = buffer.target)
-            }
+            if (buffer.networkId == null) continue
+            if (messages[key].orEmpty().any { marks.containsKey(it.id) }) revisions = revisions.bumped(key)
         }
-        return next
+        return copy(redactions = redactions + marks, reactions = reactions - marks.keys, reactionsRevisions = revisions)
     }
 
     /**

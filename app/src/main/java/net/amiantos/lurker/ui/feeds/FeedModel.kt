@@ -129,7 +129,7 @@ object FeedModel {
         // ⚠ A key the feed somehow repeats (two pages overlapping across a cursor) is suffixed rather
         // than handed to the list twice, which would crash it — a doubled row is recoverable, a crash isn't.
         val seen = HashMap<String, Int>()
-        return HighlightGrouping.group(items, now = now, zone = zone).map { group ->
+        return HighlightGrouping.group(standing(items, state), now = now, zone = zone).map { group ->
             val first = group.items[0]
             val networkName = networkName(first, state)
             FeedSection(
@@ -156,6 +156,16 @@ object FeedModel {
      */
     fun visible(items: List<HighlightItem>, ignores: IgnoreSet): List<HighlightItem> =
         items.filter { !ignores.isMessageHidden(networkId = it.networkId, message = it.message, target = it.target) }
+
+    /**
+     * The rows that still stand: a reaction to a line since deleted (lurker#1013) goes — the server
+     * took the reactions down with the line, and the web drops those feed items the same way. A
+     * deleted line's own row (a mention, a bookmark, a hit) stays and shows the placeholder. Judged
+     * at every build, unlike the ignore rules: the deletion arrives as a frame, and the list rebuilds
+     * on it (`FeedList`).
+     */
+    fun standing(items: List<HighlightItem>, state: ChatState): List<HighlightItem> =
+        items.filter { it.reaction == null || state.redaction(it.message, networkId = it.networkId) == null }
 
     /**
      * The header's leading text: `Network/#channel`. A server log's display name IS its network's, so
@@ -206,11 +216,13 @@ object FeedModel {
         val networkName = networkName(item, state)
         val reaction = item.reaction
         // A deleted line (lurker#1013) shows its placeholder here too — by the row's own mark, or the
-        // store's for one deleted while this feed was open.
+        // store's for one deleted while this feed was open (the list rebuilds on it). Never for a
+        // system-buffer item, whose id is another sequence.
+        val redactions = if (item.networkId == null) emptyMap() else state.redactions
         val line = if (reaction == null) {
             Redactions.presenting(
                 state.relayBots.reattributing(listOf(item.message), networkId = item.networkId),
-                redactions = state.redactions,
+                redactions = redactions,
             ).firstOrNull() ?: item.message
         } else {
             item.message
@@ -226,7 +238,7 @@ object FeedModel {
                 ignores = state.ignores,
                 relayBots = state.relayBots,
                 ownNick = item.networkId?.let { state.networks[it]?.nick },
-                redactions = state.redactions,
+                redactions = redactions,
             ).firstOrNull() ?: line
         } else {
             line

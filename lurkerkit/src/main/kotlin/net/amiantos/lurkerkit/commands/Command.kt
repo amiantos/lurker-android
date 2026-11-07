@@ -195,6 +195,12 @@ sealed interface CommandEffect {
     data class React(val value: String) : CommandEffect
 
     /**
+     * Delete your most recent line in the issuing buffer, with an optional reason — `/delete`
+     * (lurker#1013). Which line that is, and whether the network takes it, is the executor's.
+     */
+    data class Delete(val reason: String?) : CommandEffect
+
+    /**
      * A local, ephemeral info line printed into the issuing buffer: `/commands` output, a
      * usage hint, or a "not in the app yet" note. Never touches the network.
      */
@@ -439,6 +445,10 @@ object CommandRegistry {
         CommandSpec(
             listOf("react"), CommandCategory.Messaging, "React to the last line someone else said",
             args = listOf(ArgSpec("emoji or text", ArgKind.Text, rest = true)),
+        ),
+        CommandSpec(
+            listOf("delete"), CommandCategory.Messaging, "Delete your most recent line",
+            args = listOf(ArgSpec("reason", ArgKind.Text, optional = true, rest = true)),
         ),
         CommandSpec(
             listOf("slap"), CommandCategory.Messaging, "Slap someone with a large trout",

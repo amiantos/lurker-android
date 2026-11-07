@@ -75,6 +75,7 @@ import net.amiantos.lurkerkit.model.PendingOpens
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.PreviewSelection
 import net.amiantos.lurkerkit.model.Reactions
+import net.amiantos.lurkerkit.model.Redactions
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.SearchQuery
 import net.amiantos.lurkerkit.model.ServerAddress
@@ -1275,7 +1276,16 @@ class ChatViewModel(
      * `message-redacted` frame, a refusal as an error line in the buffer. False when there was
      * no socket to carry it.
      */
-    fun redact(messageId: Long): Boolean = canWrite && client.redact(messageId = messageId)
+    fun redact(messageId: Long, reason: String? = null): Boolean = canWrite && sendRedact(messageId, reason)
+
+    /** Every deletion's way onto the socket — through `redactSeam` when a test has set one. */
+    private fun sendRedact(messageId: Long, reason: String?): Boolean {
+        redactSeam?.let { return it(messageId, reason) }
+        return client.redact(messageId = messageId, reason = reason)
+    }
+
+    /** Test seam: stands in for the socket a `redact` verb goes out on — message id, reason. */
+    internal var redactSeam: ((Long, String?) -> Boolean)? = null
 
     /**
      * Whether a write the user made can reach the server now (`ChatState.socketWritable`). Asked
@@ -1811,6 +1821,8 @@ class ChatViewModel(
                     lifecycle(NetworkAction.Reconnect, key)
                 is CommandEffect.React ->
                     react(effect.value, key)
+                is CommandEffect.Delete ->
+                    delete(effect.reason, key)
                 is CommandEffect.Info ->
                     store.appendLocal(key, text = effect.text)
             }
@@ -1838,7 +1850,7 @@ class ChatViewModel(
             store.appendLocal(key, text = "jump back to the latest messages to react with /react")
             return
         }
-        when (val target = Reactions.commandTarget(state.messages[key.id].orEmpty())) {
+        when (val target = Reactions.commandTarget(heldAsShown(key, state))) {
             is Result.Failure ->
                 store.appendLocal(key, text = target.error.text)
             is Result.Success -> {
@@ -1853,6 +1865,43 @@ class ChatViewModel(
             }
         }
     }
+
+    /**
+     * `/delete [reason]` (lurker#1013): your most recent line here, no confirm — typing the
+     * command is the ask. Nothing prints on success: the row blanks when the network's REDACT
+     * comes back, and a refusal lands here as an error line. The web's `runDelete`.
+     */
+    private fun delete(reason: String?, key: BufferKey) {
+        val state = store.state
+        if (!(state.tagSupport(networkId = key.networkId).canRedact && Reactions.isConversation(key.target))) {
+            store.appendLocal(key, text = "this network can't delete messages")
+            return
+        }
+        // As for `/react`: on a jump's slice the newest line held isn't your newest.
+        if (state.buffers[key.id]?.hasMoreNewer == true) {
+            store.appendLocal(key, text = "jump back to the latest messages to delete with /delete")
+            return
+        }
+        when (val target = Redactions.commandTarget(heldAsShown(key, state))) {
+            is Result.Failure ->
+                store.appendLocal(key, text = target.error.text)
+            is Result.Success ->
+                if (!sendRedact(target.value.id, reason)) {
+                    store.appendLocal(key, text = "not connected — the message wasn't deleted")
+                }
+        }
+    }
+
+    /**
+     * The buffer's held rows as the screen shows them where it matters to a command: a line
+     * deleted while held reads as deleted (`Redactions.presenting`), so `/react` and `/delete`
+     * never land on one. The stored rows carry no mark of their own — see `ChatState.redactions`.
+     */
+    private fun heldAsShown(key: BufferKey, state: ChatState): List<Message> =
+        Redactions.presenting(
+            state.messages[key.id].orEmpty(),
+            redactions = if (key.networkId == null) emptyMap() else state.redactions,
+        )
 
     /**
      * Run one of the REST connection verbs on `key`'s network and print its refusal, if any,
