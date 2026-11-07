@@ -80,10 +80,7 @@ internal class ConversationInputs(
     val reactionsRevision: Int,
     /** Not compared — [reactionsRevision] stands for it. */
     val reactions: Map<Long, List<MessageReaction>>,
-    /**
-     * Which lines were deleted (lurker#1013). Not compared either: a deletion bumps
-     * [reactionsRevision] too, since it takes the line's reactions down with it.
-     */
+    /** Which lines were deleted (lurker#1013). Compared by identity — replaced on every deletion. */
     val redactions: Map<Long, Redaction> = emptyMap(),
     /** `ChatState.tagSupport` for this buffer's network, resolved once per frame for every chip. */
     val support: TagSupport,
@@ -111,6 +108,8 @@ internal class ConversationInputs(
         if (messageId == 0L) return emptyList()
         val list = reactions[messageId]
         if (list.isNullOrEmpty()) return emptyList()
+        // A deleted line's reactions came down with it (lurker#1013) — `ChatState.reactionGroups`' rule.
+        if (redactions.containsKey(messageId)) return emptyList()
         return Reactions.groups(list)
     }
 
@@ -126,6 +125,10 @@ internal class ConversationInputs(
                 old.speakers == new.speakers &&
                 old.rosterSettled == new.rosterSettled &&
                 old.reactionsRevision == new.reactionsRevision &&
+                // A deletion (lurker#1013) bumps that revision for the buffer holding the line — but a
+                // reply here can quote a parent this slice doesn't hold. The map is replaced only when
+                // a line is deleted, so identity is the cheap test.
+                old.redactions === new.redactions &&
                 old.support == new.support &&
                 old.modePrefixes == new.modePrefixes &&
                 old.highlighterNicks == new.highlighterNicks &&

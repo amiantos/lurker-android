@@ -195,12 +195,10 @@ object Replies {
             return Shown(null, line.text)
         }
         if (!parent.redacted && redactions.containsKey(parent.id)) parent = parent.copy(text = "", redacted = true)
-        // A deleted parent has no envelope left to unwrap: it quotes whoever the server stored.
-        val unwrapped = if (parent.redacted) {
-            asLine
-        } else {
-            relayBots.reattributing(listOf(asLine), networkId = networkId).firstOrNull() ?: asLine
-        }
+        // Unwrapped from the words the server sent, BEFORE they go: a bridged line deleted while
+        // this reply was on screen still quotes the person inside its envelope, as its own row
+        // does. A parent that arrived deleted has no envelope left and quotes whoever was stored.
+        val unwrapped = relayBots.reattributing(listOf(asLine), networkId = networkId).firstOrNull() ?: asLine
         val relayed = unwrapped.relayBot != null
         val quote = ReplyQuote(
             id = parent.id,

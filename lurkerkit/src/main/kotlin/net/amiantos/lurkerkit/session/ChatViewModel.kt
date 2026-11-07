@@ -986,6 +986,7 @@ class ChatViewModel(
     suspend fun fetchHighlights(before: Long? = null): HighlightsPage? {
         val page = client.fetchHighlights(before = before)
         store.noteBookmarked(ids = page?.items.orEmpty().filter { it.message.bookmarked }.map { it.message.id })
+        store.noteRedactions(rows = page?.items.orEmpty().map { it.message })
         return page
     }
 
@@ -998,6 +999,7 @@ class ChatViewModel(
         store.noteBookmarked(
             ids = page?.items.orEmpty().filter { it.reaction == null && it.message.bookmarked }.map { it.message.id },
         )
+        store.noteRedactions(rows = page?.items.orEmpty().filter { it.reaction == null }.map { it.message })
         return page
     }
 
@@ -1198,6 +1200,7 @@ class ChatViewModel(
         // page of `bookmark-updated` frames would wake every screen 50 times over to say one
         // thing.
         store.noteBookmarked(ids = page?.items.orEmpty().map { it.message.id })
+        store.noteRedactions(rows = page?.items.orEmpty().map { it.message })
         return page
     }
 
@@ -1243,6 +1246,7 @@ class ChatViewModel(
         // the only place a saved line the user has never opened can become known — same
         // reasoning as `fetchBookmarks`, and the same single mutation rather than one per row.
         store.noteBookmarked(ids = page?.items.orEmpty().filter { it.message.bookmarked }.map { it.message.id })
+        store.noteRedactions(rows = page?.items.orEmpty().map { it.message })
         return page
     }
 
@@ -2867,8 +2871,12 @@ class ChatViewModel(
         val ignores = store.state.ignores
         val urls = store.state.buffers.values.flatMap { buffer ->
             PreviewSelection.urls(
-                store.state.messages[buffer.key.id].orEmpty(), networkId = buffer.networkId,
-                target = buffer.target, ignores = ignores,
+                // As shown (lurker#1013): a deleted line's URL isn't on screen and isn't asked for.
+                Redactions.presenting(
+                    store.state.messages[buffer.key.id].orEmpty(),
+                    redactions = if (buffer.networkId == null) emptyMap() else store.state.redactions,
+                ),
+                networkId = buffer.networkId, target = buffer.target, ignores = ignores,
                 inlineMedia = wantMedia, linkPreviews = wantPages,
             )
         }

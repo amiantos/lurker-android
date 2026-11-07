@@ -310,6 +310,10 @@ object FeedModel {
      */
     fun replyQuote(quote: ReplyQuote?, indented: Boolean, style: MessageTextStyle, names: ((String) -> String?)? = null): FeedReply {
         if (quote == null) return FeedReply(MessageText.renderReplyQuote(null, indented, style), MessageText.spokenReplyQuote(null))
+        // The quote of a deleted line (lurker#1013) says so where its words were — the list's rule.
+        if (quote.redacted) {
+            return FeedReply(MessageText.renderReplyQuote(quote, indented, style, names), MessageText.spokenReplyQuote(quote, names))
+        }
         val safe = SpoilerSafeText.of(quote.text)
         val shown = buildAnnotatedString {
             val fg = style.colors.fg

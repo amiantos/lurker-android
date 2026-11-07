@@ -29,6 +29,7 @@ import net.amiantos.lurkerkit.model.Reactions
 import net.amiantos.lurkerkit.model.Redaction
 import net.amiantos.lurkerkit.model.RedactionChange
 import net.amiantos.lurkerkit.model.Redactions
+import net.amiantos.lurkerkit.model.RelayBot
 import net.amiantos.lurkerkit.model.RelayBotSet
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.ReplyContext
@@ -267,14 +268,43 @@ class RedactionTests {
         assertNull(Redactions.presenting(listOf(line(1, text = null, redaction = mark)), redactions = emptyMap()).first().text)
     }
 
+    /** A bookmark or a search hit can still be showing the line after its buffer closes. */
     @Test
-    fun testClosingABufferFreesItsMarks() {
+    fun testClosingABufferKeepsItsMarks() {
         val store = LurkerStore()
         store.apply(backlog(listOf(line(1))))
         store.apply(redacted(1))
-        assertFalse(store.state.redactions.isEmpty())
         store.apply(ServerFrame.BufferClosed(networkId = 1, target = "#lurker"))
-        assertTrue(store.state.redactions.isEmpty())
+        assertEquals(mark, store.state.redactions[1L])
+    }
+
+    /**
+     * A page read before the REDACT landed can put the line's reactions back in the map; none are
+     * drawn for a line known to be deleted.
+     */
+    @Test
+    fun testAStalePageNeverRestoresADeletedLinesChips() {
+        val store = LurkerStore()
+        val thumbs = MessageReaction(nick = "bob", value = "👍", isSelf = false)
+        store.apply(backlog(listOf(line(1, reactions = listOf(thumbs)))))
+        store.apply(redacted(1))
+        store.apply(
+            ServerFrame.History(
+                networkId = 1, target = "#lurker", events = listOf(line(1, reactions = listOf(thumbs))), mode = HistoryMode.Around,
+                hasMoreOlder = false, hasMoreNewer = false, speakers = null,
+            ),
+        )
+        assertTrue(store.state.reactionGroups(1).isEmpty())
+    }
+
+    /** The feeds read rows over REST; a deleted one they carry marks the line everywhere. */
+    @Test
+    fun testAFeedRowSeedsTheMark() {
+        val store = LurkerStore()
+        store.apply(backlog(listOf(line(1))))
+        store.noteRedactions(rows = listOf(line(1, text = null, redaction = mark), line(2)))
+        assertEquals(mark, store.state.redaction(line(1), networkId = 1))
+        assertNull(store.state.redactions[2L])
     }
 
     @Test
@@ -320,6 +350,26 @@ class RedactionTests {
         val quote = shown(reply, redactions = mapOf(1L to mark))
         assertEquals(true, quote?.redacted)
         assertEquals("", quote?.text, "the words don't leak through the quote")
+    }
+
+    /**
+     * A bridged line deleted while on screen still quotes the person inside its envelope, as its
+     * own row does.
+     */
+    @Test
+    fun testADeletedRelayedParentKeepsItsSpeaker() {
+        val parent = ReplyParent(id = 1, nick = "bridge", type = EventType.Message, text = "<alice> secret")
+        val reply = line(2, nick = "bob", text = "alice: why", replyTo = ReplyContext(msgid = "m", parent = parent))
+        val quote = Replies.shown(
+            reply.replyTo!!, line = reply, networkId = 1, target = "#lurker",
+            ignores = IgnoreSet(global = emptyList(), byNetwork = emptyMap()),
+            relayBots = RelayBotSet(byNetwork = mapOf(1 to listOf(RelayBot(nick = "bridge")))),
+            ownNick = "me", redactions = mapOf(1L to mark),
+        ).quote
+        assertEquals("alice", quote?.nick)
+        assertEquals("bridge", quote?.relayBot)
+        assertEquals(true, quote?.redacted)
+        assertEquals("", quote?.text)
     }
 
     // MARK: - Actions

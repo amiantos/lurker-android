@@ -39,6 +39,7 @@ import net.amiantos.lurker.platform.confirmCopy
 import net.amiantos.lurker.ui.message.RowPress
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.Redactions
 import net.amiantos.lurkerkit.session.ChatViewModel
 
 /** Which of a conversation's message sheets is up. */
@@ -191,8 +192,19 @@ internal fun MessageActionsHost(
             onDismiss = state::dismiss,
             onPick = { picked ->
                 pending = {
+                    // The line as it stands NOW, not as the sheet was built: deleted under the sheet
+                    // (lurker#1013), it has no words to copy, answer or react to, and the kit's own
+                    // gate then refuses those — while Save/Remove Bookmark still does what the row said.
+                    val subject = sheet.subject
+                    val current = if (subject is ActionSubject.Line) {
+                        subject.copy(
+                            message = Redactions.presenting(listOf(subject.message), model.state.redactions).first(),
+                        )
+                    } else {
+                        subject
+                    }
                     MessageActionsModel.run(
-                        picked, sheet.subject, effects,
+                        picked, current, effects,
                         open = uriHandler::openUri,
                         copyLink = { url -> copy("Link", url) },
                         share = { url -> share(context, url) },

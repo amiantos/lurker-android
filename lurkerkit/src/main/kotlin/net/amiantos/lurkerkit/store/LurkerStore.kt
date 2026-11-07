@@ -243,12 +243,12 @@ data class ChatState(
      * A deletion is for good, so a mark is never taken back — not by a stale page that read the
      * line before its REDACT landed (the web's overlay would; this one keeps the stronger rule).
      * Unlike [reactions], a frame for a line no buffer holds is kept: the feeds (bookmarks,
-     * activity, search) show lines outside any buffer and draw from here too. Bounded by how
-     * many lines get deleted, which is few; [dropBuffers] frees a closed buffer's share (its rows
-     * bring their marks back when fetched). A change to a held line bumps its buffer's
-     * [reactionsRevisions] entry: the deletion takes the line's reactions down with it, and the
-     * screen's redraw gate already watches that integer. ⚠ Replaced, never mutated: the composer
-     * dedupes on its identity.
+     * activity, search) show lines outside any buffer and draw from here too, and [dropBuffers]
+     * leaves them be for the same reason. Bounded by how many lines get deleted, which is few.
+     * A change to a held line bumps its buffer's [reactionsRevisions] entry: the deletion takes
+     * the line's reactions down with it, and the screen's redraw gate already watches that
+     * integer — and compares this map too, for a quote whose parent isn't held. ⚠ Replaced, never
+     * mutated: the composer and the conversation dedupe on its identity.
      */
     val redactions: Map<Long, Redaction> = emptyMap(),
     /**
@@ -584,10 +584,11 @@ data class ChatState(
                 messages[key].orEmpty().mapTo(freedReactions) { it.id }
             }
         }
+        // ⚠ Not the marks in `redactions`: a feed open on one of these lines still draws from them,
+        // and the map is bounded by deletions, not by what's loaded.
         return copy(
             keysById = keysById,
             reactions = reactions - freedReactions,
-            redactions = redactions - freedReactions,
             reactionsRevisions = reactionsRevisions - keySet,
             buffers = buffers - keySet,
             messages = messages - keySet,
@@ -944,6 +945,9 @@ data class ChatState(
         if (messageId == 0L) return emptyList()
         val list = reactions[messageId]
         if (list == null || list.isEmpty()) return emptyList()
+        // A deleted line's reactions came down with it (lurker#1013): none are drawn even if a
+        // page read before the REDACT landed put them back in the map.
+        if (redactions.containsKey(messageId)) return emptyList()
         return Reactions.groups(list)
     }
 
@@ -1481,6 +1485,17 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
     fun noteBookmarked(ids: List<Long>) {
         if (ids.isEmpty()) return
         publish(state.noteBookmarked(ids))
+    }
+
+    /**
+     * Record the deletions a fetched feed page carries (lurker#1013), in ONE mutation — like
+     * [noteBookmarked]. A bookmark or a search hit read after its line was deleted is how a
+     * deletion missed while away reaches every other copy of the line this session shows.
+     */
+    fun noteRedactions(rows: List<Message>) {
+        val marks = rows.filter { it.id != 0L && it.redaction != null }.associate { it.id to it.redaction!! }
+        if (marks.isEmpty()) return
+        publish(state.copy(redactions = state.redactions + marks))
     }
 
     fun apply(frame: ServerFrame) {
