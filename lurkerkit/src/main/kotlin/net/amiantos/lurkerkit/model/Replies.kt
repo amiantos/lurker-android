@@ -27,6 +27,11 @@ data class ReplyParent(
     val userhost: String? = null,
     /** One of your own lines. */
     val isSelf: Boolean = false,
+    /**
+     * The answered line was deleted (lurker#1013): `text` is empty, and the quote says so rather
+     * than "unavailable" — the row is still there to jump to.
+     */
+    val redacted: Boolean = false,
 )
 
 /**
@@ -56,6 +61,11 @@ data class ReplyQuote internal constructor(
     val isSelf: Boolean,
     val relayBot: String?,
     val relaySource: String?,
+    /**
+     * The quoted line was deleted (lurker#1013): `text` is empty and the quote reads
+     * `Redactions.PLACEHOLDER` in its place. Still jumps.
+     */
+    val redacted: Boolean = false,
 )
 
 /**
@@ -159,6 +169,9 @@ object Replies {
      * - The text loses the `alice: ` it opens with when the quote names her — or the bot, which a
      *   client that knows nothing of relay marks addresses instead. Only on a `message`, and only
      *   when there's a quote: with none, that address is the only sign of who it's to.
+     * - The quote of a deleted line (lurker#1013) reads as deleted, not as unavailable — by the
+     *   parent's own flag, or by [redactions] (`ChatState.redactions`) when the answered line was
+     *   deleted while this reply was on screen and its quote still copied the words.
      */
     fun shown(
         context: ReplyContext,
@@ -168,9 +181,10 @@ object Replies {
         ignores: IgnoreSet,
         relayBots: RelayBotSet,
         ownNick: String?,
+        redactions: Map<Long, Redaction> = emptyMap(),
         now: Instant = Instant.now(),
     ): Shown {
-        val parent = context.parent ?: return Shown(null, line.text)
+        var parent = context.parent ?: return Shown(null, line.text)
         val asLine = Message(
             id = parent.id, type = parent.type, nick = parent.nick, text = parent.text,
             isSelf = parent.isSelf, userhost = parent.userhost,
@@ -180,13 +194,19 @@ object Replies {
         ) {
             return Shown(null, line.text)
         }
-        val unwrapped = relayBots.reattributing(listOf(asLine), networkId = networkId).firstOrNull() ?: asLine
+        if (!parent.redacted && redactions.containsKey(parent.id)) parent = parent.copy(text = "", redacted = true)
+        // A deleted parent has no envelope left to unwrap: it quotes whoever the server stored.
+        val unwrapped = if (parent.redacted) {
+            asLine
+        } else {
+            relayBots.reattributing(listOf(asLine), networkId = networkId).firstOrNull() ?: asLine
+        }
         val relayed = unwrapped.relayBot != null
         val quote = ReplyQuote(
             id = parent.id,
             nick = unwrapped.nick ?: parent.nick,
             type = parent.type,
-            text = unwrapped.text ?: parent.text,
+            text = if (parent.redacted) "" else unwrapped.text ?: parent.text,
             isSelf = if (relayed) {
                 ownNick?.let { NickCompletion.sameNick(it, unwrapped.nick ?: "") } ?: false
             } else {
@@ -194,6 +214,7 @@ object Replies {
             },
             relayBot = unwrapped.relayBot,
             relaySource = unwrapped.relaySource,
+            redacted = parent.redacted,
         )
         val text = line.text
         if (line.type != EventType.Message || text == null) return Shown(quote, line.text)
@@ -215,6 +236,7 @@ object Replies {
         ignores: IgnoreSet,
         relayBots: RelayBotSet,
         ownNick: String?,
+        redactions: Map<Long, Redaction> = emptyMap(),
         now: Instant = Instant.now(),
     ): List<Message> {
         if (messages.none { it.replyTo != null }) return messages
@@ -222,7 +244,7 @@ object Replies {
             val context = line.replyTo ?: return@map line
             val result = shown(
                 context, line = line, networkId = networkId, target = target,
-                ignores = ignores, relayBots = relayBots, ownNick = ownNick, now = now,
+                ignores = ignores, relayBots = relayBots, ownNick = ownNick, redactions = redactions, now = now,
             )
             line.showingReply(quote = result.quote, text = result.text)
         }

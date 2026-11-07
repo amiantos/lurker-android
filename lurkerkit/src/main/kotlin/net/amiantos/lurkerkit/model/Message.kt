@@ -13,10 +13,10 @@ import java.time.Instant
  * Port note: immutable, with a private `copy`. In LurkerKit every field is either a `let` or
  * `private(set)`, so nothing outside `Message.swift` can change a line; the three transforms
  * below (`unhighlighted`, `relayed`, `showingReply`) are the only writers. Here the primary
- * constructor — all 29 fields — is private and `copy` is private with it, and the public
- * constructor is LurkerKit's `init`: the 25 wire fields, without the four that only a
+ * constructor — all 30 fields — is private and `copy` is private with it, and the public
+ * constructor is LurkerKit's `init`: the 26 wire fields, without the four that only a
  * transform sets (`replyQuote`, `unstrippedText`, `relayBot`, `relaySource`). Equality covers
- * all 29, as the Swift's does.
+ * all 30, as the Swift's does.
  *
  * Port note: `id` is a message id, so it is a `Long` here (PORTING.md, Types).
  */
@@ -161,6 +161,16 @@ data class Message private constructor(
     /** A kick of us — only the server knows the nick we wore when it landed. */
     val selfKicked: Boolean,
     /**
+     * The line was deleted (lurker#1013): the server NULLed its text and this says who and when.
+     * On the wire for a row read back deleted; set by [deleted] for one deleted while held.
+     *
+     * **Don't render from the wire field alone — ask `ChatState.redaction(for:)`**, or draw the
+     * line after `Redactions.presenting`, which folds the store's answer in. Like `reactions`,
+     * the row's field is the seed and the store's side map is what also reflects a
+     * `message-redacted` frame since. Changed only by [deleted].
+     */
+    val redaction: Redaction?,
+    /**
      * The reply's quote as it should SHOW — set by `showingReply`, the one producer, from
      * `Replies.shown`: null on a reply means "original message unavailable" (gone, never held, or
      * from someone ignored since). Meaningless on a line that isn't a reply.
@@ -219,6 +229,7 @@ data class Message private constructor(
         dm: Boolean = false,
         notifyAlways: Boolean = false,
         selfKicked: Boolean = false,
+        redaction: Redaction? = null,
     ) : this(
         id = id,
         type = type,
@@ -249,11 +260,23 @@ data class Message private constructor(
         dm = dm,
         notifyAlways = notifyAlways,
         selfKicked = selfKicked,
+        redaction = redaction,
         replyQuote = null,
         unstrippedText = null,
         relayBot = null,
         relaySource = null,
     )
+
+    /**
+     * This line as deleted (lurker#1013): its words gone, the mark in their place. A display
+     * transform like [relayed], applied by `Redactions.presenting` — the stored row keeps whatever
+     * text it arrived with, and the store's side map says which lines show this way.
+     *
+     * `unstrippedText` goes too, so [copyText] has nothing to offer: a deleted line is copied by
+     * nobody. Everything else is carried over — `id`, author, time — because the row stays where
+     * it was, and a bookmark, a jump and a mark-read all still address it.
+     */
+    fun deleted(redaction: Redaction): Message = copy(redaction = redaction, text = null, unstrippedText = null)
 
     /**
      * This line with its highlight taken off — what a `NOHIGHLIGHT` ignore rule leaves behind
@@ -361,6 +384,14 @@ data class Message private constructor(
      * the client keeps them off screen without modeling every one.
      */
     val isRenderable: Boolean
+        get() = when {
+            // A deleted line (lurker#1013) has no text by design and still has a row to show: its
+            // author, its time, and the placeholder where its words were.
+            redaction != null -> true
+            else -> renderableByType
+        }
+
+    private val renderableByType: Boolean
         get() = when (type) {
             // Built from the actor nick; a reason/topic is optional.
             EventType.Join, EventType.Part, EventType.Quit, EventType.Topic -> hasNick

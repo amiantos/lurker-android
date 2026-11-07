@@ -18,6 +18,8 @@ import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NickNote
 import net.amiantos.lurkerkit.model.PresenceState
 import net.amiantos.lurkerkit.model.ReactionChange
+import net.amiantos.lurkerkit.model.Redaction
+import net.amiantos.lurkerkit.model.RedactionChange
 import net.amiantos.lurkerkit.model.RelayBot
 import net.amiantos.lurkerkit.model.SettingOption
 import net.amiantos.lurkerkit.model.SettingValue
@@ -335,12 +337,21 @@ internal sealed interface ServerFrame {
     data class Reaction(val change: ReactionChange) : ServerFrame
 
     /**
+     * WS `message-redacted` (lurker#1013): the line was deleted, by its author or an op. Its text
+     * is gone and its reactions came down with it. Patches a line we may hold; never reopens a
+     * buffer.
+     */
+    data class MessageRedacted(val change: RedactionChange) : ServerFrame
+
+    /**
      * WS `reactions-sync`: the answer to `sync-reactions`. Every id in `messageIds` is
-     * authoritative — one absent from `reactions` has none standing now.
+     * authoritative — one absent from `reactions` has none standing now. [redactions] names the
+     * lines among them deleted meanwhile (§5.3), each applied as a `message-redacted` would be.
      */
     data class ReactionsSync(
         val messageIds: List<Long>,
         val reactions: Map<Long, List<MessageReaction>>,
+        val redactions: Map<Long, Redaction> = emptyMap(),
     ) : ServerFrame
 
     /**

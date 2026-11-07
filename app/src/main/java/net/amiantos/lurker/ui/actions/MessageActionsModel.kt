@@ -47,7 +47,7 @@ sealed interface ActionKey {
 }
 
 /** The glyph a row wears — the kit's SF Symbol names, mapped onto the app's own icons. */
-enum class ActionGlyph { Reply, React, Copy, Bookmark, Bookmarked, Profile, OpenLink, Share, Ignore }
+enum class ActionGlyph { Reply, React, Copy, Bookmark, Bookmarked, Delete, Profile, OpenLink, Share, Ignore }
 
 /** One row of the sheet: what it does, what it says, and its glyph. */
 data class ActionRow(val key: ActionKey, val title: String, val glyph: ActionGlyph)
@@ -69,9 +69,10 @@ data class ActionHeader(val title: String, val detail: String?, val spokenDetail
 object MessageActionsModel {
 
     /**
-     * The scope a long press reads, at the press: whether the line is saved, and which tags the
-     * network takes right now — all three, since a network can carry a reply's tag and a new reaction
-     * but refuse a take-back (irc.so, lurker#1101), and the kit asks each for its own action.
+     * The scope a long press reads, at the press: whether the line is saved, which tags the network
+     * takes right now — all of them, since a network can carry a reply's tag and a new reaction but
+     * refuse a take-back (irc.so, lurker#1101), and the kit asks each for its own action — and
+     * whether you hold a prefix mode here, which offers Delete on others' lines (lurker#1013).
      */
     fun scope(state: ChatState, key: BufferKey, isBookmarked: Boolean): MessageActionScope =
         MessageActionScope(
@@ -79,6 +80,7 @@ object MessageActionsModel {
             isBookmarked = isBookmarked,
             target = key.target,
             support = state.tagSupport(networkId = key.networkId),
+            moderating = state.moderates(key),
         )
 
     /** The rows for [subject], in menu order — empty when it offers nothing (no sheet then, as iOS). */
@@ -106,6 +108,7 @@ object MessageActionsModel {
             "doc.on.doc" -> ActionGlyph.Copy
             "bookmark" -> ActionGlyph.Bookmark
             "bookmark.fill" -> ActionGlyph.Bookmarked
+            "trash" -> ActionGlyph.Delete
             "person.crop.circle" -> ActionGlyph.Profile
             "safari" -> ActionGlyph.OpenLink
             "square.and.arrow.up" -> ActionGlyph.Share
@@ -129,10 +132,12 @@ object MessageActionsModel {
                 val speaker = if (nick != null && nick.isNotEmpty()) nick else "Message"
                 val bot = message.relayBot
                 val text = message.text?.let(SpoilerSafeText::of)
+                // A deleted line (lurker#1013) is identified by its placeholder, as it is in the list.
+                val deleted = message.redaction?.label(nick)
                 ActionHeader(
                     title = if (bot != null) "$speaker via $bot" else speaker,
-                    detail = text?.shown,
-                    spokenDetail = text?.spoken,
+                    detail = deleted ?: text?.shown,
+                    spokenDetail = deleted ?: text?.spoken,
                 )
             }
             is ActionSubject.Link -> ActionHeader(title = host(subject.url) ?: "Link", detail = subject.url)
@@ -210,6 +215,13 @@ object MessageActionsModel {
      */
     const val BOOKMARK_NOT_SENT = "Not connected — the bookmark didn't change."
 
+    /** A Delete that found no socket (lurker#1013). Nothing retries it. */
+    const val DELETE_NOT_SENT = "Not connected — the message wasn't deleted."
+
+    /** Delete's confirm (lurker#1013): not undoable, so one question — the web's wording. */
+    const val DELETE_TITLE = "Delete this message?"
+    const val DELETE_BODY = "This can't be undone."
+
     // MARK: - Run
 
     /**
@@ -222,6 +234,8 @@ object MessageActionsModel {
         val showProfile: (String) -> Unit,
         val react: (Message) -> Unit,
         val ignore: (Message, subject: String) -> Unit,
+        /** Delete (lurker#1013): the screen confirms, then sends. */
+        val delete: (Message) -> Unit = {},
     )
 
     /**
@@ -257,6 +271,7 @@ object MessageActionsModel {
                         setBookmark = line.setBookmark,
                         showProfile = line.showProfile,
                         react = line.react,
+                        delete = line.delete,
                     ),
                 )
                 ActionKey.Ignore -> ignoreSubject(subject.message, subject.scope)?.let { line.ignore(subject.message, it) }

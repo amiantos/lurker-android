@@ -166,11 +166,13 @@ object Reactions {
      * whatever the network is doing right now. False for a notice, an encrypted line, a line
      * with no msgid, or one outside a channel or DM — which is what says to the sheet whether
      * to blame the line or the network, and to the row whether to offer an add chip at all.
+     * False for a deleted line too (lurker#1013): nothing is left to react to.
      */
     fun lineTakes(message: Message, target: String): Boolean =
         message.id != 0L &&
             !message.msgid.isNullOrEmpty() &&
             !message.isE2E &&
+            message.redaction == null &&
             (message.type == EventType.Message || message.type == EventType.Action) &&
             isConversation(target)
 
@@ -185,6 +187,7 @@ object Reactions {
                 (it.type == EventType.Message || it.type == EventType.Action || it.type == EventType.Notice)
         } ?: return Result.Failure(CommandRefusal("nothing here to react to"))
         if (line.type == EventType.Notice) return Result.Failure(CommandRefusal("can't react to a notice"))
+        if (line.redaction != null) return Result.Failure(CommandRefusal("can't react to a deleted message"))
         if (line.isE2E) return Result.Failure(CommandRefusal("can't react to an encrypted line"))
         if (line.msgid.isNullOrEmpty()) return Result.Failure(CommandRefusal("can't react to that line (no message id)"))
         return Result.Success(line)

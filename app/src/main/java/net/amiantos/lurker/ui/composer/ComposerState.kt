@@ -1048,6 +1048,15 @@ internal fun rememberComposerState(
     LaunchedEffect(state) {
         model.statePublisher.conflate().map { it.typists(key) }.distinctUntilChanged().collect { state.typists = it }
     }
+    // A reply being written to a line that was just deleted (lurker#1013) can go nowhere now. The
+    // draft's words stay; only the reply link goes — the web's rule. The map is replaced, never
+    // mutated, so identity is the cheap dedupe.
+    LaunchedEffect(state) {
+        model.statePublisher.conflate().map { it.redactions }.distinctUntilChanged { a, b -> a === b }.collect { redactions ->
+            val reply = state.reply ?: return@collect
+            if (redactions.containsKey(reply.messageId)) state.cancelReply()
+        }
+    }
     // A typing entry's lease expires by the clock, not by a frame — the last thing a peer sends is
     // `active`, and what happens next is nothing — so while anybody is typing the list is re-read once
     // a second. One second is well inside the shortest lease (6s), and coarse enough to be free.

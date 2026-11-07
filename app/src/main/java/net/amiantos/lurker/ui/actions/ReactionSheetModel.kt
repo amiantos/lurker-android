@@ -28,6 +28,8 @@ data class ReactionSheetInputs(
      * take a reaction and refuse the take-back: irc.so does (lurker#1101).
      */
     val canRemove: Boolean,
+    /** The line was deleted since the sheet opened (lurker#1013): the host closes it. */
+    val deleted: Boolean = false,
 ) {
     /**
      * The values that are ours — what lights a quick pick, and what makes choosing one a take-back.
@@ -56,6 +58,7 @@ data class ReactionSheetInputs(
                 groups = state.reactionGroups(message.id),
                 canAdd = Reactions.canToggle(mine = false, message = message, target = key.target, support = support),
                 canRemove = Reactions.canToggle(mine = true, message = message, target = key.target, support = support),
+                deleted = state.redaction(message, networkId = key.networkId) != null,
             )
         }
     }

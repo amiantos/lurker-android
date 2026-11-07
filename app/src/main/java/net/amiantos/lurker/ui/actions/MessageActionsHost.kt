@@ -8,6 +8,10 @@ import android.content.ClipData
 import android.content.Context
 import android.content.Intent
 import android.util.Log
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
@@ -45,6 +49,9 @@ internal sealed interface ActionSheet {
     data class Reactions(val message: Message) : ActionSheet
 
     data class Ignore(val subject: String, val defaultMask: String) : ActionSheet
+
+    /** Delete's one confirm (lurker#1013): the line isn't touched until the network answers. */
+    data class ConfirmDelete(val message: Message) : ActionSheet
 }
 
 /**
@@ -98,6 +105,10 @@ internal class MessageActionsState(private val model: ChatViewModel, private val
 
     fun showIgnore(message: Message, subject: String) {
         sheet = ActionSheet.Ignore(subject, MessageActionsModel.defaultIgnoreMask(message, subject))
+    }
+
+    fun confirmDelete(message: Message) {
+        sheet = ActionSheet.ConfirmDelete(message)
     }
 
     fun dismiss() {
@@ -154,6 +165,7 @@ internal fun MessageActionsHost(
         showProfile = { nick -> key.networkId?.let { onShowProfile(it, nick) } },
         react = { message -> state.showReactions(message) },
         ignore = state::showIgnore,
+        delete = state::confirmDelete,
     )
 
     // A picked action, waiting for the sheet to be gone. Dismiss first, act second: Reply raises the
@@ -195,6 +207,9 @@ internal fun MessageActionsHost(
                 model.statePublisher.conflate().map { ReactionSheetInputs.of(it, message, key) }.distinctUntilChanged()
             }
             val inputs by flow.collectAsStateWithLifecycle(initialValue = ReactionSheetInputs.of(model.state, message, key))
+            // The line was deleted under the sheet (lurker#1013): nothing it offers can go anywhere
+            // now, so it goes — the web closes its picker the same way.
+            LaunchedEffect(inputs.deleted) { if (inputs.deleted) state.dismiss() }
             ReactionSheet(
                 message = message,
                 target = key.target,
@@ -220,6 +235,23 @@ internal fun MessageActionsHost(
                 model.send(key, command)
             },
             onDismiss = state::dismiss,
+        )
+        is ActionSheet.ConfirmDelete -> AlertDialog(
+            onDismissRequest = state::dismiss,
+            title = { Text(MessageActionsModel.DELETE_TITLE) },
+            text = { Text(MessageActionsModel.DELETE_BODY) },
+            dismissButton = { TextButton(onClick = state::dismiss) { Text("Cancel") } },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        state.dismiss()
+                        // ⚠ A WRITE. Nothing changes on screen here: the row blanks when the network's
+                        // REDACT comes back as a `message-redacted` frame, and a refusal lands in the
+                        // buffer as an error line. A send that found no socket says so (sweep L53).
+                        if (!model.redact(messageId = sheet.message.id)) notice(MessageActionsModel.DELETE_NOT_SENT)
+                    },
+                ) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            },
         )
     }
 }

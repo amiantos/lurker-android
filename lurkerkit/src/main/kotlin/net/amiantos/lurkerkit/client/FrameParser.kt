@@ -43,6 +43,8 @@ import net.amiantos.lurkerkit.model.PrefixMode
 import net.amiantos.lurkerkit.model.PresenceState
 import net.amiantos.lurkerkit.model.ProxyType
 import net.amiantos.lurkerkit.model.ReactionChange
+import net.amiantos.lurkerkit.model.Redaction
+import net.amiantos.lurkerkit.model.RedactionChange
 import net.amiantos.lurkerkit.model.RelayBot
 import net.amiantos.lurkerkit.model.ReplyContext
 import net.amiantos.lurkerkit.model.ReplyParent
@@ -179,6 +181,27 @@ internal object FrameParser {
                     ),
                 )
             }
+            "message-redacted" -> {
+                // The deletion of a stored line (lurker#1013), its own frame like `reaction`: no
+                // decoration, no unread bump, never reopens a buffer. One that can't name its line
+                // or its network addresses nothing. `by` can be empty on a malformed frame; the
+                // placeholder then names nobody rather than the frame being dropped — the deletion
+                // itself is the fact that matters.
+                val messageId = obj.long("messageId")
+                if (messageId == 0L) return ServerFrame.Ignored
+                val networkId = obj.intOrNull("networkId") ?: return ServerFrame.Ignored
+                return ServerFrame.MessageRedacted(
+                    RedactionChange(
+                        networkId = networkId,
+                        target = obj.string("target"),
+                        messageId = messageId,
+                        by = obj.string("by"),
+                        reason = obj.stringOrNull("reason"),
+                        isSelf = obj.bool("self"),
+                        time = obj.stringOrNull("time"),
+                    ),
+                )
+            }
             "reactions-sync" -> {
                 // ⚠ Only ids the frame NAMES are authoritative, so a frame without a readable list
                 // says nothing — not "every line has none".
@@ -190,7 +213,13 @@ internal object FrameParser {
                     val parsed = parseReactions(list)
                     if (parsed.isNotEmpty()) reactions[id] = parsed
                 }
-                return ServerFrame.ReactionsSync(messageIds = ids, reactions = reactions)
+                // The lines among them deleted while this socket was away (lurker#1013).
+                val redactions = mutableMapOf<Long, Redaction>()
+                for ((key, value) in (obj["redactions"] as? JsonObject) ?: emptyMap()) {
+                    val id = swiftInt(key) ?: continue
+                    redactions[id] = parseRedaction(value) ?: continue
+                }
+                return ServerFrame.ReactionsSync(messageIds = ids, reactions = reactions, redactions = redactions)
             }
             "upload-progress" -> {
                 // Same trust posture as its siblings. A frame with no token can't be matched to
@@ -691,6 +720,9 @@ internal object FrameParser {
             canAddReaction = obj.bool("canAddReaction", legacy),
             canRemoveReaction = obj.bool("canRemoveReaction", legacy),
             canReply = obj.bool("canReply", legacy),
+            // ⚠ Not `legacy`: deletion is newer than the split, and a server that predates it
+            // can't take a `redact` — absent IS false here (§5.1, lurker#1013).
+            canRedact = obj.bool("canRedact"),
         )
     }
 
@@ -1558,7 +1590,18 @@ internal object FrameParser {
             dm = event.bool("dm"),
             notifyAlways = event.bool("notifyAlways"),
             selfKicked = event.bool("selfKicked"),
+            // Absent on every line that wasn't deleted (lurker#1013); `text` is null beside it.
+            redaction = parseRedaction(event["redaction"]),
         )
+    }
+
+    /**
+     * A row's `redaction`, or a `reactions-sync` entry: `{ by, reason?, time }` (§5.3). An object
+     * is the whole statement — a deletion with no `by` still happened, and shows as one.
+     */
+    fun parseRedaction(raw: JsonElement?): Redaction? {
+        val obj = raw as? JsonObject ?: return null
+        return Redaction(by = obj.string("by"), reason = obj.stringOrNull("reason"), time = obj.stringOrNull("time"))
     }
 
     /**
@@ -1615,6 +1658,9 @@ internal object FrameParser {
             text = parent.string("text"),
             userhost = parent.stringOrNull("userhost"),
             isSelf = parent.bool("self"),
+            // The answered line was deleted (lurker#1013): `text` is empty beside it, and the
+            // quote reads as deleted, not as unavailable — the row is still there to jump to.
+            redacted = parent.bool("redacted"),
         )
     }
 

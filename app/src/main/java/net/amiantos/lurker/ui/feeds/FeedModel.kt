@@ -25,6 +25,7 @@ import net.amiantos.lurkerkit.model.HighlightDay
 import net.amiantos.lurkerkit.model.HighlightGrouping
 import net.amiantos.lurkerkit.model.HighlightItem
 import net.amiantos.lurkerkit.model.IgnoreSet
+import net.amiantos.lurkerkit.model.Redactions
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.ReplyQuote
 import net.amiantos.lurkerkit.model.TimestampFormat
@@ -204,8 +205,13 @@ object FeedModel {
     fun row(item: HighlightItem, state: ChatState, style: MessageTextStyle, zone: ZoneId = ZoneId.systemDefault()): FeedRow {
         val networkName = networkName(item, state)
         val reaction = item.reaction
+        // A deleted line (lurker#1013) shows its placeholder here too — by the row's own mark, or the
+        // store's for one deleted while this feed was open.
         val line = if (reaction == null) {
-            state.relayBots.reattributing(listOf(item.message), networkId = item.networkId).firstOrNull() ?: item.message
+            Redactions.presenting(
+                state.relayBots.reattributing(listOf(item.message), networkId = item.networkId),
+                redactions = state.redactions,
+            ).firstOrNull() ?: item.message
         } else {
             item.message
         }
@@ -220,6 +226,7 @@ object FeedModel {
                 ignores = state.ignores,
                 relayBots = state.relayBots,
                 ownNick = item.networkId?.let { state.networks[it]?.nick },
+                redactions = state.redactions,
             ).firstOrNull() ?: line
         } else {
             line
