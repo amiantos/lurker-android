@@ -172,6 +172,179 @@ class ConversationScrollTest {
         assertTrue(restored.marksRead)
     }
 
+    // MARK: - A live line and the boundary (lurker#1235)
+
+    /**
+     * A latched machine over 1…10 with the pointer at [lastReadId], its rows built once, so the list
+     * has given its word on the divider.
+     */
+    private fun reading(lastReadId: Long, ignores: IgnoreSet = IgnoreSet.empty): Pair<ConversationScroll, Buffer> {
+        val scroll = machine()
+        val pointer = row(readStateKnown = true, lastReadId = lastReadId)
+        val s = state(pointer, msgs(1L..10L), ignores = ignores)
+        scroll.onFrame(s, channel, 1)
+        scroll.onRows(build(scroll, s, seq = 1), wasNearBottom = true)
+        return scroll to pointer
+    }
+
+    @Test
+    fun `a live line while reading takes the boundary to the tail when the list draws no divider`() {
+        val (scroll, pointer) = reading(lastReadId = 10)
+        val step = scroll.onFrame(state(pointer, msgs(1L..11L)), channel, 2)
+        assertTrue(step.optionsChanged)
+        assertEquals(11L, scroll.options.dividerAfterId)
+        assertNull(build(scroll, state(pointer, msgs(1L..11L)), seq = 2).dividerRow)
+    }
+
+    @Test
+    fun `a boundary the list draws stays put under live lines`() {
+        val (scroll, pointer) = reading(lastReadId = 5)
+        val step = scroll.onFrame(state(pointer, msgs(1L..11L)), channel, 2)
+        assertFalse(step.optionsChanged)
+        assertEquals(5L, scroll.options.dividerAfterId)
+    }
+
+    @Test
+    fun `an ignored line past the boundary doesn't hold the divider for the reader's own line`() {
+        // The issue's repro: caught up, then a line from someone ignored. It never counts and the
+        // list draws nothing under it, so the reader's own line next must not get the divider.
+        val ignores = IgnoreSet(byNetwork = mapOf(1 to listOf(IgnoreRule(id = 1, mask = "spammer"))))
+        val (scroll, pointer) = reading(lastReadId = 10, ignores = ignores)
+        val lines = (msgs(1L..10L) + msg(11, nick = "spammer")).toMutableList()
+        scroll.onFrame(state(pointer, lines.toList(), ignores = ignores), channel, 2)
+        scroll.onRows(build(scroll, state(pointer, lines.toList(), ignores = ignores), seq = 2), wasNearBottom = true)
+        assertEquals(11L, scroll.options.dividerAfterId)
+        lines += msg(12, nick = "me")
+        scroll.onFrame(state(pointer, lines.toList(), ignores = ignores), channel, 3)
+        assertEquals(12L, scroll.options.dividerAfterId)
+        assertNull(build(scroll, state(pointer, lines.toList(), ignores = ignores), seq = 3).dividerRow)
+    }
+
+    @Test
+    fun `the boundary doesn't follow while the screen isn't being read`() {
+        val (scroll, pointer) = reading(lastReadId = 10)
+        scroll.onFrame(state(pointer, msgs(1L..11L)), channel, 2, reading = false)
+        assertEquals(10L, scroll.options.dividerAfterId)
+        // Back in front, the line that landed meanwhile is the first unread.
+        assertNotNull(build(scroll, state(pointer, msgs(1L..11L)), seq = 2).firstUnreadRow)
+    }
+
+    @Test
+    fun `a reconnect's backlog and a slice reply aren't live lines`() {
+        // Missed across a drop: the snapshot is one frame (a new burst, the list untouched) and the
+        // backlog that appends 11…20 another, inside the burst. They keep their divider.
+        val (scroll, pointer) = reading(lastReadId = 10)
+        scroll.onFrame(state(pointer, msgs(1L..10L), burstGeneration = 2, backlogComplete = false), channel, 2)
+        scroll.onFrame(state(pointer, msgs(1L..20L), burstGeneration = 2, backlogComplete = false), channel, 3)
+        assertEquals(10L, scroll.options.dividerAfterId)
+        // Settled again, the divider those lines are under holds a live one off.
+        scroll.onFrame(state(pointer, msgs(1L..20L), burstGeneration = 2), channel, 4)
+        scroll.onRows(build(scroll, state(pointer, msgs(1L..20L), burstGeneration = 2), seq = 4), wasNearBottom = true)
+        scroll.onFrame(state(pointer, msgs(1L..21L), burstGeneration = 2), channel, 5)
+        assertEquals(10L, scroll.options.dividerAfterId)
+        // A `latest` reply replacing the slice moves the revision instead.
+        val (replaced, _) = reading(lastReadId = 10)
+        val reply = row(readStateKnown = true, lastReadId = 10, historyRevision = 1)
+        replaced.onFrame(state(reply, msgs(1L..20L)), channel, 2)
+        assertEquals(10L, replaced.options.dividerAfterId)
+    }
+
+    @Test
+    fun `a stub of live events before the history lands has no word on the divider`() {
+        val scroll = machine()
+        // Read state ahead of the backlog: latched at 5 over the few live events that outran it.
+        val early = row(hydrated = false, readStateKnown = true, lastReadId = 5)
+        scroll.onFrame(state(early, msgs(8L..9L)), channel, 1)
+        scroll.onRows(build(scroll, state(early, msgs(8L..9L)), seq = 1), wasNearBottom = true)
+        scroll.onFrame(state(early, msgs(8L..10L)), channel, 2)
+        assertEquals(5L, scroll.options.dividerAfterId)
+    }
+
+    @Test
+    fun `a detached slice's newer page is not a live line, and nor is the re-attach`() {
+        val (scroll, _) = reading(lastReadId = 10)
+        // A jump into older history: an `around` slice below the tail, nothing past the boundary.
+        val slice = row(readStateKnown = true, lastReadId = 10, hasMoreNewer = true, historyRevision = 1)
+        scroll.onFrame(state(slice, msgs(1L..5L)), channel, 2)
+        scroll.onRows(build(scroll, state(slice, msgs(1L..5L)), seq = 2), wasNearBottom = true)
+        // Reading forward pulls a newer page: an append, same revision — a page, not a line.
+        scroll.onFrame(state(slice, msgs(1L..8L)), channel, 3)
+        assertEquals(10L, scroll.options.dividerAfterId)
+        // The last page re-attaches and splices in what landed while the reader was away.
+        val attached = row(readStateKnown = true, lastReadId = 10, historyRevision = 1)
+        scroll.onFrame(state(attached, msgs(1L..12L)), channel, 4)
+        assertEquals(10L, scroll.options.dividerAfterId)
+        // Those lines are the first unread, and a live one after them leaves the divider there.
+        scroll.onRows(build(scroll, state(attached, msgs(1L..12L)), seq = 4), wasNearBottom = true)
+        scroll.onFrame(state(attached, msgs(1L..13L)), channel, 5)
+        assertEquals(10L, scroll.options.dividerAfterId)
+        assertNotNull(build(scroll, state(attached, msgs(1L..13L)), seq = 5).firstUnreadRow)
+    }
+
+    @Test
+    fun `a word from a build that lags the frames is not taken for the lines it hasn't seen`() {
+        // Builds are asynchronous, and don't run while the screen is stopped: lines land under
+        // `reading = false`, and the first frame back can arrive before the build catches up.
+        val (scroll, pointer) = reading(lastReadId = 10)
+        scroll.onFrame(state(pointer, msgs(1L..12L)), channel, 2, reading = false)
+        scroll.onFrame(state(pointer, msgs(1L..13L)), channel, 3)
+        assertEquals(10L, scroll.options.dividerAfterId)
+    }
+
+    @Test
+    fun `a word built before a page revealed unread lines, or before a rule change, is not taken`() {
+        // Boundary 5 with only an ignored sender's lines loaded past it: the list draws nothing.
+        val ignores = IgnoreSet(byNetwork = mapOf(1 to listOf(IgnoreRule(id = 1, mask = "spammer"))))
+        val pointer = row(readStateKnown = true, lastReadId = 5)
+        val hidden = (8L..10L).map { msg(it, nick = "spammer") }
+        val scroll = machine()
+        scroll.onFrame(state(pointer, hidden, ignores = ignores), channel, 1)
+        scroll.onRows(build(scroll, state(pointer, hidden, ignores = ignores), seq = 1), wasNearBottom = true)
+        // An older page prepends real unread under the boundary; the newest id doesn't move.
+        val revealed = msgs(6L..7L) + hidden
+        scroll.onFrame(state(pointer, revealed, ignores = ignores), channel, 2)
+        // A live line before that page's build: the word is about the old list.
+        scroll.onFrame(state(pointer, revealed + msg(11), ignores = ignores), channel, 3)
+        assertEquals(5L, scroll.options.dividerAfterId)
+        // Likewise an unignore that reveals what was hidden.
+        val unignore = machine()
+        unignore.onFrame(state(pointer, hidden, ignores = ignores), channel, 1)
+        unignore.onRows(build(unignore, state(pointer, hidden, ignores = ignores), seq = 1), wasNearBottom = true)
+        unignore.onFrame(state(pointer, hidden), channel, 2)
+        unignore.onFrame(state(pointer, hidden + msg(11)), channel, 3)
+        assertEquals(5L, unignore.options.dividerAfterId)
+    }
+
+    @Test
+    fun `a word built under another boundary is not taken`() {
+        val scroll = machine()
+        // Hydrated by a `history` reply, so the list builds (and says "no divider") before the read
+        // state arrives and latches a real boundary with unread under it.
+        val before = row(hydrated = true, readStateKnown = false)
+        scroll.onFrame(state(before, msgs(1L..10L)), channel, 1)
+        scroll.onRows(build(scroll, state(before, msgs(1L..10L)), seq = 1), wasNearBottom = true)
+        val pointer = row(readStateKnown = true, lastReadId = 5)
+        scroll.onFrame(state(pointer, msgs(1L..10L)), channel, 2)
+        scroll.onFrame(state(pointer, msgs(1L..11L)), channel, 3)
+        assertEquals(5L, scroll.options.dividerAfterId)
+    }
+
+    @Test
+    fun `without a word yet, a boundary at the tail follows and one with lines past it holds`() {
+        // The web's older rule, for a line that lands before the first build is in — which the
+        // screen's first build never hands to `onRows`.
+        val scroll = machine()
+        val caughtUp = row(readStateKnown = true, lastReadId = 10)
+        scroll.onFrame(state(caughtUp, msgs(1L..10L)), channel, 1)
+        scroll.onFrame(state(caughtUp, msgs(1L..11L)), channel, 2)
+        assertEquals(11L, scroll.options.dividerAfterId)
+        val behind = machine()
+        val pointer = row(readStateKnown = true, lastReadId = 5)
+        behind.onFrame(state(pointer, msgs(1L..10L)), channel, 1)
+        behind.onFrame(state(pointer, msgs(1L..11L)), channel, 2)
+        assertEquals(5L, behind.options.dividerAfterId)
+    }
+
     // MARK: - The unread banner and dividerSeen
 
     /** A latched machine over a hydrated buffer whose divider sits after message 5 of 1…10. */

@@ -12,6 +12,9 @@ import net.amiantos.lurkerkit.model.EventFilter
 import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageRow
+import net.amiantos.lurkerkit.model.Network
+import net.amiantos.lurkerkit.model.RelayBotSet
+import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.model.SpeakerMap
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
@@ -26,9 +29,12 @@ import kotlin.math.abs
  */
 internal data class RowOptions(
     /**
-     * The read boundary, latched the first time the server states it and held for the visit — the
-     * divider must not move as the screen marks messages read live. Null is "not told yet", which
-     * is not the same as 0, "nothing read". iOS's `dividerAfterId`.
+     * The read boundary, latched the first time the server states it — the divider must not move
+     * as the screen marks messages read live, so the pointer coming back never moves it. From then
+     * on it moves only with the reader: a live line that lands while they're reading takes it to
+     * the tail, unless the list is drawing a divider they may not have reached
+     * ([ConversationScroll.onFrame]). Null is "not told yet", which is not the same as 0, "nothing
+     * read". iOS's `dividerAfterId`.
      */
     val dividerAfterId: Long? = null,
     /**
@@ -429,6 +435,108 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
     private var lastIgnores: IgnoreSet? = null
 
     /**
+     * The held list's shape as of the previous frame, for telling a live line from everything else
+     * that makes the list longer ([onFrame]'s tail rule).
+     *
+     * @param landed the buffer's real history is loaded — [BuiltRows.historyLanded]'s rule.
+     * @param settled no burst in progress: a reconnect's snapshot and the backlog that follows it
+     *   come as separate frames, and the backlog appends to the list like live lines would.
+     * @param detached a slice below the live tail, which holds live traffic out: what grows it is a page.
+     * @param first the oldest held id, ephemerals (id 0) aside; null for an empty list.
+     * @param newest the newest held id, ephemerals aside; 0 for an empty list.
+     * @param visible what the rows are built from, as [ConversationInputs.same] compares it, for
+     *   judging whether a build's word is about this frame's list.
+     */
+    private data class Tail(
+        val generation: Int,
+        val revision: Int,
+        val landed: Boolean,
+        val settled: Boolean,
+        val detached: Boolean,
+        val first: Long?,
+        val newest: Long,
+        val visible: Visible,
+    ) {
+        companion object {
+            /**
+             * [last]'s extrema are reused when the list is the same object: this runs for every
+             * frame the store publishes, for every buffer, over a history that is uncapped.
+             */
+            fun of(state: ChatState, key: BufferKey, kind: BufferKind, last: Tail?): Tail {
+                val row = state.buffers[key.id]
+                val list = state.messages[key.id]
+                var first: Long? = null
+                var newest = 0L
+                if (last != null && list === last.visible.messages) {
+                    first = last.first
+                    newest = last.newest
+                } else {
+                    for (message in list.orEmpty()) {
+                        val id = message.id
+                        if (id == 0L) continue
+                        if (first == null || id < first) first = id
+                        if (id > newest) newest = id
+                    }
+                }
+                return Tail(
+                    generation = state.burstGeneration,
+                    revision = row?.historyRevision ?: 0,
+                    landed = BufferPlaceholder.historyLanded(
+                        hydrated = row?.hydrated == true,
+                        hydratesOnDemand = kind.hydratesOnDemand,
+                        bufferExists = row != null,
+                        rosterSettled = state.rosterSettled,
+                    ),
+                    settled = state.rosterSettled,
+                    detached = row?.hasMoreNewer == true,
+                    first = first,
+                    newest = newest,
+                    visible = Visible(
+                        messages = list,
+                        buffer = row,
+                        networks = state.networks,
+                        settings = state.settings,
+                        ignores = state.ignores,
+                        relayBots = state.relayBots,
+                        speakers = state.speakers[key.id],
+                    ),
+                )
+            }
+        }
+    }
+    private var lastTail: Tail? = null
+
+    /**
+     * The inputs that decide which rows a build draws, compared as [ConversationInputs.same] does:
+     * the list by identity (the store replaces one it changed — a page, a restored row), the rules
+     * by identity, the rest by value.
+     */
+    private class Visible(
+        val messages: List<Message>?,
+        val buffer: Buffer?,
+        val networks: Map<Int, Network>,
+        val settings: Settings,
+        val ignores: IgnoreSet,
+        val relayBots: RelayBotSet,
+        val speakers: SpeakerMap?,
+    ) {
+        fun same(inputs: ConversationInputs): Boolean =
+            inputs.messages === messages && inputs.buffer == buffer && inputs.networks == networks &&
+                inputs.settings == settings && inputs.ignores === ignores && inputs.relayBots === relayBots &&
+                inputs.speakers == speakers
+    }
+
+    /**
+     * The list's word on whether it is drawing the unread divider, from the last build that had the
+     * history: which boundary it was built under and what it was built from, so a build that lags
+     * the frames — they're asynchronous, and pause while the screen is stopped — is known to answer
+     * a different question ([onFrame]). iOS builds every frame it processes and keys its word on
+     * the frame instead.
+     */
+    private class Word(val boundary: Long?, val inputs: ConversationInputs, val drawn: Boolean)
+    private var word: Word? = null
+
+    /**
      * The jump-to-latest pill's badge: live messages that landed below while the reader was up in
      * history. Zeroed the moment they're back at the bottom, however they got there. iOS's
      * `newWhileDetached`.
@@ -559,8 +667,25 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
      * no divider and no banner however many unreads. `hydrated` was the first fix and was inert:
      * `history mode:latest` sets it without carrying a pointer. Only `backlog` and `read-state` set
      * `readStateKnown`.
+     *
+     * **A live line moves the boundary to the tail** while the reader is reading — the web's rule
+     * (lurker#1236; the apps' half is lurker#1235) — unless the list is drawing a divider, which the
+     * reader may not have reached yet. Whether one is drawn is the list's answer, after its own
+     * filters ([word]): a boundary with nothing visible under it isn't one. Latched at the newest
+     * line and left there, the boundary would sit under an ignored sender's line, a reply the thread
+     * panel holds or a join the event tier drops, and the divider would land over the next line that
+     * IS visible, the reader's own included. With no word that answers — none yet, one built under
+     * another boundary, or one that hasn't seen the last frame's lines — the older rule stands: a
+     * boundary at or past everything held was no boundary, and a real one is never dropped.
+     * [reading] is the screen being seen, the same gate as its mark-read: a line that lands while
+     * the screen is covered is unread, and the divider waits above it for the reader's return. Only
+     * a live append counts: a page prepends, a slice reply moves the revision, a reconnect's backlog
+     * arrives inside a burst (its snapshot is one frame and the appended lines another), a detached
+     * slice holds live traffic out (what grows it is a page the reader pulled, and the re-attach
+     * splices what was held out), and a stub before the history lands isn't the list the boundary
+     * is for — so the lines missed across a drop, or while away in a slice, keep their divider.
      */
-    fun onFrame(state: ChatState, key: BufferKey, seq: Long): FrameStep {
+    fun onFrame(state: ChatState, key: BufferKey, seq: Long, reading: Boolean = true): FrameStep {
         val list = state.messages[key.id]
         val row = state.buffers[key.id]
         // A drop or a new burst voids what was asked over the old socket — no reply is coming.
@@ -584,11 +709,34 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         // After the replies are accounted for, so a request made now watches from this frame on.
         val around = requestAround(state, key)
         var changed = false
+        val latched = options.dividerAfterId != null
         if (options.dividerAfterId == null && row != null && row.readStateKnown) {
             options = options.copy(dividerAfterId = row.lastReadId)
             changed = true
             log { "divider latched after=${row.lastReadId} seq=$seq" }
         }
+        // The tail rule, on a boundary latched BEFORE this frame: the frame that latches has no
+        // previous shape to tell a live line by.
+        val tail = Tail.of(state, key, kind, lastTail)
+        val previous = lastTail
+        if (reading && latched && state.connection == SocketStatus.Connected && previous != null &&
+            previous.landed && previous.settled && tail.settled && !previous.detached && !tail.detached &&
+            tail.generation == previous.generation && tail.revision == previous.revision &&
+            tail.newest > previous.newest && (previous.first == null || tail.first == previous.first)
+        ) {
+            val boundary = options.dividerAfterId ?: 0L
+            // The list's word counts only when it answers this question: built under this boundary,
+            // from what the previous frame held — a page that revealed unread lines or a rule change
+            // since then is a different list.
+            val says = word?.takeIf { it.boundary == options.dividerAfterId && previous.visible.same(it.inputs) }?.drawn
+            val noBoundary = if (says == null) boundary >= previous.newest else !says
+            if (noBoundary) {
+                options = options.copy(dividerAfterId = tail.newest)
+                changed = true
+                log { "divider follows tail after=${tail.newest} word=${says ?: "none"} seq=$seq" }
+            }
+        }
+        lastTail = tail
         val latest = requestLatest(state, key)
         return FrameStep(loadAround = around, loadLatest = latest, optionsChanged = changed)
     }
@@ -722,6 +870,7 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
             ).size
         }
         previousVisible = built.visible
+        word = if (built.historyLanded) Word(built.options.dividerAfterId, built.inputs, built.dividerRow != null) else null
 
         val follow = !landingPending && wasNearBottom && !wasDetached && !nowDetached
         log {
