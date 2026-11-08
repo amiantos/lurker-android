@@ -139,6 +139,30 @@ class ProtocolSweepTests {
         assertEquals(listOf("me", "carol"), store.state.members[channel.id]?.map { it.nick })
     }
 
+    /**
+     * The connect snapshot carries no channel's members (lurker#1292): every channel is
+     * `members: []` + `membersPending`, and the list arrives as a `names` with the buffer's
+     * first hydration. Until then the store holds nothing for the channel — not an empty list,
+     * which the member sheet would read as a room with nobody in it.
+     */
+    @Test
+    fun testAnEmptyPendingListOverNothingStaysNothing() {
+        val store = LurkerStore()
+        store.apply(snapshot(emptyList(), pending = true))
+        assertNull(store.state.members[channel.id], "snapshot")
+
+        store.apply(ServerFrame.ChannelMembers(networkId = 1, target = "#lurker", members = emptyList(), pending = true))
+        assertNull(store.state.members[channel.id], "pending names")
+
+        // Something still beats nothing: a pending list WITH members is taken.
+        store.apply(ServerFrame.ChannelMembers(networkId = 1, target = "#lurker", members = listOf(Member(nick = "me")), pending = true))
+        assertEquals(listOf("me"), store.state.members[channel.id]?.map { it.nick })
+
+        // And the hydration's list is the list, even when it is empty.
+        store.apply(ServerFrame.ChannelMembers(networkId = 1, target = "#lurker", members = emptyList()))
+        assertEquals(emptyList<String>(), store.state.members[channel.id]?.map { it.nick })
+    }
+
     /** With nothing held, a provisional list beats none. */
     @Test
     fun testAPendingListIsTakenWhenNoneIsHeld() {

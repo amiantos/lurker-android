@@ -2306,7 +2306,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                     val buffer = buffers[key]
                         ?: Buffer(networkId = snapshot.id, target = channel.name, kind = BufferKind.Channel)
                     buffers[key] = buffer.copy(joined = true, topic = channel.topic)
-                    members[key] = membersAfter(members[key], channel.members, pending = channel.membersPending)
+                    membersAfter(members[key], channel.members, pending = channel.membersPending)?.let { members[key] = it }
                     channelModes[key] = channel.modeState
                     // Third path that can materialize a row, so it owes `burstSeen` an entry
                     // like the other two — otherwise the burst's closing prune could drop a
@@ -2672,18 +2672,27 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             pending: Boolean,
         ): ChatState {
             val key = BufferKey(networkId = networkId, target = target).id
-            return state.copy(members = state.members + (key to membersAfter(state.members[key], members, pending)))
+            val after = membersAfter(state.members[key], members, pending) ?: return state
+            return state.copy(members = state.members + (key to after))
         }
 
         /**
          * The member list to hold once the server sends `incoming` — which is the list, unless it
-         * is `pending` (`membersPending`, §9.1, lurker#863): then the server hasn't heard the
-         * channel's NAMES since it last attached, and `incoming` is only us plus whoever has
-         * joined since. Taking it would read as everyone leaving, so a list already held stands;
-         * with none held, something beats nothing. The definitive `names` follows within seconds.
+         * is `pending` (`membersPending`, §9.1): the frame is not the list. Every connect-snapshot
+         * channel says so (lurker#1292: the snapshot carries no members, and the list arrives as a
+         * `names` with the buffer's first hydration), and so does a `names` while the server
+         * hasn't heard the channel's NAMES since it last attached (lurker#863), when `incoming` is
+         * only us plus whoever has joined since. Taking either would read as everyone leaving, so
+         * a list already held stands; with none held, something beats nothing — but an EMPTY
+         * pending list over nothing stays nothing: no entry is what the member sheet reads as
+         * "loading", and an empty one would show "No members yet." for the round trip until the
+         * real list lands.
          */
-        private fun membersAfter(held: List<Member>?, incoming: List<Member>, pending: Boolean): List<Member> {
-            if (pending && !held.isNullOrEmpty()) return held
+        private fun membersAfter(held: List<Member>?, incoming: List<Member>, pending: Boolean): List<Member>? {
+            if (pending) {
+                if (!held.isNullOrEmpty()) return held
+                if (incoming.isEmpty()) return held
+            }
             return incoming
         }
 
