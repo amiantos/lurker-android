@@ -1298,6 +1298,21 @@ data class ChatState(
      * here it is `IgnoreMatch.FoldedLiteral`, the kit's stand-in for that compare (see its
      * comment for why `equals(ignoreCase = true)` is not one).
      */
+    /**
+     * Whether a channel's member list is still on its way (lurker#1292): the store holds none,
+     * and we are in the channel on a network that is up or coming back — so one is coming, with
+     * the buffer's hydration or the resume. A parted channel or a network that is `Disconnected`
+     * has no list coming; a null there is "nobody", not "not yet". The one rule for every screen
+     * that says "loading" (the member sheet, the info sheet's count). `joined` overrides the
+     * stored row's — for a buffer the screen synthesized.
+     */
+    fun membersAwaited(key: BufferKey, joined: Boolean? = null): Boolean {
+        if (members[key.id] != null) return false
+        if (!(joined ?: buffers[key.id]?.joined ?: false)) return false
+        val network = key.networkId?.let { networks[it] } ?: return false
+        return network.state != ConnectionState.Disconnected
+    }
+
     fun visibleMembers(key: BufferKey): List<Member> {
         val members = this.members[key.id].orEmpty()
         if (ignores.isEmpty(key.networkId)) return members
@@ -2589,9 +2604,9 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
          * case-insensitively throughout: servers echo inconsistent casing, and `toLowerCase`
          * matching is house style (see `BufferKey`).
          *
-         * A join can seed a list from null — our own join precedes the `names` broadcast, so
-         * the list briefly holds just us until the full roster lands. Removals against null
-         * stay null: a quit fans out to DM buffers too, which have no list to edit.
+         * Nothing seeds a list from null (lurker#1292): null is "the list hasn't arrived", and
+         * the `names` behind our own join brings the whole roster. Removals against null stay
+         * null too: a quit fans out to DM buffers too, which have no list to edit.
          */
         private fun foldMembership(members: List<Member>?, message: Message): List<Member>? =
             when (message.type) {

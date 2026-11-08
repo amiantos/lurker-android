@@ -164,6 +164,34 @@ class ProtocolSweepTests {
     }
 
     /**
+     * The common reconnect: every snapshot channel is `members: [] + membersPending` now, and a
+     * list already held must stand — reading the empty frame as the list would be everyone leaving.
+     */
+    @Test
+    fun testAnEmptyPendingListNeverReplacesAHeldOne() {
+        val store = LurkerStore()
+        store.apply(snapshot(listOf(Member(nick = "me"), Member(nick = "alice"))))
+        store.apply(snapshot(emptyList(), pending = true))
+        assertEquals(listOf("me", "alice"), store.state.members[channel.id]?.map { it.nick })
+        store.apply(ServerFrame.ChannelMembers(networkId = 1, target = "#lurker", members = emptyList(), pending = true))
+        assertEquals(listOf("me", "alice"), store.state.members[channel.id]?.map { it.nick })
+    }
+
+    /**
+     * "Loading members…" is a promise, made only where a list is coming: nothing held, joined,
+     * and the network not disconnected. A reconnecting network still counts — the resume brings it.
+     */
+    @Test
+    fun testMembersAwaitedOnlyWhereAListIsComing() {
+        val store = LurkerStore()
+        store.apply(snapshot(emptyList(), pending = true))
+        assertTrue(store.state.membersAwaited(channel))
+        assertFalse(store.state.membersAwaited(channel, joined = false), "parted")
+        store.apply(ServerFrame.ChannelMembers(networkId = 1, target = "#lurker", members = listOf(Member(nick = "me"))))
+        assertFalse(store.state.membersAwaited(channel), "held")
+    }
+
+    /**
      * A join folded into no list stays no list: seeding `[bob]` would read as a held room of one,
      * and a pending `names` after it would defer to that. The 366 brings everyone, ourselves too.
      */

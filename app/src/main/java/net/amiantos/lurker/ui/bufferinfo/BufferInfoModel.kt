@@ -45,7 +45,10 @@ data class BufferInfoInputs(
      * disagreeing about how many people are in the channel reads as a bug in whichever the reader
      * looks at second.
      */
-    /** Null until the list has arrived (lurker#1292): a count of nothing is not "0 members". */
+    /**
+     * Null while the list is still coming (lurker#1292) — `membersAwaited`, the same rule the
+     * member sheet reads "Loading members…" by, so the two never disagree; a parted channel counts 0.
+     */
     val memberCount: Int?,
     val modes: ChannelModeState?,
     val access: ChannelAccess,
@@ -71,7 +74,11 @@ data class BufferInfoInputs(
                 topic = live.topic,
                 networkName = network?.name,
                 // Counted only where it's drawn: a busy channel's filter isn't free.
-                memberCount = if (opened.kind == BufferKind.Channel && state.members[key.id] != null) state.visibleMembers(key).size else null,
+                memberCount = when {
+                    opened.kind != BufferKind.Channel -> null
+                    state.membersAwaited(key, joined = live.joined) -> null
+                    else -> state.visibleMembers(key).size
+                },
                 modes = state.channelModes[key.id],
                 access = state.channelAccess(key),
                 connection = network?.let { NetworkRow(connection = it.state, isBlocked = it.blocked) },

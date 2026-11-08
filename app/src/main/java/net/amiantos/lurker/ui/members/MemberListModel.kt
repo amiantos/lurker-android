@@ -5,7 +5,6 @@ package net.amiantos.lurker.ui.members
 
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
-import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.MemberPrefix
@@ -69,9 +68,7 @@ class MemberListInputs private constructor(
         fun of(state: ChatState, key: BufferKey): MemberListInputs =
             MemberListInputs(
                 members = state.members[key.id],
-                awaitingList = state.members[key.id] == null &&
-                    state.buffers[key.id]?.joined == true &&
-                    key.networkId?.let { state.networks[it]?.state } == ConnectionState.Connected,
+                awaitingList = state.membersAwaited(key),
                 ignores = state.ignores,
                 ownNick = key.networkId?.let { state.networks[it]?.nick },
                 prefix = key.networkId?.let { state.networks[it]?.modeSpec?.prefix },
