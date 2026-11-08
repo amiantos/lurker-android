@@ -163,6 +163,27 @@ class ProtocolSweepTests {
         assertEquals(emptyList<String>(), store.state.members[channel.id]?.map { it.nick })
     }
 
+    /**
+     * A join folded into no list stays no list: seeding `[bob]` would read as a held room of one,
+     * and a pending `names` after it would defer to that. The 366 brings everyone, ourselves too.
+     */
+    @Test
+    fun testAJoinOverNoListDoesNotSeedOne() {
+        val store = LurkerStore()
+        store.apply(snapshot(emptyList(), pending = true))
+        val join = Message(id = 7, type = EventType.Join, nick = "bob", text = null, isSelf = false, date = Instant.now())
+        store.apply(ServerFrame.Live(networkId = 1, target = "#lurker", message = join))
+        assertNull(store.state.members[channel.id], "join over nothing")
+
+        store.apply(ServerFrame.ChannelMembers(networkId = 1, target = "#lurker", members = listOf(Member(nick = "me")), pending = true))
+        assertEquals(listOf("me"), store.state.members[channel.id]?.map { it.nick }, "pending names is taken over nothing")
+
+        // Over a held list the fold still adds (a fresh id: the first join is already a row).
+        val again = Message(id = 8, type = EventType.Join, nick = "bob", text = null, isSelf = false, date = Instant.now())
+        store.apply(ServerFrame.Live(networkId = 1, target = "#lurker", message = again))
+        assertEquals(listOf("me", "bob"), store.state.members[channel.id]?.map { it.nick })
+    }
+
     /** With nothing held, a provisional list beats none. */
     @Test
     fun testAPendingListIsTakenWhenNoneIsHeld() {

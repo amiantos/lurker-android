@@ -2597,10 +2597,14 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             when (message.type) {
                 EventType.Join -> {
                     val nick = message.nick
-                    if (nick == null || nick.isEmpty()) {
+                    if (nick == null || nick.isEmpty() || members == null) {
+                        // No list, no seeding (lurker#1292): null is "the list hasn't arrived",
+                        // and a join folded into nothing would make a one-person room that
+                        // reads as held — and that a pending `names` would then defer to. Our
+                        // own join is no exception: the 366 that follows brings the whole list.
                         members
                     } else {
-                        val list = members.orEmpty()
+                        val list = members
                         // Already present (e.g. the list arrived via `names` before our fold
                         // ran): keep the existing entry and whatever modes/away it carries.
                         if (list.any { it.nick.lowercase() == nick.lowercase() }) {
@@ -2659,10 +2663,12 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
         }
 
         /**
-         * A `names` broadcast: replace the member list wholesale — it IS the list, the same
-         * authority the snapshot carries. Stored even if no buffer row exists yet: `members`
-         * is a side table keyed like the buffers, so an early entry creates nothing visible,
-         * and the row that makes it visible is on its way (our own join precedes `names`).
+         * A `names` broadcast: replace the member list wholesale — it IS the list — unless it
+         * is `pending`, when `membersAfter` decides (a pending frame over nothing held stores
+         * nothing). Stored even if no buffer row exists yet: `members` is a side table keyed
+         * like the buffers, so an early entry creates nothing visible, and the row that makes
+         * it visible is on its way (our own join precedes `names`). No state copy when the
+         * answer is what is already held.
          */
         private fun applyChannelMembers(
             state: ChatState,
@@ -2672,7 +2678,9 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             pending: Boolean,
         ): ChatState {
             val key = BufferKey(networkId = networkId, target = target).id
-            val after = membersAfter(state.members[key], members, pending) ?: return state
+            val held = state.members[key]
+            val after = membersAfter(held, members, pending) ?: return state
+            if (after === held) return state
             return state.copy(members = state.members + (key to after))
         }
 

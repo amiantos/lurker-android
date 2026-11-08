@@ -45,7 +45,8 @@ data class BufferInfoInputs(
      * disagreeing about how many people are in the channel reads as a bug in whichever the reader
      * looks at second.
      */
-    val memberCount: Int,
+    /** Null until the list has arrived (lurker#1292): a count of nothing is not "0 members". */
+    val memberCount: Int?,
     val modes: ChannelModeState?,
     val access: ChannelAccess,
     /** The network's connection, for a server log. Null when the store doesn't hold the network. */
@@ -70,7 +71,7 @@ data class BufferInfoInputs(
                 topic = live.topic,
                 networkName = network?.name,
                 // Counted only where it's drawn: a busy channel's filter isn't free.
-                memberCount = if (opened.kind == BufferKind.Channel) state.visibleMembers(key).size else 0,
+                memberCount = if (opened.kind == BufferKind.Channel && state.members[key.id] != null) state.visibleMembers(key).size else null,
                 modes = state.channelModes[key.id],
                 access = state.channelAccess(key),
                 connection = network?.let { NetworkRow(connection = it.state, isBlocked = it.blocked) },
@@ -169,7 +170,7 @@ sealed interface InfoRow {
     /** One of the channel's list modes — bans, exceptions, invite exceptions, quiets. */
     data class ModeList(val letter: String, val name: String) : InfoRow
 
-    data class Members(val count: Int) : InfoRow
+    data class Members(val count: Int?) : InfoRow
 
     data object Whois : InfoRow
 

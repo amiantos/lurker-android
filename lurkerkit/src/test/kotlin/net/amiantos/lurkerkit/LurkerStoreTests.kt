@@ -758,16 +758,19 @@ class LurkerStoreTests {
     }
 
     /**
-     * Our own join precedes the `names` broadcast, so a join must be able to seed a
-     * list from nothing — the roster lands a moment later and replaces it.
+     * A join over no list seeds nothing (lurker#1292): null means the list hasn't arrived,
+     * and a one-person list would read as the room — and a pending `names` would then defer
+     * to it. Our own join is no exception: the 366 right behind it brings everyone, us too.
      */
     @Test
-    fun testAJoinSeedsAListWhereNoneExistsYet() {
+    fun testAJoinOverNoListSeedsNothing() {
         val store = LurkerStore()
         store.apply(channelBuffer(hydrated = true, messages = emptyList()))
         store.apply(live("#lurker", Message(id = 10, type = EventType.Join, nick = "me", text = null, isSelf = true)))
 
-        assertEquals(listOf("me"), store.state.members[chanKey]!!.map { it.nick })
+        assertNull(store.state.members[chanKey])
+        store.apply(ServerFrame.ChannelMembers(networkId = 1, target = "#lurker", members = listOf(Member(nick = "me"), Member(nick = "alice"))))
+        assertEquals(listOf("me", "alice"), store.state.members[chanKey]!!.map { it.nick })
     }
 
     /**
