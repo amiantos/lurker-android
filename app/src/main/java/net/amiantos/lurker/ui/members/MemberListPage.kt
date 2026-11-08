@@ -122,6 +122,7 @@ internal fun MemberListPage(
 
     MemberListContent(
         loaded = built != null,
+        awaitingList = state.built?.inputs?.awaitingList == true,
         title = MemberListModel.title(rows.size),
         rows = MemberListModel.filter(rows, query),
         showsSearch = wantsSearch,
@@ -162,6 +163,7 @@ private fun toggleFriend(model: ChatViewModel, key: BufferKey, nick: String) {
 @Composable
 private fun MemberListContent(
     loaded: Boolean,
+    awaitingList: Boolean,
     title: String,
     rows: List<MemberRow>,
     showsSearch: Boolean,
@@ -190,6 +192,10 @@ private fun MemberListContent(
             }
             if (!loaded) {
                 // The first build's frame: nothing yet, and not "No members yet." either.
+            } else if (awaitingList) {
+                // The list rides the buffer's hydration (lurker#1292); until it lands the room
+                // is not empty, it is unread.
+                Box(Modifier.fillMaxSize()) { StateView(title = "Loading members…") }
             } else if (rows.isEmpty()) {
                 // The list filters in place — there's no second results screen — so the empty sentence
                 // stands where the rows were.
@@ -288,6 +294,7 @@ private fun MembersPreview(dark: Boolean, rows: List<MemberRow>, search: Boolean
     LurkerTheme(darkTheme = dark) {
         MemberListContent(
             loaded = true,
+            awaitingList = false,
             title = MemberListModel.title(rows.size),
             rows = rows,
             showsSearch = search,

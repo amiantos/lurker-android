@@ -246,7 +246,7 @@ private fun InfoRowView(row: InfoRow, actions: BufferInfoActions) {
         is InfoRow.Topic -> ListItem(colors = clear, headlineContent = { Text(row.text, color = if (row.muted) muted else Color.Unspecified) })
         is InfoRow.ChannelSettings -> NavRow(LurkerIcons.Tune, "Channel Settings", row.modes, actions.onChannelSettings)
         is InfoRow.ModeList -> NavRow(LurkerIcons.ListBullet, row.name, null) { actions.onModeList(row.letter, row.name) }
-        is InfoRow.Members -> NavRow(LurkerIcons.Group, "Members", row.count.toString(), actions.onMembers)
+        is InfoRow.Members -> NavRow(LurkerIcons.Group, "Members", row.count?.toString(), actions.onMembers)
         // No nick alongside it — the title already says whose DM this is.
         InfoRow.Whois -> NavRow(LurkerIcons.AccountCircle, "Whois", null, actions.onWhois)
         // Named for the buffer rather than "Search in Buffer": the title already says which one.

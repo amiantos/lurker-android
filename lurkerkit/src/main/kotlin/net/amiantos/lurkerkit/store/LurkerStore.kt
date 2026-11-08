@@ -1298,6 +1298,21 @@ data class ChatState(
      * here it is `IgnoreMatch.FoldedLiteral`, the kit's stand-in for that compare (see its
      * comment for why `equals(ignoreCase = true)` is not one).
      */
+    /**
+     * Whether a channel's member list is still on its way (lurker#1292): the store holds none,
+     * and we are in the channel on a network that is up or coming back — so one is coming, with
+     * the buffer's hydration or the resume. A parted channel or a network that is `Disconnected`
+     * has no list coming; a null there is "nobody", not "not yet". The one rule for every screen
+     * that says "loading" (the member sheet, the info sheet's count). `joined` overrides the
+     * stored row's — for a buffer the screen synthesized.
+     */
+    fun membersAwaited(key: BufferKey, joined: Boolean? = null): Boolean {
+        if (members[key.id] != null) return false
+        if (!(joined ?: buffers[key.id]?.joined ?: false)) return false
+        val network = key.networkId?.let { networks[it] } ?: return false
+        return network.state != ConnectionState.Disconnected
+    }
+
     fun visibleMembers(key: BufferKey): List<Member> {
         val members = this.members[key.id].orEmpty()
         if (ignores.isEmpty(key.networkId)) return members
@@ -2306,7 +2321,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                     val buffer = buffers[key]
                         ?: Buffer(networkId = snapshot.id, target = channel.name, kind = BufferKind.Channel)
                     buffers[key] = buffer.copy(joined = true, topic = channel.topic)
-                    members[key] = membersAfter(members[key], channel.members, pending = channel.membersPending)
+                    membersAfter(members[key], channel.members, pending = channel.membersPending)?.let { members[key] = it }
                     channelModes[key] = channel.modeState
                     // Third path that can materialize a row, so it owes `burstSeen` an entry
                     // like the other two — otherwise the burst's closing prune could drop a
@@ -2589,18 +2604,22 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
          * case-insensitively throughout: servers echo inconsistent casing, and `toLowerCase`
          * matching is house style (see `BufferKey`).
          *
-         * A join can seed a list from null — our own join precedes the `names` broadcast, so
-         * the list briefly holds just us until the full roster lands. Removals against null
-         * stay null: a quit fans out to DM buffers too, which have no list to edit.
+         * Nothing seeds a list from null (lurker#1292): null is "the list hasn't arrived", and
+         * the `names` behind our own join brings the whole roster. Removals against null stay
+         * null too: a quit fans out to DM buffers too, which have no list to edit.
          */
         private fun foldMembership(members: List<Member>?, message: Message): List<Member>? =
             when (message.type) {
                 EventType.Join -> {
                     val nick = message.nick
-                    if (nick == null || nick.isEmpty()) {
+                    if (nick == null || nick.isEmpty() || members == null) {
+                        // No list, no seeding (lurker#1292): null is "the list hasn't arrived",
+                        // and a join folded into nothing would make a one-person room that
+                        // reads as held — and that a pending `names` would then defer to. Our
+                        // own join is no exception: the 366 that follows brings the whole list.
                         members
                     } else {
-                        val list = members.orEmpty()
+                        val list = members
                         // Already present (e.g. the list arrived via `names` before our fold
                         // ran): keep the existing entry and whatever modes/away it carries.
                         if (list.any { it.nick.lowercase() == nick.lowercase() }) {
@@ -2659,10 +2678,12 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
         }
 
         /**
-         * A `names` broadcast: replace the member list wholesale — it IS the list, the same
-         * authority the snapshot carries. Stored even if no buffer row exists yet: `members`
-         * is a side table keyed like the buffers, so an early entry creates nothing visible,
-         * and the row that makes it visible is on its way (our own join precedes `names`).
+         * A `names` broadcast: replace the member list wholesale — it IS the list — unless it
+         * is `pending`, when `membersAfter` decides (a pending frame over nothing held stores
+         * nothing). Stored even if no buffer row exists yet: `members` is a side table keyed
+         * like the buffers, so an early entry creates nothing visible, and the row that makes
+         * it visible is on its way (our own join precedes `names`). No state copy when the
+         * answer is what is already held.
          */
         private fun applyChannelMembers(
             state: ChatState,
@@ -2672,18 +2693,29 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             pending: Boolean,
         ): ChatState {
             val key = BufferKey(networkId = networkId, target = target).id
-            return state.copy(members = state.members + (key to membersAfter(state.members[key], members, pending)))
+            val held = state.members[key]
+            val after = membersAfter(held, members, pending) ?: return state
+            if (after === held) return state
+            return state.copy(members = state.members + (key to after))
         }
 
         /**
          * The member list to hold once the server sends `incoming` — which is the list, unless it
-         * is `pending` (`membersPending`, §9.1, lurker#863): then the server hasn't heard the
-         * channel's NAMES since it last attached, and `incoming` is only us plus whoever has
-         * joined since. Taking it would read as everyone leaving, so a list already held stands;
-         * with none held, something beats nothing. The definitive `names` follows within seconds.
+         * is `pending` (`membersPending`, §9.1): the frame is not the list. Every connect-snapshot
+         * channel says so (lurker#1292: the snapshot carries no members, and the list arrives as a
+         * `names` with the buffer's first hydration), and so does a `names` while the server
+         * hasn't heard the channel's NAMES since it last attached (lurker#863), when `incoming` is
+         * only us plus whoever has joined since. Taking either would read as everyone leaving, so
+         * a list already held stands; with none held, something beats nothing — but an EMPTY
+         * pending list over nothing stays nothing: no entry is what the member sheet reads as
+         * "loading", and an empty one would show "No members yet." for the round trip until the
+         * real list lands.
          */
-        private fun membersAfter(held: List<Member>?, incoming: List<Member>, pending: Boolean): List<Member> {
-            if (pending && !held.isNullOrEmpty()) return held
+        private fun membersAfter(held: List<Member>?, incoming: List<Member>, pending: Boolean): List<Member>? {
+            if (pending) {
+                if (!held.isNullOrEmpty()) return held
+                if (incoming.isEmpty()) return held
+            }
             return incoming
         }
 

@@ -31,6 +31,12 @@ import net.amiantos.lurkerkit.model.PrefixMode
  */
 class MemberListInputs private constructor(
     val members: List<Member>?,
+    /**
+     * Whether the list is still on its way (lurker#1292): the store holds none, and we are in
+     * the channel on a connected network, so one is coming — with the buffer's hydration, or a
+     * `names`. A parted channel or a down network has no list coming and shows the empty text.
+     */
+    val awaitingList: Boolean,
     val ignores: IgnoreSet,
     val ownNick: String?,
     /** The network's PREFIX — its symbols and ranks (lurker-ios#191); null before ISUPPORT. */
@@ -62,6 +68,7 @@ class MemberListInputs private constructor(
         fun of(state: ChatState, key: BufferKey): MemberListInputs =
             MemberListInputs(
                 members = state.members[key.id],
+                awaitingList = state.membersAwaited(key),
                 ignores = state.ignores,
                 ownNick = key.networkId?.let { state.networks[it]?.nick },
                 prefix = key.networkId?.let { state.networks[it]?.modeSpec?.prefix },
@@ -71,7 +78,8 @@ class MemberListInputs private constructor(
             )
 
         fun same(old: MemberListInputs, new: MemberListInputs): Boolean =
-            old.members === new.members && old.ignores === new.ignores && old.ownNick == new.ownNick &&
+            old.members === new.members && old.awaitingList == new.awaitingList &&
+                old.ignores === new.ignores && old.ownNick == new.ownNick &&
                 old.prefix == new.prefix && old.userMetadata === new.userMetadata &&
                 // The one key these rows print by, not the whole settings.
                 old.settings.bool(ChatState.displayNamesKey, default = true) == new.settings.bool(ChatState.displayNamesKey, default = true)
