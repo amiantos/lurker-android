@@ -190,6 +190,7 @@ internal fun icon(glyph: ActionGlyph): ImageVector =
         ActionGlyph.Copy -> LurkerIcons.ContentCopy
         ActionGlyph.Bookmark -> LurkerIcons.BookmarkBorder
         ActionGlyph.Bookmarked -> LurkerIcons.BookmarkFilled
+        ActionGlyph.Delete -> LurkerIcons.Delete
         ActionGlyph.Profile -> LurkerIcons.AccountCircle
         ActionGlyph.OpenLink -> LurkerIcons.OpenInNew
         ActionGlyph.Share -> LurkerIcons.Share

@@ -651,6 +651,15 @@ internal class ComposerState(
         saveDraft()
     }
 
+    /**
+     * The answered line was deleted (lurker#1013): the reply can go nowhere now, so its link goes.
+     * The draft's words stay, the `nick: ` Reply put there included — unlike [cancelReply], the ✕,
+     * which takes the address back out. The web's rule.
+     */
+    fun dropReply() {
+        changeReply(null)
+    }
+
     /** Fill the composer with a draft: its text and its reply. Null empties both. */
     private fun showDraft(draft: ComposerDraft?) {
         isShowingDraft = true
@@ -1047,6 +1056,15 @@ internal fun rememberComposerState(
     // which changes nothing on screen.
     LaunchedEffect(state) {
         model.statePublisher.conflate().map { it.typists(key) }.distinctUntilChanged().collect { state.typists = it }
+    }
+    // A reply being written to a line that was just deleted (lurker#1013) can go nowhere now. The
+    // draft's words stay; only the reply link goes — the web's rule. The map is replaced, never
+    // mutated, so identity is the cheap dedupe.
+    LaunchedEffect(state) {
+        model.statePublisher.conflate().map { it.redactions }.distinctUntilChanged { a, b -> a === b }.collect { redactions ->
+            val reply = state.reply ?: return@collect
+            if (redactions.containsKey(reply.messageId)) state.dropReply()
+        }
     }
     // A typing entry's lease expires by the clock, not by a frame — the last thing a peer sends is
     // `active`, and what happens next is nothing — so while anybody is typing the list is re-read once

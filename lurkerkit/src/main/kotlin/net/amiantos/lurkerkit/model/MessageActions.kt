@@ -16,6 +16,12 @@ enum class MessageActionKey(val rawValue: String) {
     Bookmark("bookmark"),
 
     /**
+     * Ask the network to delete the line (lurker#1013): yours, or anyone's where you hold a
+     * prefix mode. One confirm; the row blanks when the network's REDACT comes back.
+     */
+    Delete("delete"),
+
+    /**
      * Open the profile of the person the line is *from* (lurker-ios#12) — which on a
      * re-attributed relay line is the bridge, not the speaker. See `profileSubject`.
      */
@@ -51,6 +57,11 @@ data class MessageActionScope(
     val target: String = "",
     /** `ChatState.tagSupport(networkId:)` at the press: which tags the network takes right now. */
     val support: TagSupport = TagSupport.nothing,
+    /**
+     * `ChatState.moderates(key)` at the press: whether you hold a prefix mode in this channel,
+     * which is what offers Delete on other people's lines (lurker#1013). False in a DM.
+     */
+    val moderating: Boolean = false,
 )
 
 /**
@@ -111,6 +122,11 @@ class MessageActionContext(
     val showProfile: (String) -> Unit,
     /** Open the reaction sheet for this line. */
     val react: (Message) -> Unit = { _ -> },
+    /**
+     * Delete this line (lurker#1013): the screen confirms — it can't be undone — then sends the
+     * `redact` and waits for the network's frame. Only called for a line `build` offered Delete on.
+     */
+    val delete: (Message) -> Unit = { _ -> },
 )
 
 /**
@@ -214,6 +230,14 @@ object MessageActions {
             )
         }
 
+        // Delete (lurker#1013): a REDACT to the network, which answers with the deletion or a
+        // refusal. Last among the line's own actions, before the one that addresses its author —
+        // where the web puts it. `Redactions.deletable` says on whose lines: yours, or anyone's
+        // where you hold a prefix mode, on a network that negotiated the cap.
+        if (Redactions.deletable(message, target = scope.target, support = scope.support, moderating = scope.moderating)) {
+            actions.add(MessageAction(key = MessageActionKey.Delete, title = "Delete Message", symbol = "trash"))
+        }
+
         // Profile — whois, their note, and the way to DM them.
         //
         // ⚠⚠ The subject is `profileSubject`, NOT `message.nick`. On a relay-re-attributed
@@ -280,7 +304,9 @@ object MessageActions {
      */
     fun replyAction(message: Message, target: String, canReply: Boolean): MessageAction? {
         val nick = message.nick
-        if (!message.type.isSpeech || nick.isNullOrEmpty()) return null
+        // No reply to a deleted line (lurker#1013): addressing its author with nothing to answer
+        // is the one thing Reply would still do.
+        if (!message.type.isSpeech || message.redaction != null || nick.isNullOrEmpty()) return null
         val unaddressed = message.isSelf || Replies.isPrivate(target)
         if (!unaddressed) {
             return MessageAction(key = MessageActionKey.Reply, title = "Reply to $nick", symbol = "arrowshape.turn.up.left")
@@ -347,7 +373,7 @@ object MessageActions {
             MessageActionKey.CopyLink -> context.copy(url)
             MessageActionKey.ShareLink -> context.share(url)
             MessageActionKey.Reply, MessageActionKey.React, MessageActionKey.Copy,
-            MessageActionKey.Bookmark, MessageActionKey.Profile -> Unit
+            MessageActionKey.Bookmark, MessageActionKey.Delete, MessageActionKey.Profile -> Unit
         }
     }
 
@@ -389,6 +415,9 @@ object MessageActions {
                 // offered. Re-reading the store here instead would invert the button under the
                 // user: the row says "Save Message" and an unsave goes out.
                 context.setBookmark(message.id, !scope.isBookmarked)
+            MessageActionKey.Delete ->
+                // The screen confirms and sends; nothing is rendered until the network answers.
+                context.delete(message)
             MessageActionKey.Profile -> {
                 // `build` already refused a line with no IRC subject, and this re-derives from the
                 // same function rather than restating its rule — the drift `run`'s own gate exists

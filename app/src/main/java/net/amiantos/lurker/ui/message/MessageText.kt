@@ -29,6 +29,7 @@ import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.ModeNarration
 import net.amiantos.lurkerkit.model.PreviewText
 import net.amiantos.lurkerkit.model.ReactionGroup
+import net.amiantos.lurkerkit.model.Redactions
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.ReplyQuote
 import net.amiantos.lurkerkit.model.Settings
@@ -277,6 +278,15 @@ object MessageText {
         onToggleSpoiler: ((Int) -> Unit)? = null,
         names: ((String) -> String?)? = null,
     ): AnnotatedString {
+        // A deleted line (lurker#1013) keeps its row, author and time; the placeholder stands where
+        // its words were — muted and italic, so it reads as a mark rather than as something the
+        // author said. `body` would draw nothing: the text is gone.
+        val placeholder = message.redaction?.let { redaction ->
+            StyledBody().apply {
+                append(redaction.label(message.nick), SpanStyle(color = style.colors.fgMuted, fontStyle = FontStyle.Italic))
+            }
+        }
+
         // A line that names its own actor keeps doing so: it has no header to be named by.
         if (message.type == EventType.Action) {
             val color = nickColor(message.nick, message.isSelf, style)
@@ -285,7 +295,7 @@ object MessageText {
             // nick, so a record under that spelling would be someone else's.
             val actor = if (message.relayBot == null) message.nick?.let { names?.invoke(it) } else null
             line.append("* ${actor ?: message.nick ?: "*"} ", SpanStyle(color = color))
-            line.append(body(message, style, fallback = color, highlighter, revealed, hiddenUrls))
+            line.append(placeholder ?: body(message, style, fallback = color, highlighter, revealed, hiddenUrls))
             appendCompactTime(trailingTime, line, style)
             // Two, to clear the `* ` this line opens with.
             return finish(line, style, flushFirstLine = true, indentCharacters = 2, onToggleSpoiler = onToggleSpoiler)
@@ -300,7 +310,7 @@ object MessageText {
         }
         // `fg`, explicitly: `body` stamps a foreground on every run, so this fallback IS the log's
         // primary text colour.
-        val line = body(message, style, fallback = style.colors.fg, highlighter, revealed, hiddenUrls)
+        val line = placeholder ?: body(message, style, fallback = style.colors.fg, highlighter, revealed, hiddenUrls)
         appendCompactTime(trailingTime, line, style)
         // A headed body is indented by the setting; an error, which is header-less but not narration,
         // sits under it the same way.
@@ -537,7 +547,9 @@ object MessageText {
                     append("$close ")
                     val source = quote.relaySource
                     if (!source.isNullOrEmpty()) append("[$source] ")
-                    append(Replies.excerpt(quote.text))
+                    // The quote of a deleted line (lurker#1013) says so where its words were —
+                    // deleted, not unavailable: the row is still there to jump to.
+                    append(quoteExcerpt(quote))
                 }
             }
             if (indented) {
@@ -549,8 +561,12 @@ object MessageText {
     /** What TalkBack says for a reply's quote. */
     fun spokenReplyQuote(quote: ReplyQuote?, names: ((String) -> String?)? = null): String {
         if (quote == null) return "In reply to a message that's unavailable"
-        return "In reply to ${quotedName(quote, names)}: ${Replies.excerpt(quote.text)}"
+        return "In reply to ${quotedName(quote, names)}: ${quoteExcerpt(quote)}"
     }
+
+    /** The quoted words, one line — or the deletion's placeholder where they were (lurker#1013). */
+    private fun quoteExcerpt(quote: ReplyQuote): String =
+        if (quote.redacted) Redactions.PLACEHOLDER else Replies.excerpt(quote.text)
 
     /** The quoted nick as the quote prints it: its shown name (lurker#1203), a relayed speaker's own spelling. */
     fun quotedName(quote: ReplyQuote, names: ((String) -> String?)?): String =

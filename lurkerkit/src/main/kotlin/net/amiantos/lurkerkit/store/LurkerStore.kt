@@ -11,6 +11,7 @@ import net.amiantos.lurkerkit.client.ServerFrame
 import net.amiantos.lurkerkit.model.Buffer
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
+import net.amiantos.lurkerkit.model.ChannelName
 import net.amiantos.lurkerkit.model.ChannelModeState
 import net.amiantos.lurkerkit.model.ComposerDraft
 import net.amiantos.lurkerkit.model.ConnectionState
@@ -29,6 +30,7 @@ import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.MessageReaction
 import net.amiantos.lurkerkit.model.Network
+import net.amiantos.lurkerkit.model.NickCompletion
 import net.amiantos.lurkerkit.model.NickNote
 import net.amiantos.lurkerkit.model.NickNoteSet
 import net.amiantos.lurkerkit.model.PendingReply
@@ -36,6 +38,7 @@ import net.amiantos.lurkerkit.model.PresenceState
 import net.amiantos.lurkerkit.model.ReactionChange
 import net.amiantos.lurkerkit.model.ReactionGroup
 import net.amiantos.lurkerkit.model.Reactions
+import net.amiantos.lurkerkit.model.Redaction
 import net.amiantos.lurkerkit.model.RelayBot
 import net.amiantos.lurkerkit.model.RelayBotSet
 import net.amiantos.lurkerkit.model.Settings
@@ -231,6 +234,23 @@ data class ChatState(
      * redraw it, and the gate that runs on every frame stays cheap.
      */
     val reactionsRevisions: Map<String, Int> = emptyMap(),
+    /**
+     * The lines we've seen that were deleted, by message id (lurker#1013). **Read through
+     * [redaction]**, or draw after `Redactions.presenting`.
+     *
+     * Beside the rows for the reason [reactions] is, and fed the same two ways: a row that arrives
+     * deleted marks itself, and a live `message-redacted` frame marks one. Network lines only.
+     * A deletion is for good, so a mark is never taken back — not by a stale page that read the
+     * line before its REDACT landed (the web's overlay would; this one keeps the stronger rule).
+     * Unlike [reactions], a frame for a line no buffer holds is kept: the feeds (bookmarks,
+     * activity, search) show lines outside any buffer and draw from here too, and [dropBuffers]
+     * leaves them be for the same reason. Bounded by how many lines get deleted, which is few.
+     * A change to a held line bumps its buffer's [reactionsRevisions] entry: the deletion takes
+     * the line's reactions down with it, and the screen's redraw gate already watches that
+     * integer — and compares this map too, for a quote whose parent isn't held. ⚠ Replaced, never
+     * mutated: the composer and the conversation dedupe on its identity.
+     */
+    val redactions: Map<Long, Redaction> = emptyMap(),
     /**
      * Peer presence keyed `networkId → lowercased nick → state`. Mirrors the server's
      * MONITOR-fed presence: seeded from each network snapshot's `peerPresence` blob and
@@ -564,6 +584,8 @@ data class ChatState(
                 messages[key].orEmpty().mapTo(freedReactions) { it.id }
             }
         }
+        // ⚠ Not the marks in `redactions`: a feed open on one of these lines still draws from them,
+        // and the map is bounded by deletions, not by what's loaded.
         return copy(
             keysById = keysById,
             reactions = reactions - freedReactions,
@@ -923,7 +945,31 @@ data class ChatState(
         if (messageId == 0L) return emptyList()
         val list = reactions[messageId]
         if (list == null || list.isEmpty()) return emptyList()
+        // A deleted line's reactions came down with it (lurker#1013): none are drawn even if a
+        // page read before the REDACT landed put them back in the map.
+        if (redactions.containsKey(messageId)) return emptyList()
         return Reactions.groups(list)
+    }
+
+    /**
+     * Whether this line was deleted (lurker#1013), and by whom: the store's mark, which also
+     * reflects a `message-redacted` since the row arrived, else the row's own. Null otherwise.
+     * Network lines only — a system-buffer row's id is another sequence ([redactions]).
+     */
+    fun redaction(message: Message, networkId: Int?): Redaction? {
+        if (networkId == null || message.id == 0L) return message.redaction
+        return redactions[message.id] ?: message.redaction
+    }
+
+    /**
+     * Whether you hold a prefix mode in this channel right now — op, halfop, voice, any of them
+     * — which is who ergo lets delete other people's lines (lurker#1013, `Redactions.deletable`).
+     * False for a DM, for a channel whose roster hasn't arrived, and where you're not listed.
+     */
+    fun moderates(key: BufferKey): Boolean {
+        if (!ChannelName.isChannelTarget(key.target)) return false
+        val ownNick = key.networkId?.let { networks[it]?.nick } ?: return false
+        return members[key.id].orEmpty().any { it.modes.isNotEmpty() && NickCompletion.sameNick(it.nick, ownNick) }
     }
 
     /**
@@ -1124,6 +1170,57 @@ data class ChatState(
             if (asked.isEmpty()) break
         }
         return copy(reactions = reactions, reactionsRevisions = revisions)
+    }
+
+    /**
+     * Seed [redactions] from a page of rows (lurker#1013): a row that arrived deleted marks
+     * itself. Additive only — a row WITHOUT a mark says nothing, since a page read before a
+     * REDACT landed can arrive after the frame that applied it (see [redactions]).
+     */
+    internal fun noteRedactions(messages: List<Message>, networkId: Int?, key: String): ChatState {
+        if (networkId == null) return this
+        val redactions = LinkedHashMap(this.redactions)
+        var changed = false
+        for (message in messages) {
+            if (message.id == 0L) continue
+            val redaction = message.redaction ?: continue
+            if (redactions[message.id] == redaction) continue
+            redactions[message.id] = redaction
+            changed = true
+        }
+        if (!changed) return this
+        return copy(redactions = redactions, reactionsRevisions = reactionsRevisions.bumped(key))
+    }
+
+    /**
+     * A line was deleted (lurker#1013) — a `message-redacted` frame. Its reactions came down with
+     * it on the server, so they do here. Marked whether or not a buffer holds the line (see
+     * [redactions]); the buffer that does is told to redraw.
+     */
+    internal fun applyRedaction(redaction: Redaction, messageId: Long, networkId: Int, target: String): ChatState {
+        val key = BufferKey(networkId = networkId, target = target).id
+        val held = messages[key]?.any { it.id == messageId } == true
+        return copy(
+            redactions = redactions + (messageId to redaction),
+            reactions = reactions - messageId,
+            reactionsRevisions = if (held) reactionsRevisions.bumped(key) else reactionsRevisions,
+        )
+    }
+
+    /**
+     * The deletions a `reactions-sync` named (lurker#1013), applied as their frames would be — in
+     * one pass: the marks and the dropped reactions first, then one revision bump per buffer that
+     * holds any of the lines.
+     */
+    internal fun applyRedactionsSync(found: Map<Long, Redaction>): ChatState {
+        if (found.isEmpty()) return this
+        val marks = found.filterKeys { it != 0L }
+        var revisions = reactionsRevisions
+        for ((key, buffer) in buffers) {
+            if (buffer.networkId == null) continue
+            if (messages[key].orEmpty().any { marks.containsKey(it.id) }) revisions = revisions.bumped(key)
+        }
+        return copy(redactions = redactions + marks, reactions = reactions - marks.keys, reactionsRevisions = revisions)
     }
 
     /**
@@ -1388,6 +1485,17 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
     fun noteBookmarked(ids: List<Long>) {
         if (ids.isEmpty()) return
         publish(state.noteBookmarked(ids))
+    }
+
+    /**
+     * Record the deletions a fetched feed page carries (lurker#1013), in ONE mutation — like
+     * [noteBookmarked]. A bookmark or a search hit read after its line was deleted is how a
+     * deletion missed while away reaches every other copy of the line this session shows.
+     */
+    fun noteRedactions(rows: List<Message>) {
+        val marks = rows.filter { it.id != 0L && it.redaction != null }.associate { it.id to it.redaction!! }
+        if (marks.isEmpty()) return
+        publish(state.copy(redactions = state.redactions + marks))
     }
 
     fun apply(frame: ServerFrame) {
@@ -1664,6 +1772,13 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                 is ServerFrame.Reaction -> state.applyReaction(frame.change)
                 is ServerFrame.ReactionsSync ->
                     state.applyReactionsSync(messageIds = frame.messageIds, found = frame.reactions)
+                        .applyRedactionsSync(frame.redactions)
+                is ServerFrame.MessageRedacted -> {
+                    val change = frame.change
+                    state.applyRedaction(
+                        change.redaction, messageId = change.messageId, networkId = change.networkId, target = change.target,
+                    )
+                }
                 is ServerFrame.ReactSupport -> {
                     // Never materializes a network: it describes one the snapshot already named.
                     val network = state.networks[frame.networkId]
@@ -2238,6 +2353,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             var next = state
             next = next.noteBookmarks(messages, networkId = frameBuffer.networkId)
             next = next.noteReactions(messages, networkId = frameBuffer.networkId, key = frameBuffer.key.id)
+            next = next.noteRedactions(messages, networkId = frameBuffer.networkId, key = frameBuffer.key.id)
             val key = frameBuffer.key.id
             next = next.seedSpeakers(speakers, key = key)
             // The server named this buffer, so it survives the burst's closing prune. Recorded
@@ -2649,6 +2765,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             }
             next = next.noteBookmarks(events, networkId = networkId)
             next = next.noteReactions(events, networkId = networkId, key = key)
+            next = next.noteRedactions(events, networkId = networkId, key = key)
             next = next.seedSpeakers(speakers, key = key)
             val existing = next.messages[key].orEmpty()
             val wasDetached = next.buffers[key]?.hasMoreNewer == true

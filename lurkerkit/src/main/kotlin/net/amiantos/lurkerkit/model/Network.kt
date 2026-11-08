@@ -157,10 +157,16 @@ data class TagSupport(
      * plain line.
      */
     val canReply: Boolean,
+    /**
+     * A `redact` verb can go out: the network negotiated `draft/message-redaction` (lurker#1013).
+     * Says nothing about WHICH lines it will let this user delete — see `Redactions.deletable`.
+     * ⚠ No legacy fallback: a server that predates it never says, and absent reads as false.
+     */
+    val canRedact: Boolean = false,
 ) {
     companion object {
         /** Nothing goes out: before the burst ends, and on a link that's down. */
-        val nothing = TagSupport(canAddReaction = false, canRemoveReaction = false, canReply = false)
+        val nothing = TagSupport(canAddReaction = false, canRemoveReaction = false, canReply = false, canRedact = false)
     }
 }
 

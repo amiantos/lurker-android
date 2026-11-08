@@ -21,6 +21,8 @@ import net.amiantos.lurkerkit.model.MessageRows
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.ReactionGroup
 import net.amiantos.lurkerkit.model.Reactions
+import net.amiantos.lurkerkit.model.Redaction
+import net.amiantos.lurkerkit.model.Redactions
 import net.amiantos.lurkerkit.model.RelayBotSet
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.Settings
@@ -78,6 +80,8 @@ internal class ConversationInputs(
     val reactionsRevision: Int,
     /** Not compared — [reactionsRevision] stands for it. */
     val reactions: Map<Long, List<MessageReaction>>,
+    /** Which lines were deleted (lurker#1013). Compared by identity — replaced on every deletion. */
+    val redactions: Map<Long, Redaction> = emptyMap(),
     /** `ChatState.tagSupport` for this buffer's network, resolved once per frame for every chip. */
     val support: TagSupport,
     val modePrefixes: Map<String, MemberPrefix.Mark>,
@@ -104,6 +108,8 @@ internal class ConversationInputs(
         if (messageId == 0L) return emptyList()
         val list = reactions[messageId]
         if (list.isNullOrEmpty()) return emptyList()
+        // A deleted line's reactions came down with it (lurker#1013) — `ChatState.reactionGroups`' rule.
+        if (redactions.containsKey(messageId)) return emptyList()
         return Reactions.groups(list)
     }
 
@@ -119,6 +125,10 @@ internal class ConversationInputs(
                 old.speakers == new.speakers &&
                 old.rosterSettled == new.rosterSettled &&
                 old.reactionsRevision == new.reactionsRevision &&
+                // A deletion (lurker#1013) bumps that revision for the buffer holding the line — but a
+                // reply here can quote a parent this slice doesn't hold. The map is replaced only when
+                // a line is deleted, so identity is the cheap test.
+                old.redactions === new.redactions &&
                 old.support == new.support &&
                 old.modePrefixes == new.modePrefixes &&
                 old.highlighterNicks == new.highlighterNicks &&
@@ -172,6 +182,7 @@ internal class ConversationProjector(private val key: BufferKey, private val kin
             rosterSettled = state.rosterSettled,
             reactionsRevision = state.reactionsRevision(key),
             reactions = state.reactions,
+            redactions = state.redactions,
             support = state.tagSupport(networkId = key.networkId),
             modePrefixes = modePrefixes,
             highlighterNicks = highlighterNicks,
@@ -215,22 +226,30 @@ internal object ConversationModel {
      */
     fun visibleMessages(inputs: ConversationInputs, keeping: Long? = null, now: Instant = Instant.now()): List<Message> {
         val key = inputs.key
+        // Deletions (lurker#1013) after re-attribution, as the web orders it: a bridged line keeps
+        // the speaker its envelope named, and the placeholder stands where their words were. Before
+        // replies, whose quotes are judged against the line as it now reads.
+        val redactions = if (key.networkId == null) emptyMap() else inputs.redactions
         return Replies.presenting(
-            inputs.relayBots.reattributing(
-                inputs.ignores.visible(
-                    inputs.messages.orEmpty().filter { inputs.kind.renders(it.type) && it.isRenderable },
+            Redactions.presenting(
+                inputs.relayBots.reattributing(
+                    inputs.ignores.visible(
+                        inputs.messages.orEmpty().filter { inputs.kind.renders(it.type) && it.isRenderable },
+                        networkId = key.networkId,
+                        target = key.target,
+                        keeping = keeping,
+                        now = now,
+                    ),
                     networkId = key.networkId,
-                    target = key.target,
-                    keeping = keeping,
-                    now = now,
                 ),
-                networkId = key.networkId,
+                redactions = redactions,
             ),
             networkId = key.networkId,
             target = key.target,
             ignores = inputs.ignores,
             relayBots = inputs.relayBots,
             ownNick = inputs.ownNick,
+            redactions = redactions,
             now = now,
         )
     }
