@@ -225,7 +225,7 @@ class ChannelSettingsModelTest {
     @Test
     fun someoneWhoCantEditSeesOnlyWhatsSetAndWhy() {
         val sections = build(slice(mine = emptyList(), modes = "ntC"))
-        assertEquals(SettingsItem.TopicText("Hello", muted = false), sections[0].items.single())
+        assertEquals(SettingsItem.TopicText("Hello"), sections[0].items.single())
         assertEquals(listOf("toggle:n", "toggle:t"), sections[1].items.map { it.id })
         assertTrue(sections[1].items.all { (it as SettingsItem.Toggle).enabled.not() })
         assertNull(sections[1].footer)
@@ -234,9 +234,11 @@ class ChannelSettingsModelTest {
 
     @Test
     fun theTopicSaysWhatItCanWhenItCantBeEdited() {
-        assertEquals(SettingsItem.TopicText("No topic set.", muted = true), build(slice(mine = emptyList(), topic = null))[0].items.single())
+        assertEquals(SettingsItem.Notice("topic", "No topic set."), build(slice(mine = emptyList(), topic = null))[0].items.single())
+        // Nothing but formatting codes draws as nothing, so it is no topic to show (lurker#1297).
+        assertEquals(SettingsItem.Notice("topic", "No topic set."), build(slice(mine = emptyList(), topic = "\u0003\u0002 "))[0].items.single())
         assertEquals(
-            SettingsItem.TopicText("Join the channel to see its topic.", muted = true),
+            SettingsItem.Notice("topic", "Join the channel to see its topic."),
             build(slice(topic = null, joined = false))[0].items.single(),
         )
     }

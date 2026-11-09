@@ -5,6 +5,10 @@ package net.amiantos.lurker.ui.shell
 
 import android.content.ActivityNotFoundException
 import android.util.Log
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import net.amiantos.lurkerkit.model.ExternalLink
 
@@ -34,4 +38,20 @@ internal class SafeUriHandler(private val platform: UriHandler) : UriHandler {
             Log.w("Lurker", "can't open $uri", e)
         }
     }
+}
+
+/** The platform's opener behind a [SafeUriHandler], remembered — for a surface that opens links itself. */
+@Composable
+internal fun rememberSafeUriHandler(): UriHandler {
+    val platform = LocalUriHandler.current
+    return remember(platform) { SafeUriHandler(platform) }
+}
+
+/**
+ * [content] with every link in it — a `Text`'s `LinkAnnotation.Url`s, a tap in a row — opening through
+ * a [SafeUriHandler]. The one way to plumb the door, so a surface can't forget it or wire it differently.
+ */
+@Composable
+internal fun ProvideSafeUriHandler(content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalUriHandler provides rememberSafeUriHandler(), content = content)
 }

@@ -47,7 +47,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -94,7 +93,7 @@ import net.amiantos.lurker.platform.confirmCopy
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.PageExit
 import net.amiantos.lurker.ui.shell.RetryRow
-import net.amiantos.lurker.ui.shell.SafeUriHandler
+import net.amiantos.lurker.ui.shell.rememberSafeUriHandler
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
@@ -138,8 +137,7 @@ internal fun UploadsPage(
     val events = LocalAppEvents.current
     // This page is a dialog outside the conversation's provider, so it brings its own opener — the
     // same one every other surface opens links with, so a link nothing takes fails the same way.
-    val platform = LocalUriHandler.current
-    val uriHandler = remember(platform) { SafeUriHandler(platform) }
+    val uriHandler = rememberSafeUriHandler()
     val grid = state.grid
     val keyboard = LocalSoftwareKeyboardController.current
     // One formatter for the page, rebuilt only when the locale changes — not one per tile per frame.

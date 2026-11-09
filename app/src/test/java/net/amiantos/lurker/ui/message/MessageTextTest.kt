@@ -245,14 +245,21 @@ class MessageTextTest {
     }
 
     @Test
-    fun `a spoiler in a topic is hidden, untappable and kept out of the spoken form`() {
-        // No message stands behind a topic, so there is nothing a reveal could be keyed by — the
-        // rule for an id-less line.
-        val line = MessageText.prose("plan: \u000301,01secret\u0003 :tada:", style, Color.Red)
-        assertEquals("plan: secret 🎉", line.text)
-        assertTrue(line.getLinkAnnotations(0, line.length).isEmpty())
-        assertEquals(emptyList<Int>(), MessageText.hiddenSpoilerOrdinals(line))
-        assertEquals("plan: hidden spoiler 🎉", MessageText.spoken(line))
+    fun `a spoiler in a topic is hidden until opened, as on the web, and kept out of the spoken form`() {
+        val text = "plan: \u000301,01secret\u0003 :tada:"
+        var toggled: Int? = null
+        val hidden = MessageText.prose(text, style, Color.Red) { toggled = it }
+        assertEquals("plan: secret 🎉", hidden.text)
+        assertEquals(listOf(0), MessageText.hiddenSpoilerOrdinals(hidden))
+        assertEquals("plan: hidden spoiler, double tap to reveal 🎉", MessageText.spoken(hidden))
+        val tap = hidden.getLinkAnnotations(0, hidden.length).single().item as LinkAnnotation.Clickable
+        tap.linkInteractionListener!!.onClick(tap)
+        assertEquals(0, toggled)
+        // Opened: the text in the colour the row was given, nothing left to announce or reveal.
+        val shown = MessageText.prose(text, style, Color.Red, revealed = setOf(0))
+        assertEquals(emptyList<Int>(), MessageText.hiddenSpoilerOrdinals(shown))
+        assertEquals("plan: secret 🎉", MessageText.spoken(shown))
+        assertEquals(Color.Red, shown.styleAt(shown.indexOf("secret")).color)
     }
 
     @Test

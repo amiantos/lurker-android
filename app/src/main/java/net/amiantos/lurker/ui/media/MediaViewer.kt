@@ -41,7 +41,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
@@ -98,7 +97,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.launch
 import net.amiantos.lurker.ui.shell.AnnouncedSlot
-import net.amiantos.lurker.ui.shell.SafeUriHandler
+import net.amiantos.lurker.ui.shell.ProvideSafeUriHandler
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 import net.amiantos.lurkerkit.model.LinkPreview
@@ -179,9 +178,7 @@ private fun MediaViewer(gallery: Gallery, media: MediaSource, onDismiss: () -> U
         Immersive()
         // The platform's opener throws when nothing on the device takes an address; this dialog is
         // outside the conversation's provider, so it brings its own.
-        val platform = LocalUriHandler.current
-        val uriHandler = remember(platform) { SafeUriHandler(platform) }
-        CompositionLocalProvider(LocalUriHandler provides uriHandler) { ViewerPages(gallery, media, onDismiss) }
+        ProvideSafeUriHandler { ViewerPages(gallery, media, onDismiss) }
     }
 }
 

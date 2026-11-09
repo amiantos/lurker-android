@@ -1015,24 +1015,33 @@ object MessageText {
         // id-less line therefore gets no tap target: still hidden, still kept out of the spoken
         // label, just not openable. Rare (notices, MOTD), and the alternative is a control that
         // acts on the wrong message.
-        body(message.text ?: "", revealable = message.id != 0L, style, fallback, highlighter, revealed, hiddenUrls)
+        body(raw = message.text ?: "", revealable = message.id != 0L, style, fallback, highlighter, revealed, hiddenUrls)
 
     /**
      * Text shown as prose outside the log — a channel's topic in buffer info and channel settings
      * (lurker#1297) — through the same pass a message body gets: mIRC colours, links, spoilers and
      * `:shortcode:` glyphs, in [color]. The web renders a topic with `LinkedText`, its name for
-     * exactly this. No message stands behind the text, so a spoiler in it is hidden and not openable,
-     * as in a MOTD line. No paragraph indent: this is a form row, not a line hanging by its nick.
+     * exactly this, and a spoiler in one is a button there, so it opens here too: [revealed] is the
+     * owning composable's own set, since only the one text stands behind it — the id-keyed hazard of
+     * the [Message] overload doesn't arise. No paragraph indent: this is a form row, not a line
+     * hanging by its nick.
      */
-    fun prose(text: String, style: MessageTextStyle, color: Color): AnnotatedString =
-        body(text, revealable = false, style, fallback = color).toAnnotatedString(null, linkStyles(style), null)
+    fun prose(
+        text: String,
+        style: MessageTextStyle,
+        color: Color,
+        revealed: Set<Int> = emptySet(),
+        onToggleSpoiler: ((Int) -> Unit)? = null,
+    ): AnnotatedString =
+        body(text, revealable = true, style, fallback = color, revealed = revealed)
+            .toAnnotatedString(null, linkStyles(style), onToggleSpoiler)
 
     /**
-     * The body pass proper. [revealable] is whether a spoiler in it may be opened — see the
-     * [Message] overload for why an id-less line's may not.
+     * The body pass proper, over the wire text [raw]. [revealable] is whether a spoiler in it may be
+     * opened — see the [Message] overload for why an id-less line's may not.
      */
     private fun body(
-        text: String,
+        raw: String,
         revealable: Boolean,
         style: MessageTextStyle,
         fallback: Color,
@@ -1052,7 +1061,7 @@ object MessageText {
         var previousSpoilerColor: IRCColor? = null
         // Reversed runs the nick pass may still colour, with the ink their text is drawn in.
         val reversed = mutableListOf<Pair<TextRange, Color>>()
-        for (run in IRCFormatting.parse(text)) {
+        for (run in IRCFormatting.parse(raw)) {
             val explicitFg = run.fg?.let { ircColor(it, style) }
             val explicitBg = run.bg?.let { ircColor(it, style) }
             // `explicitFg != null` as well, so the reveal below can't trip on a slot the palette

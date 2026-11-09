@@ -39,7 +39,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.State
@@ -138,7 +137,7 @@ import net.amiantos.lurker.ui.shell.ConnectionBanner
 import net.amiantos.lurker.diagnostics.ScrollTrace
 import net.amiantos.lurker.ui.shell.JumpLedger
 import net.amiantos.lurker.ui.shell.JumpRequest
-import net.amiantos.lurker.ui.shell.SafeUriHandler
+import net.amiantos.lurker.ui.shell.ProvideSafeUriHandler
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.shell.rememberConnectionBannerState
 import net.amiantos.lurker.ui.theme.LurkerIcons
@@ -1281,8 +1280,6 @@ internal fun ConversationContent(
         // Links open in the browser through the platform's handler — which throws when nothing on the
         // device takes the address (a `mailto:` with no mail app, an `ftp://`). A tap that does nothing
         // is better than a crash.
-        val platform = LocalUriHandler.current
-        val uriHandler = remember(platform) { SafeUriHandler(platform) }
         // The composer is drawn over the list, not beside it, so the list reserves its measured height
         // (keyboard and navigation bar included — the composer pads itself for both) rather than the
         // scaffold's. Seeded with the slab's resting height, so the first frame doesn't put the newest
@@ -1292,7 +1289,7 @@ internal fun ConversationContent(
         var composerHeight by remember { mutableStateOf(restingComposer) }
         val bottom = composerHeight
         val top = padding.calculateTopPadding()
-        CompositionLocalProvider(LocalUriHandler provides uriHandler) {
+        ProvideSafeUriHandler {
             Box(
                 Modifier
                     .fillMaxSize()

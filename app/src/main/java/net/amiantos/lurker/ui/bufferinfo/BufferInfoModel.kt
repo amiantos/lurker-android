@@ -21,6 +21,7 @@ import net.amiantos.lurkerkit.model.NetworkRow
 import net.amiantos.lurkerkit.model.SearchQuery
 import net.amiantos.lurkerkit.model.StatusLight
 import net.amiantos.lurkerkit.model.channelAccess
+import net.amiantos.lurkerkit.rendering.IRCFormatting
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
 import java.time.Instant
@@ -272,7 +273,9 @@ object BufferInfoModel {
                     emptyList()
                 }
                 val topic = inputs.topic
-                val hasTopic = !topic.isNullOrEmpty()
+                // Judged on what would be drawn: a topic of nothing but formatting codes renders as
+                // nothing, and a blank row under "Topic" says less than the placeholder.
+                val hasTopic = topic != null && IRCFormatting.strip(topic).isNotBlank()
                 listOf(
                     // Nothing under no topic: there's no one to credit.
                     InfoSection(

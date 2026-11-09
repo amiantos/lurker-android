@@ -84,6 +84,10 @@ class BufferInfoModelTest {
         assertEquals(listOf(InfoRow.Topic("No topic set.", muted = true)), topic.rows)
         assertNull(topic.footer)
         assertEquals(InfoRow.Topic("No topic set.", muted = true), sections(state(topic = ""))[0].rows.single())
+        // Nothing but formatting codes draws as nothing, so it is no topic to show (lurker#1297).
+        val codes = sections(state(topic = "\u0003\u0002 "))[0]
+        assertEquals(InfoRow.Topic("No topic set.", muted = true), codes.rows.single())
+        assertNull(codes.footer)
     }
 
     @Test

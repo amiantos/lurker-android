@@ -334,23 +334,14 @@ private fun SettingsItemView(
             singleLine = false,
             minLines = 2,
         )
-        // The topic itself is drawn as the log draws a body (lurker#1297); the muted placeholders are
-        // the form's own words and stay plain.
-        is SettingsItem.TopicText -> if (item.muted) {
-            Text(
-                item.text,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 12.dp),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else {
-            ProseText(
-                item.text,
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 12.dp),
-                textStyle = MaterialTheme.typography.bodyLarge,
-            )
-        }
+        // The topic, drawn as the log draws a body (lurker#1297). Where there is none, the model
+        // sends a `Notice` instead.
+        is SettingsItem.TopicText -> ProseText(
+            item.text,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 12.dp),
+            textStyle = MaterialTheme.typography.bodyLarge,
+        )
         is SettingsItem.Notice -> Text(
             item.text,
             modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 12.dp),
