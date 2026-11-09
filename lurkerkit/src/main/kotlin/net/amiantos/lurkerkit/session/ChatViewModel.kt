@@ -61,6 +61,7 @@ import net.amiantos.lurkerkit.model.HistoryCountBy
 import net.amiantos.lurkerkit.model.JoinNotice
 import net.amiantos.lurkerkit.model.MediaFetch
 import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.MessageOrder
 import net.amiantos.lurkerkit.model.StatusNotification
 import net.amiantos.lurkerkit.model.ModeListResult
 import net.amiantos.lurkerkit.model.Network
@@ -1900,10 +1901,14 @@ class ChatViewModel(
      * The buffer's held rows as the screen shows them where it matters to a command: a line
      * deleted while held reads as deleted (`Redactions.presenting`), so `/react` and `/delete`
      * never land on one. The stored rows carry no mark of their own — see `ChatState.redactions`.
+     *
+     * And in the order the screen shows them (`MessageOrder`, lurker#1290): "the last line" is the
+     * last one on screen, not the newest id, which after a filled gap is a line said earlier and
+     * shown higher up.
      */
     private fun heldAsShown(key: BufferKey, state: ChatState): List<Message> =
         Redactions.presenting(
-            state.messages[key.id].orEmpty(),
+            MessageOrder.byTime(state.messages[key.id].orEmpty()),
             redactions = if (key.networkId == null) emptyMap() else state.redactions,
         )
 
