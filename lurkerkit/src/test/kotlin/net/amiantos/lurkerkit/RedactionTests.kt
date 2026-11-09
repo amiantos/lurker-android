@@ -17,6 +17,7 @@ import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.BufferKind
 import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.EventType
+import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Message
@@ -528,6 +529,35 @@ class RedactionTests {
         model.send(key, "/react 👍")
         model.send(key, "/delete")
         assertEquals(listOf("react 1 👍", "delete 2"), sent)
+    }
+
+    @Test
+    fun testReactAndDeleteLeaveALineAboveTheClearMarkerAlone() {
+        // Cleared rows stay held; a command typed at the screen never lands on one.
+        val model = model()
+        model.reactSeam = { _, _, _ -> fail("nothing should go out") }
+        model.redactSeam = { _, _ -> fail("nothing should go out") }
+        model.handle(backlog(listOf(line(1, nick = "bob"), line(2, isSelf = true))))
+        model.handle(
+            ServerFrame.BufferCleared(
+                networkId = 1, target = "#lurker", clearedBeforeId = 2, clearedAt = java.time.Instant.now(),
+            ),
+        )
+        model.send(key, "/react 👍")
+        assertEquals("nothing here to react to", lastLocal(model))
+        model.send(key, "/delete")
+        assertEquals("nothing of yours here to delete", lastLocal(model))
+    }
+
+    @Test
+    fun testReactSkipsALineFromSomeoneIgnored() {
+        val model = model()
+        val sent = mutableListOf<Long>()
+        model.reactSeam = { id, _, _ -> sent.add(id); true }
+        model.handle(ServerFrame.IgnoreListUpdated(networkId = null, rules = listOf(IgnoreRule(mask = "mallory"))))
+        model.handle(backlog(listOf(line(1, nick = "bob"), line(2, nick = "mallory"))))
+        model.send(key, "/react 👍")
+        assertEquals(listOf(1L), sent)
     }
 
     @Test
