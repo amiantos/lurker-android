@@ -51,6 +51,7 @@ import net.amiantos.lurkerkit.model.SpeakerMap
 import net.amiantos.lurkerkit.model.StatusNotification
 import net.amiantos.lurkerkit.model.StatusToast
 import net.amiantos.lurkerkit.model.TabCompletion
+import net.amiantos.lurkerkit.rendering.EmojiShortcodes
 import net.amiantos.lurkerkit.session.ChatViewModel
 import java.time.Instant
 
@@ -165,6 +166,26 @@ internal class ComposerState(
      */
     @OptIn(ExperimentalFoundationApi::class)
     val colorInput = InputTransformation {
+        // First, a `:name:` this edit just closed becomes its glyph (lurker#1294) — the web's
+        // `maybeConvertShortcode`, iOS's `convertCompletedShortcode`. Here, inside the user's own
+        // edit, for two reasons a later snapshot can't give: the swap is part of the same undo
+        // entry, so Undo brings the name back and nothing turns it into a glyph again; and the
+        // field reports every edit, where snapshots coalesce a colon and the space typed right
+        // after it into one, with the caret no longer closing anything. Only an edit that ends
+        // at the caret (the colon was just typed there, not somewhere else in the line), and not
+        // while an IME composition was open going into it — the buffer's own composition is
+        // internal to Compose, so the field's as of the last commit stands in; a keyboard that
+        // commits the word on the colon converts on the next snapshot instead (`fieldChanged`).
+        // The colour fitting below then sees the swap among the edit's changes.
+        val lastChange = changes.changeCount - 1
+        if (lastChange >= 0 && changes.getRange(lastChange).end == selection.end && selection.collapsed &&
+            this@ComposerState.field.composition == null
+        ) {
+            EmojiShortcodes.completed(asCharSequence().toString(), selection.end)?.let { match ->
+                replace(match.range.start, match.range.end, match.glyph)
+                selection = TextRange(match.range.start + match.glyph.length)
+            }
+        }
         val old = originalText.toString()
         val new = asCharSequence().toString()
         if (old == new) return@InputTransformation
@@ -197,6 +218,8 @@ internal class ComposerState(
 
     /** Where the caret was at the last [fieldChanged] — a move without an edit drops the [pen]. */
     private var lastSelection: TextRange = field.selection
+    /** Whether the last snapshot had an IME composition open — see the shortcode swap in [fieldChanged]. */
+    private var lastComposing = false
 
     /** Set while the colour editor covers the composer: nothing may take the keyboard back to the bar. */
     var editorOpen: Boolean by editorOpenState
@@ -454,6 +477,21 @@ internal class ComposerState(
         }
         val textChanged = now.text != lastSeenText
         lastSeenText = now.text
+        // The one `:name:` swap `colorInput` can't make (lurker#1294): a keyboard that kept the
+        // name in its composing region through the closing colon lets go without an edit — the
+        // snapshot where `composing` drops with the text unchanged. If the caret is still right
+        // after the name, it converts now, as the composer's own edit, which comes back through
+        // here with a glyph under the caret that closes nothing. Only that case: on a typed change
+        // the transformation has already had its turn, and converting here as well would turn an
+        // Undo's restored name straight back into the glyph.
+        val composingEnded = lastComposing && !now.composing
+        lastComposing = now.composing
+        if (composingEnded && now.selection.collapsed) {
+            ComposerModel.convertShortcode(now.text, now.selection.start)?.let { edit ->
+                apply(edit)
+                return
+            }
+        }
         // What the channel was told is `ComposerTyping`'s to dedupe against — and to forget when typing
         // ends. A restore is never a text change here: it sets `lastSeenText` itself.
         if (textChanged) draftChanged(now.text)

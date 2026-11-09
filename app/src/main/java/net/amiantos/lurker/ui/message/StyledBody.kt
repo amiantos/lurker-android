@@ -98,25 +98,38 @@ internal class StyledBody : AttributedBody {
     }
 
     override fun deleteCharacters(range: TextRange) {
-        val removed = range.length
-        if (removed == 0) return
-        text.delete(range.start, range.end)
-        // A boundary before the cut stays, one after it moves back by the cut, and one inside it
-        // lands where the cut began — so a span that was wholly inside vanishes, and one that
-        // straddled an edge keeps whatever of it survived.
-        fun moved(position: Int): Int = when {
-            position <= range.start -> position
-            position >= range.end -> position - removed
-            else -> range.start
-        }
+        if (range.isEmpty) return
+        replaceCharacters(range, "")
+    }
+
+    /**
+     * Swap [range] for [replacement] — a deletion, or a `:shortcode:` for its glyph (lurker#1294) —
+     * and move every mark with the text, by the kit's one rule (`TextRange.moved`): a boundary
+     * before the swap stays, one after it shifts by the difference, one inside it lands at the end
+     * of the replacement. So the run's style takes a glyph in, a style on only part of the name (a
+     * nick coloured inside it) vanishes, a span wholly inside a cut vanishes with it, and nothing
+     * after the swap is mis-styled. Port note: iOS's `NSMutableAttributedString.replaceCharacters`,
+     * whose attributes travel with the text for free.
+     */
+    fun replaceCharacters(range: TextRange, replacement: String) {
+        text.replace(range.start, range.end, replacement)
         val iterator = marks.iterator()
         while (iterator.hasNext()) {
             val mark = iterator.next()
-            mark.start = moved(mark.start)
-            mark.end = moved(mark.end)
+            mark.start = range.moved(mark.start, replacement.length)
+            mark.end = range.moved(mark.end, replacement.length)
             if (mark.start >= mark.end) iterator.remove()
         }
     }
+
+    /**
+     * Where the emoji pass may not write: every spoiler (hidden or revealed, openable or not —
+     * [Kind.Spoiler] marks the openable ones, [Kind.Hidden] the rest and the hidden) and every link,
+     * as the body itself records them. Read off the marks, which have moved with every deletion
+     * before it, rather than off the renderer's own offset lists, which have not.
+     */
+    fun spoilerAndLinkRanges(): List<TextRange> =
+        marks.filter { it.kind is Kind.Spoiler || it.kind is Kind.Hidden || it.kind is Kind.Url }.map { TextRange(it.start, it.end) }
 
     override fun ink(index: Int): Boolean = marks.any { it.kind === Kind.Ink && index >= it.start && index < it.end }
 

@@ -187,6 +187,53 @@ class MessageTextTest {
         assertEquals(androidx.compose.ui.text.style.TextDecoration.Underline, link.styles?.style?.textDecoration)
     }
 
+    // MARK: - Emoji shortcodes (lurker#1294)
+
+    @Test
+    fun `a shortcode renders as its glyph, an unknown one stays literal`() {
+        assertEquals("ok 🎉 :nope: 12:00", body("ok :tada: :nope: 12:00").text)
+    }
+
+    @Test
+    fun `a bold shortcode is a bold glyph, and what follows keeps its own style`() {
+        val line = body("\u0002:tada:\u0002 plain")
+        assertEquals("🎉 plain", line.text)
+        assertEquals(FontWeight.Bold, line.styleAt(0).fontWeight)
+        assertNull(line.styleAt(line.indexOf("plain")).fontWeight)
+    }
+
+    @Test
+    fun `a shortcode inside a link is text, and the link survives the swap before it`() {
+        // `/p` after it: a URL's trailing `:` is trimmed off the link (a pre-existing rule), and
+        // this pins the shortcode INSIDE the link, not the trim.
+        val line = body(":tada: https://x.example/:tada:/p")
+        assertEquals("🎉 https://x.example/:tada:/p", line.text)
+        assertEquals(listOf("https://x.example/:tada:/p" to "https://x.example/:tada:/p"), line.urls())
+    }
+
+    @Test
+    fun `a shortcode right after a bracketed link converts once the brackets are gone`() {
+        // The web splits the URL out and scans the rest; the link's last letter must not glue the colon.
+        val line = body("<https://x.test>:skull:")
+        assertEquals("https://x.test💀", line.text)
+        assertEquals(listOf("https://x.test" to "https://x.test"), line.urls())
+    }
+
+    @Test
+    fun `a shortcode inside a spoiler stays literal, hidden or revealed`() {
+        val text = "\u000301,01:tada:\u0003 :tada:"
+        assertEquals(":tada: 🎉", body(text).text)
+        assertEquals(":tada: 🎉", body(text, revealed = setOf(0)).text)
+    }
+
+    @Test
+    fun `a nick coloured inside a shortcode's name goes with the name`() {
+        // `bone` is a nick here and `:bone:` a shortcode; the glyph wins and the colour is dropped.
+        val line = body(":bone: bone", highlighter = NickHighlighter(listOf("bone")))
+        assertEquals("🦴 bone", line.text)
+        assertEquals(MessageText.hashedColor("bone", style), line.styleAt(line.indexOf("bone")).color)
+    }
+
     // MARK: - Mentions
 
     @Test
