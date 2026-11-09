@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import net.amiantos.lurker.ui.message.ProseText
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormInset
 import net.amiantos.lurker.ui.networks.FormSectionHeader
@@ -333,12 +334,23 @@ private fun SettingsItemView(
             singleLine = false,
             minLines = 2,
         )
-        is SettingsItem.TopicText -> Text(
-            item.text,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 12.dp),
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (item.muted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
-        )
+        // The topic itself is drawn as the log draws a body (lurker#1297); the muted placeholders are
+        // the form's own words and stay plain.
+        is SettingsItem.TopicText -> if (item.muted) {
+            Text(
+                item.text,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 12.dp),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        } else {
+            ProseText(
+                item.text,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 12.dp),
+                textStyle = MaterialTheme.typography.bodyLarge,
+            )
+        }
         is SettingsItem.Notice -> Text(
             item.text,
             modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 12.dp),

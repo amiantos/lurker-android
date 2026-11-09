@@ -226,6 +226,35 @@ class MessageTextTest {
         assertEquals(":tada: 🎉", body(text, revealed = setOf(0)).text)
     }
 
+    // MARK: - Prose (a topic shown outside the log, lurker#1297)
+
+    @Test
+    fun `a topic renders as a body does - glyphs, links, formatting - in the colour it is given`() {
+        val line = MessageText.prose("\u0002Lurker\u0002 :tada: https://lurker.chat", style, Color.Red)
+        assertEquals("Lurker 🎉 https://lurker.chat", line.text)
+        assertEquals(FontWeight.Bold, line.styleAt(0).fontWeight)
+        assertEquals(Color.Red, line.styleAt(0).color)
+        assertEquals(Color.Red, line.styleAt(line.indexOf("🎉")).color)
+        assertEquals(listOf("https://lurker.chat" to "https://lurker.chat"), line.urls())
+        assertTrue(line.paragraphStyles.isEmpty())
+    }
+
+    @Test
+    fun `an unknown shortcode and a clock in a topic stay literal`() {
+        assertEquals("meeting :nope: at 12:00", MessageText.prose("meeting :nope: at 12:00", style, Color.Red).text)
+    }
+
+    @Test
+    fun `a spoiler in a topic is hidden, untappable and kept out of the spoken form`() {
+        // No message stands behind a topic, so there is nothing a reveal could be keyed by — the
+        // rule for an id-less line.
+        val line = MessageText.prose("plan: \u000301,01secret\u0003 :tada:", style, Color.Red)
+        assertEquals("plan: secret 🎉", line.text)
+        assertTrue(line.getLinkAnnotations(0, line.length).isEmpty())
+        assertEquals(emptyList<Int>(), MessageText.hiddenSpoilerOrdinals(line))
+        assertEquals("plan: hidden spoiler 🎉", MessageText.spoken(line))
+    }
+
     @Test
     fun `a nick coloured inside a shortcode's name goes with the name`() {
         // `bone` is a nick here and `:bone:` a shortcode; the glyph wins and the colour is dropped.

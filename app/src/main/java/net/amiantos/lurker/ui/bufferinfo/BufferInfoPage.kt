@@ -51,6 +51,7 @@ import net.amiantos.lurker.ui.networks.FormInset
 import net.amiantos.lurker.ui.networks.FormRefusalFooter
 import net.amiantos.lurker.ui.networks.FormSectionFooter
 import net.amiantos.lurker.ui.networks.FormSectionHeader
+import net.amiantos.lurker.ui.message.ProseText
 import net.amiantos.lurker.ui.networks.PageExit
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.shell.StatusDot
@@ -242,8 +243,14 @@ private fun InfoRowView(row: InfoRow, actions: BufferInfoActions) {
     val clear = ListItemDefaults.colors(containerColor = Color.Transparent)
     when (row) {
         // Prose of arbitrary length, not a label — it wraps, because a truncated topic is the half you
-        // don't need.
-        is InfoRow.Topic -> ListItem(colors = clear, headlineContent = { Text(row.text, color = if (row.muted) muted else Color.Unspecified) })
+        // don't need — drawn as the log draws a body (lurker#1297): links, colours, `:shortcode:`
+        // glyphs. The muted placeholder is the page's own words and stays plain.
+        is InfoRow.Topic -> ListItem(
+            colors = clear,
+            headlineContent = {
+                if (row.muted) Text(row.text, color = muted) else ProseText(row.text, color = MaterialTheme.colorScheme.onSurface)
+            },
+        )
         is InfoRow.ChannelSettings -> NavRow(LurkerIcons.Tune, "Channel Settings", row.modes, actions.onChannelSettings)
         is InfoRow.ModeList -> NavRow(LurkerIcons.ListBullet, row.name, null) { actions.onModeList(row.letter, row.name) }
         is InfoRow.Members -> NavRow(LurkerIcons.Group, "Members", row.count?.toString(), actions.onMembers)
