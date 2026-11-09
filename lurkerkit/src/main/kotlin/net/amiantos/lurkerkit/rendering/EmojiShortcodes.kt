@@ -23,8 +23,8 @@ import net.amiantos.lurkerkit.support.unicodeRegex
  * clients resolve the same set.
  *
  * A shortcode is `:name:` where `name` is one or more of `[a-z0-9_+-]` — the gemoji character
- * set (`:+1:`, `:e-mail:`, `:thumbsup:`). Matching is case-insensitive: a typed `:Bone:`
- * resolves straight against the (lowercase) table. The opening `:` must not sit right behind
+ * set (`:+1:`, `:e-mail:`, `:thumbsup:`). Matching is case-insensitive over ASCII: a typed
+ * `:Bone:` resolves straight against the (lowercase) table. The opening `:` must not sit right behind
  * another shortcode character, so a clock like `12:00` or `word:bone:` never reads as a
  * shortcode start, and ASCII smileys fall out for free: `:-)` never closes because `)` isn't a
  * shortcode character. An unknown name stays literal.
@@ -46,16 +46,19 @@ object EmojiShortcodes {
     data class Match(val range: TextRange, val glyph: String)
 
     /**
-     * The gemoji shortcode character set. Defined once so the body pattern and the
-     * opening-boundary lookbehind can't drift apart — the web's `NAME_CHARS`.
+     * The gemoji shortcode character set, both cases spelled out. Defined once so the body
+     * pattern and the opening-boundary lookbehind can't drift apart — the web's `NAME_CHARS`.
+     * ⚠ Not `[a-z]` with `ignoreCase`: `UNICODE_CASE` folds beyond ASCII, so the Kelvin sign in
+     * `:sKull:` would match `k` and the long s in `ſ:skull:` would glue the colon, where the web's
+     * non-Unicode regex does neither.
      */
-    private const val NAME_CHARS = "[a-z0-9_+-]"
+    private const val NAME_CHARS = "[A-Za-z0-9_+-]"
 
     /**
      * Every completed `:name:` whose opening colon isn't glued to a preceding shortcode
      * character — the web's `shortcodeScanRegex`.
      */
-    private val scan = unicodeRegex("(?<!$NAME_CHARS):($NAME_CHARS+):", ignoreCase = true)
+    private val scan = unicodeRegex("(?<!$NAME_CHARS):($NAME_CHARS+):")
 
     /**
      * A completed `:name:` ending exactly at the end of the string — the web's `CLOSE_RE`, run on
@@ -63,13 +66,13 @@ object EmojiShortcodes {
      * matches before a final line terminator, so `:tada:\n` with the caret after the newline would
      * read as "just closed" and the swap would land on the line above.
      */
-    private val closing = unicodeRegex("(?<!$NAME_CHARS):($NAME_CHARS+):\\z", ignoreCase = true)
+    private val closing = unicodeRegex("(?<!$NAME_CHARS):($NAME_CHARS+):\\z")
 
     /**
      * A whole typed reaction that is one shortcode, closing colon optional — the web's
      * `reactionFromInput`. Nothing may follow it, so `:tada` is unambiguous.
      */
-    private val whole = unicodeRegex("^:($NAME_CHARS+):?$", ignoreCase = true)
+    private val whole = unicodeRegex("^:($NAME_CHARS+):?$")
 
     private const val resource = "net/amiantos/lurkerkit/emoji.json"
 

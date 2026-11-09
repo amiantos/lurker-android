@@ -75,8 +75,12 @@ class EmojiShortcodesTests {
     }
 
     @Test
-    fun testMatchesCaseInsensitively() {
+    fun testMatchesCaseInsensitivelyOverASCIIOnly() {
         assertEquals(listOf("🎉"), scan(":Tada:").map { it.second })
+        // The web's regex has no Unicode case folding: a Kelvin sign is not a `k`, and a long s
+        // before the colon is not a name character gluing it shut.
+        assertEquals(0, scan(":s\u212Aull:").size)
+        assertEquals(listOf("💀"), scan("\u017F:skull:").map { it.second })
     }
 
     @Test
