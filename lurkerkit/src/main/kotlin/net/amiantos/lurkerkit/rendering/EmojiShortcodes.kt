@@ -105,20 +105,34 @@ object EmojiShortcodes {
 
     /**
      * Every resolvable `:name:` in [text], in order, as the render pass replaces them. An unknown
-     * name is left out (it stays literal), and so is a match touching any of [protecting] — the
-     * caller's spoilers and links, which the web never splits for emoji either: a glyph inside a
-     * spoiler would be a visible shape in a box of invisible ones, and a URL's path is text, not
-     * a shortcode.
+     * name is left out (it stays literal). [protecting] — the caller's spoilers and links — is cut
+     * out before the scan, and each stretch between is scanned on its own: the web splits URLs out
+     * first and runs its emoji pass over what remains, so a shortcode never forms inside a link
+     * (a URL's path is text) or a spoiler (a glyph there would be a visible shape in a box of
+     * invisible ones), and the opening-colon rule never looks INTO a link — `<https://x.test>:skull:`
+     * is a link and then 💀, not a colon glued to the `t`.
      */
     fun matches(text: String, protecting: List<TextRange> = emptyList()): List<Match> {
         if (text.isEmpty()) return emptyList()
         val out = mutableListOf<Match>()
-        for (found in scan.findAll(text)) {
-            val glyph = glyph(found.groupValues[1]) ?: continue
-            val range = TextRange(found.range.first, found.range.last + 1)
-            if (protecting.any { it.start < range.end && range.start < it.end }) continue
-            out.add(Match(range, glyph))
+        for (gap in gaps(text.length, protecting)) {
+            for (found in scan.findAll(text.substring(gap))) {
+                val glyph = glyph(found.groupValues[1]) ?: continue
+                out.add(Match(TextRange(gap.start + found.range.first, gap.start + found.range.last + 1), glyph))
+            }
         }
+        return out
+    }
+
+    /** The stretches of `[0, length)` that none of [protected] covers, in order. */
+    private fun gaps(length: Int, protected: List<TextRange>): List<TextRange> {
+        val out = mutableListOf<TextRange>()
+        var from = 0
+        for (range in protected.sortedBy { it.start }) {
+            if (range.start > from) out.add(TextRange(from, minOf(range.start, length)))
+            from = maxOf(from, range.end)
+        }
+        if (from < length) out.add(TextRange(from, length))
         return out
     }
 

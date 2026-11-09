@@ -94,6 +94,17 @@ class EmojiShortcodesTests {
     }
 
     @Test
+    fun testAProtectedRangeIsAlsoABoundaryForTheOpeningColon() {
+        // `<https://x.test>:skull:` once the brackets are gone: the colon sits right after the
+        // link's `t`. The web splits the URL out and scans the rest, so it's a link and then 💀.
+        val text = "https://x.test:skull: and https://y.test/:tada:"
+        val found = EmojiShortcodes.matches(text, listOf(TextRange(0, 14), TextRange(26, 47)))
+        assertEquals(listOf(TextRange(14, 21)), found.map { it.range })
+        // Unprotected, the first is a glued colon and only the one after the `/` is found.
+        assertEquals(listOf(TextRange(41, 47)), EmojiShortcodes.matches(text).map { it.range })
+    }
+
+    @Test
     fun testNothingInEmptyText() {
         assertEquals(emptyList(), EmojiShortcodes.matches(""))
     }

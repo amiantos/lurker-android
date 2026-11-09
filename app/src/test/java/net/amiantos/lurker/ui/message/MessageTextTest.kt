@@ -212,6 +212,14 @@ class MessageTextTest {
     }
 
     @Test
+    fun `a shortcode right after a bracketed link converts once the brackets are gone`() {
+        // The web splits the URL out and scans the rest; the link's last letter must not glue the colon.
+        val line = body("<https://x.test>:skull:")
+        assertEquals("https://x.test💀", line.text)
+        assertEquals(listOf("https://x.test" to "https://x.test"), line.urls())
+    }
+
+    @Test
     fun `a shortcode inside a spoiler stays literal, hidden or revealed`() {
         val text = "\u000301,01:tada:\u0003 :tada:"
         assertEquals(":tada: 🎉", body(text).text)
