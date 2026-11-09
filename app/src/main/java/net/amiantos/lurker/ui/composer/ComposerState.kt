@@ -454,6 +454,19 @@ internal class ComposerState(
         }
         val textChanged = now.text != lastSeenText
         lastSeenText = now.text
+        // A `:name:` the user just closed becomes its glyph (lurker#1294) — iOS's
+        // `convertCompletedShortcode`, gated the same way: only a typed change (a restore sets
+        // `lastSeenText` itself and so is never one), never under an IME composition, which still
+        // owns those characters. Gboard commits the word on the colon, so the usual case converts
+        // at once; a keyboard that keeps composing through punctuation converts when it lets go, if
+        // the caret is still there. The swap comes back through here, as the composer's own edit,
+        // with a glyph under the caret that closes nothing — and that pass does the rest.
+        if (textChanged && !now.composing && now.selection.collapsed) {
+            ComposerModel.convertShortcode(now.text, now.selection.start)?.let { edit ->
+                apply(edit)
+                return
+            }
+        }
         // What the channel was told is `ComposerTyping`'s to dedupe against — and to forget when typing
         // ends. A restore is never a text change here: it sets `lastSeenText` itself.
         if (textChanged) draftChanged(now.text)

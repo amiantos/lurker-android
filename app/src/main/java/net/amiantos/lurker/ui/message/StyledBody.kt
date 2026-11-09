@@ -10,6 +10,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import net.amiantos.lurkerkit.model.AttributedBody
+import net.amiantos.lurkerkit.rendering.EmojiShortcodes
 import net.amiantos.lurkerkit.support.TextRange
 
 /**
@@ -117,6 +118,34 @@ internal class StyledBody : AttributedBody {
             if (mark.start >= mark.end) iterator.remove()
         }
     }
+
+    /**
+     * Swap [range] for [replacement] — a `:shortcode:` for its glyph (lurker#1294) — and move every
+     * mark with the text, by the kit's rule (`EmojiShortcodes.moved`): a boundary before the swap
+     * stays, one after it shifts by the difference, one inside it lands at the end of the glyph. So
+     * the run's style takes the glyph in, a style on only part of the name (a nick coloured inside
+     * it) vanishes, and nothing after the swap is mis-styled. Port note: iOS's
+     * `NSMutableAttributedString.replaceCharacters`, whose attributes travel with the text for free.
+     */
+    fun replaceCharacters(range: TextRange, replacement: String) {
+        text.replace(range.start, range.end, replacement)
+        val iterator = marks.iterator()
+        while (iterator.hasNext()) {
+            val mark = iterator.next()
+            mark.start = EmojiShortcodes.moved(mark.start, range, replacement.length)
+            mark.end = EmojiShortcodes.moved(mark.end, range, replacement.length)
+            if (mark.start >= mark.end) iterator.remove()
+        }
+    }
+
+    /**
+     * Where the emoji pass may not write: every spoiler (hidden or revealed, openable or not —
+     * [Kind.Spoiler] marks the openable ones, [Kind.Hidden] the rest and the hidden) and every link,
+     * as the body itself records them. Read off the marks, which have moved with every deletion
+     * before it, rather than off the renderer's own offset lists, which have not.
+     */
+    fun spoilerAndLinkRanges(): List<TextRange> =
+        marks.filter { it.kind is Kind.Spoiler || it.kind is Kind.Hidden || it.kind is Kind.Url }.map { TextRange(it.start, it.end) }
 
     override fun ink(index: Int): Boolean = marks.any { it.kind === Kind.Ink && index >= it.start && index < it.end }
 

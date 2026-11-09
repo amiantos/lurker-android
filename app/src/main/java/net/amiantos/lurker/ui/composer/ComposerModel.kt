@@ -23,6 +23,7 @@ import net.amiantos.lurkerkit.model.NickCompletion
 import net.amiantos.lurkerkit.model.UserMetadataSet
 import net.amiantos.lurkerkit.model.PendingReply
 import net.amiantos.lurkerkit.model.Replies
+import net.amiantos.lurkerkit.rendering.EmojiShortcodes
 import net.amiantos.lurkerkit.model.FriendPresence
 import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.model.SpeakerMap
@@ -425,6 +426,17 @@ internal object ComposerModel {
     fun completeArgument(text: String, caret: Int, value: String): FieldEdit? {
         val context = CommandCompletion.context(text, caret) as? CommandCompletion.Context.Argument ?: return null
         return replace(text, context.range, "$value ")
+    }
+
+    /**
+     * The web's `maybeConvertShortcode` (lurker#1294): the closing `:` of a known `:name:` just
+     * typed at [caret] turns it into its glyph where it stands, caret after the glyph, so our lines
+     * leave the app the way the web's do. Null when the caret doesn't close one — an unknown name
+     * stays as typed.
+     */
+    fun convertShortcode(text: String, caret: Int): FieldEdit? {
+        val match = EmojiShortcodes.completed(text, caret) ?: return null
+        return replace(text, match.range, match.glyph)
     }
 
     /** Swap [range] for [replacement] and drop the caret just past it. */

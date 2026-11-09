@@ -7,8 +7,8 @@ import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.Message
 import net.amiantos.lurkerkit.model.ReactionGroup
 import net.amiantos.lurkerkit.model.Reactions
+import net.amiantos.lurkerkit.rendering.EmojiShortcodes
 import net.amiantos.lurkerkit.store.ChatState
-import net.amiantos.lurkerkit.support.trimmingWhitespacesAndNewlines
 
 /**
  * What the reaction sheet draws for one line, and nothing else — so the sheet's stream dedupes on it
@@ -81,14 +81,16 @@ data class TypedReaction(val value: String, val tooLong: Boolean, val refused: B
 
     companion object {
         /**
-         * Trimmed (the kit's whitespace, never Kotlin's `trim`), then checked against the server's
-         * limit — an emoji, or plain text like "lol", which the spec allows and IRC people use — and,
+         * Trimmed (the kit's whitespace, never Kotlin's `trim`) — and a whole `:name:` the emoji
+         * table knows is its glyph, as the web's React dialog and `/react` read it (lurker#1294) —
+         * then checked against the server's limit — an emoji, or plain text like "lol", which the
+         * spec allows and IRC people use — and,
          * given the sheet's [inputs], against what the network takes: a typed value that matches one
          * of ours is a take-back, which the network may refuse. Said at the field, where the keyboard
          * can't hide it, rather than only in the footnote under the standing list (iOS's `updateField`).
          */
         fun of(text: String, inputs: ReactionSheetInputs? = null): TypedReaction {
-            val value = text.trimmingWhitespacesAndNewlines()
+            val value = EmojiShortcodes.reaction(text)
             val valid = Reactions.isValidValue(value)
             return TypedReaction(
                 value,

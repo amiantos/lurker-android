@@ -33,6 +33,7 @@ import net.amiantos.lurkerkit.model.Redactions
 import net.amiantos.lurkerkit.model.Replies
 import net.amiantos.lurkerkit.model.ReplyQuote
 import net.amiantos.lurkerkit.model.Settings
+import net.amiantos.lurkerkit.rendering.EmojiShortcodes
 import net.amiantos.lurkerkit.rendering.IRCColor
 import net.amiantos.lurkerkit.rendering.IRCFormatting
 import net.amiantos.lurkerkit.rendering.NickColor
@@ -1129,6 +1130,16 @@ object MessageText {
         // decision lives: it takes the `<…>` off a bracketed link on every message, and the
         // address a preview stands in for.
         PreviewText.stripHiddenUrls(body, hidden = hiddenUrls, spoilered = spoilered)
+        // `:shortcode:` → glyph (lurker#1294), after everything above because it CHANGES CHARACTERS
+        // — `:skull:` is seven units and 💀 is two — and the offset lists beside the body would not
+        // follow. Nothing here reads them any more: the spoilers and links the pass must stay out
+        // of are read back off the body's own marks, which do move with the text. The web runs its
+        // emoji pass after URL and channel splitting and skips spoiler runs entirely; this is the
+        // same rule in a different order, and a glyph inside a link's path or a spoiler's box would
+        // be the same defect. Back to front, so each earlier range still means what was measured.
+        for (match in EmojiShortcodes.matches(body.string, protecting = body.spoilerAndLinkRanges()).asReversed()) {
+            body.replaceCharacters(match.range, match.glyph)
+        }
         return body
     }
 

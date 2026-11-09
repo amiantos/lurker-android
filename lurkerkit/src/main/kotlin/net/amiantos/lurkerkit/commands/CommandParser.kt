@@ -14,6 +14,7 @@ import net.amiantos.lurkerkit.model.RelayBot
 import net.amiantos.lurkerkit.model.RelayBotSet
 import net.amiantos.lurkerkit.model.RelayEnvelope
 import net.amiantos.lurkerkit.model.ScopedIgnoreRule
+import net.amiantos.lurkerkit.rendering.EmojiShortcodes
 import net.amiantos.lurkerkit.support.Result
 import net.amiantos.lurkerkit.support.isSwiftWhitespace
 import net.amiantos.lurkerkit.support.splitOnSwiftWhitespace
@@ -275,18 +276,10 @@ object CommandParser {
                     listOf(CommandEffect.Action(target = target, text = chatBody(argLine)))
                 }
             "react" -> {
-                val value = argLine.trimmingWhitespaces()
+                // A whole `:tada:` (or `:tada`) becomes 🎉 from the emoji table, as on the web; an
+                // unknown name, `:D`, or the emoji itself goes out as typed (lurker#1294).
+                val value = EmojiShortcodes.reaction(argLine)
                 if (value.isEmpty()) return listOf(CommandEffect.Info("usage: /react <emoji|text> — e.g. /react 👍"))
-                // The web turns `:tada:` (or `:tada`) into 🎉 from its emoji table. This client has no
-                // table, and sending the name would react with the literal text, so it refuses
-                // instead. `:D` and `:P` are reactions people type on purpose, and still go out.
-                if (isShortcode(value)) {
-                    return listOf(
-                        CommandEffect.Info(
-                            "/react: emoji names like $value aren't supported here — use the emoji itself, e.g. /react 👍"
-                        )
-                    )
-                }
                 if (!Reactions.isValidValue(value)) {
                     return listOf(
                         CommandEffect.Info("a reaction can be at most ${Reactions.maxGraphemes} characters")
@@ -1075,21 +1068,6 @@ object CommandParser {
     private fun leadsWithChannel(token: String, hasBuffer: (String) -> Boolean): Boolean {
         if (!ChannelName.isChannelTarget(token)) return false
         return token.startsWith("#") || hasBuffer(token)
-    }
-
-    /**
-     * A whole `:name:` in the gemoji character set — what the web's `reactionFromInput` would
-     * look up, closing colon optional. Left open, an emoticon isn't a name: `:D` and `:P` are
-     * too short to be one, and a nose and a letter (`:-D`, `:-p`) is a face. `:-1` and `:+1`
-     * stay names — the web turns them into 👎 and 👍.
-     */
-    private fun isShortcode(text: String): Boolean {
-        if (!text.startsWith(":")) return false
-        val closed = text.length > 1 && text.endsWith(":")
-        val name = text.substring(1, if (closed) text.length - 1 else text.length)
-        if (!closed && name.length == 2 && name[0] == '-' && (name[1] in 'a'..'z' || name[1] in 'A'..'Z')) return false
-        return name.length >= (if (closed) 1 else 2) &&
-            name.all { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' || it in "_+-" }
     }
 
     /** Whether the network is known to have no +q quiet list — an unknown spec isn't. */

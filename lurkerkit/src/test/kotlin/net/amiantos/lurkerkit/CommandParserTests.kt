@@ -1291,19 +1291,22 @@ class CommandParserTests {
     }
 
     @Test
-    fun testReactRefusesAnEmojiNameItCannotResolve() {
-        assertTrue(isInfo(effects("/react :tada:")))
-        assertTrue(isInfo(effects("/react :+1:")))
+    fun testReactResolvesAnEmojiNameLikeTheWeb() {
+        // lurker#1294: the table is here now, so a name reacts with its glyph.
+        assertEquals(listOf<CommandEffect>(CommandEffect.React(value = "🎉")), effects("/react :tada:"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.React(value = "👍")), effects("/react :+1:"))
         // The web resolves the unclosed form too.
-        assertTrue(isInfo(effects("/react :tada")))
+        assertEquals(listOf<CommandEffect>(CommandEffect.React(value = "🎉")), effects("/react :tada"))
+        // An unknown name goes out as typed, as on the web — not refused.
+        assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":nope:")), effects("/react :nope:"))
         // Emoticons and the emoji itself still go out.
         assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":D")), effects("/react :D"))
         assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":P")), effects("/react :P"))
         assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":-D")), effects("/react :-D"))
         assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":-p")), effects("/react :-p"))
         // `:-1` and `:+1` are names on the web (👎, 👍), not faces.
-        assertTrue(isInfo(effects("/react :-1")))
-        assertTrue(isInfo(effects("/react :+1")))
+        assertEquals(listOf<CommandEffect>(CommandEffect.React(value = "👎")), effects("/react :-1"))
+        assertEquals(listOf<CommandEffect>(CommandEffect.React(value = "👍")), effects("/react :+1"))
         assertEquals(listOf<CommandEffect>(CommandEffect.React(value = ":-)")), effects("/react :-)"))
         assertEquals(listOf<CommandEffect>(CommandEffect.React(value = "🎉")), effects("/react 🎉"))
     }
