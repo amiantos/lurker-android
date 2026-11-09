@@ -197,6 +197,8 @@ internal class ComposerState(
 
     /** Where the caret was at the last [fieldChanged] — a move without an edit drops the [pen]. */
     private var lastSelection: TextRange = field.selection
+    /** Whether the last snapshot had an IME composition open — see the shortcode swap in [fieldChanged]. */
+    private var lastComposing = false
 
     /** Set while the colour editor covers the composer: nothing may take the keyboard back to the bar. */
     var editorOpen: Boolean by editorOpenState
@@ -458,10 +460,13 @@ internal class ComposerState(
         // `convertCompletedShortcode`, gated the same way: only a typed change (a restore sets
         // `lastSeenText` itself and so is never one), never under an IME composition, which still
         // owns those characters. Gboard commits the word on the colon, so the usual case converts
-        // at once; a keyboard that keeps composing through punctuation converts when it lets go, if
-        // the caret is still there. The swap comes back through here, as the composer's own edit,
-        // with a glyph under the caret that closes nothing — and that pass does the rest.
-        if (textChanged && !now.composing && now.selection.collapsed) {
+        // at once; a keyboard that keeps punctuation in the composing region converts the moment
+        // it lets go — the snapshot where `composing` drops with the text unchanged — if the caret
+        // is still right after the name. The swap comes back through here, as the composer's own
+        // edit, with a glyph under the caret that closes nothing — and that pass does the rest.
+        val composingEnded = lastComposing && !now.composing
+        lastComposing = now.composing
+        if ((textChanged || composingEnded) && !now.composing && now.selection.collapsed) {
             ComposerModel.convertShortcode(now.text, now.selection.start)?.let { edit ->
                 apply(edit)
                 return

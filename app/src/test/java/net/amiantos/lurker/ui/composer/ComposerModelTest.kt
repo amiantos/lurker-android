@@ -149,6 +149,17 @@ class ComposerModelTest {
     }
 
     @Test
+    fun `closing a known shortcode swaps it for the glyph with the caret after it`() {
+        // lurker#1294 — the web's `maybeConvertShortcode`.
+        assertEquals(FieldEdit("hi 🎉", 5), ComposerModel.convertShortcode("hi :tada:", 9))
+        assertEquals(FieldEdit("🎉 and on", 2), ComposerModel.convertShortcode(":tada: and on", 6))
+        // An unknown name, an unclosed one, or a caret elsewhere: nothing happens.
+        assertNull(ComposerModel.convertShortcode("hi :nope:", 9))
+        assertNull(ComposerModel.convertShortcode("hi :tada", 8))
+        assertNull(ComposerModel.convertShortcode("hi :tada: ", 10))
+    }
+
+    @Test
     fun `the nick suffix is punctuation only — the space is always ours`() {
         assertEquals(FieldEdit("alice ", 6), ComposerModel.completeMention("@al", 3, "alice", ""))
         // `@al|ice` swallows the tail rather than welding the pick onto it.

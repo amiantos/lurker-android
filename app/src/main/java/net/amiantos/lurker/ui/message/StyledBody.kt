@@ -10,7 +10,6 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import net.amiantos.lurkerkit.model.AttributedBody
-import net.amiantos.lurkerkit.rendering.EmojiShortcodes
 import net.amiantos.lurkerkit.support.TextRange
 
 /**
@@ -99,41 +98,26 @@ internal class StyledBody : AttributedBody {
     }
 
     override fun deleteCharacters(range: TextRange) {
-        val removed = range.length
-        if (removed == 0) return
-        text.delete(range.start, range.end)
-        // A boundary before the cut stays, one after it moves back by the cut, and one inside it
-        // lands where the cut began — so a span that was wholly inside vanishes, and one that
-        // straddled an edge keeps whatever of it survived.
-        fun moved(position: Int): Int = when {
-            position <= range.start -> position
-            position >= range.end -> position - removed
-            else -> range.start
-        }
-        val iterator = marks.iterator()
-        while (iterator.hasNext()) {
-            val mark = iterator.next()
-            mark.start = moved(mark.start)
-            mark.end = moved(mark.end)
-            if (mark.start >= mark.end) iterator.remove()
-        }
+        if (range.isEmpty) return
+        replaceCharacters(range, "")
     }
 
     /**
-     * Swap [range] for [replacement] — a `:shortcode:` for its glyph (lurker#1294) — and move every
-     * mark with the text, by the kit's rule (`EmojiShortcodes.moved`): a boundary before the swap
-     * stays, one after it shifts by the difference, one inside it lands at the end of the glyph. So
-     * the run's style takes the glyph in, a style on only part of the name (a nick coloured inside
-     * it) vanishes, and nothing after the swap is mis-styled. Port note: iOS's
-     * `NSMutableAttributedString.replaceCharacters`, whose attributes travel with the text for free.
+     * Swap [range] for [replacement] — a deletion, or a `:shortcode:` for its glyph (lurker#1294) —
+     * and move every mark with the text, by the kit's one rule (`TextRange.moved`): a boundary
+     * before the swap stays, one after it shifts by the difference, one inside it lands at the end
+     * of the replacement. So the run's style takes a glyph in, a style on only part of the name (a
+     * nick coloured inside it) vanishes, a span wholly inside a cut vanishes with it, and nothing
+     * after the swap is mis-styled. Port note: iOS's `NSMutableAttributedString.replaceCharacters`,
+     * whose attributes travel with the text for free.
      */
     fun replaceCharacters(range: TextRange, replacement: String) {
         text.replace(range.start, range.end, replacement)
         val iterator = marks.iterator()
         while (iterator.hasNext()) {
             val mark = iterator.next()
-            mark.start = EmojiShortcodes.moved(mark.start, range, replacement.length)
-            mark.end = EmojiShortcodes.moved(mark.end, range, replacement.length)
+            mark.start = range.moved(mark.start, replacement.length)
+            mark.end = range.moved(mark.end, replacement.length)
             if (mark.start >= mark.end) iterator.remove()
         }
     }

@@ -59,9 +59,11 @@ object EmojiShortcodes {
 
     /**
      * A completed `:name:` ending exactly at the end of the string — the web's `CLOSE_RE`, run on
-     * the text up to the caret.
+     * the text up to the caret. ⚠ `\z`, not the web's `$`: in java.util.regex (and ICU) `$` also
+     * matches before a final line terminator, so `:tada:\n` with the caret after the newline would
+     * read as "just closed" and the swap would land on the line above.
      */
-    private val closing = unicodeRegex("(?<!$NAME_CHARS):($NAME_CHARS+):$", ignoreCase = true)
+    private val closing = unicodeRegex("(?<!$NAME_CHARS):($NAME_CHARS+):\\z", ignoreCase = true)
 
     /**
      * A whole typed reaction that is one shortcode, closing colon optional — the web's
@@ -144,25 +146,9 @@ object EmojiShortcodes {
 
     /**
      * [text] with [match] swapped for its glyph — the composer's edit, and a test's. The render
-     * pass goes through its own body type instead, whose marks have to move with the text.
+     * pass goes through its own body type instead, whose marks have to move with the text
+     * (`TextRange.moved`).
      */
     fun replaced(text: String, match: Match): String =
         text.substring(0, match.range.start) + match.glyph + text.substring(match.range.end)
-
-    /**
-     * Where a span boundary lands once [range] has been swapped for something [replacementLength]
-     * units long — the rule a body's marks follow when a `:name:` becomes its glyph, pinned here
-     * where it can be tested on the host.
-     *
-     * A boundary before the swap stays; one after it moves by the difference; one INSIDE it goes
-     * to the end of the glyph — so a span that began before the shortcode and ended inside it
-     * takes the glyph in (a bold `:tada:` is a bold 🎉, iOS's "the glyph takes the attributes of
-     * the first character"), a span that began inside and ran on starts after the glyph, and a
-     * span wholly inside (a nick coloured inside the name) collapses to nothing.
-     */
-    fun moved(position: Int, range: TextRange, replacementLength: Int): Int = when {
-        position <= range.start -> position
-        position >= range.end -> position - range.length + replacementLength
-        else -> range.start + replacementLength
-    }
 }

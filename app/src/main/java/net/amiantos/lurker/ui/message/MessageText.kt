@@ -1134,11 +1134,17 @@ object MessageText {
         // — `:skull:` is seven units and 💀 is two — and the offset lists beside the body would not
         // follow. Nothing here reads them any more: the spoilers and links the pass must stay out
         // of are read back off the body's own marks, which do move with the text. The web runs its
-        // emoji pass after URL and channel splitting and skips spoiler runs entirely; this is the
-        // same rule in a different order, and a glyph inside a link's path or a spoiler's box would
-        // be the same defect. Back to front, so each earlier range still means what was measured.
-        for (match in EmojiShortcodes.matches(body.string, protecting = body.spoilerAndLinkRanges()).asReversed()) {
-            body.replaceCharacters(match.range, match.glyph)
+        // emoji pass after URL and channel splitting and skips spoiler runs entirely; a glyph inside
+        // a link's path or a spoiler's box would be the same defect here. One difference, accepted:
+        // the web scans each formatting run on its own, so a name split by a control code
+        // (`:ta\u0002da:`) stays literal there and converts here, in the first run's style. Back to
+        // front, so each earlier range still means what was measured. Most lines have no colon at
+        // all, and those skip the scan and the mark walk.
+        val assembled = body.string
+        if (assembled.contains(':')) {
+            for (match in EmojiShortcodes.matches(assembled, protecting = body.spoilerAndLinkRanges()).asReversed()) {
+                body.replaceCharacters(match.range, match.glyph)
+            }
         }
         return body
     }

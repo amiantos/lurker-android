@@ -94,30 +94,13 @@ class EmojiShortcodesTests {
         assertEquals(emptyList(), EmojiShortcodes.matches(""))
     }
 
-    // MARK: - Replacing (the composer's edit, and the arithmetic the renderer's marks follow)
+    // MARK: - Replacing (the composer's edit; the renderer's marks follow `TextRange.moved`)
 
     @Test
     fun testReplacedSwapsTheMatchForItsGlyph() {
         val text = "hi :tada: all"
         val match = EmojiShortcodes.matches(text).single()
         assertEquals("hi 🎉 all", EmojiShortcodes.replaced(text, match))
-    }
-
-    @Test
-    fun testMovedKeepsBoundariesStraightAroundASwap() {
-        // `x :tada: y` → `x 🎉 y`: the shortcode is [2, 8), the glyph two units long.
-        val range = TextRange(2, 8)
-        val glyph = 2
-        // Before the swap: unmoved. After it: back by the difference (6 - 2 = 4).
-        assertEquals(0, EmojiShortcodes.moved(0, range, glyph))
-        assertEquals(2, EmojiShortcodes.moved(2, range, glyph))
-        assertEquals(4, EmojiShortcodes.moved(8, range, glyph))
-        assertEquals(6, EmojiShortcodes.moved(10, range, glyph))
-        // Inside it: the end of the glyph — so a span that began before and ended inside takes the
-        // glyph in (a bold `:tada:` is a bold 🎉), one that began inside and ran on starts after it,
-        // and one wholly inside (a nick coloured in the name) collapses to nothing.
-        assertEquals(4, EmojiShortcodes.moved(3, range, glyph))
-        assertEquals(4, EmojiShortcodes.moved(7, range, glyph))
     }
 
     // MARK: - The composer (`findCompletedShortcode`)
@@ -151,6 +134,15 @@ class EmojiShortcodesTests {
     }
 
     @Test
+    fun testCompletedIsNullWhenANewlineFollowsTheShortcode() {
+        // java.util.regex's `$` matches before a final line terminator; the pattern uses `\z` so a
+        // newline typed after a literal `:tada:` (a restored line, a synced draft) doesn't swap the
+        // line above.
+        assertNull(EmojiShortcodes.completed(":tada:\n", 7))
+        assertNull(EmojiShortcodes.completed("hi :tada:\n", 10))
+    }
+
+    @Test
     fun testCompletedOnlyLooksBeforeTheCaret() {
         // Text after the caret is someone else's problem — the conversion is for what was just typed.
         val text = ":tada: :skull:"
@@ -166,6 +158,14 @@ class EmojiShortcodesTests {
         assertEquals("🎉", EmojiShortcodes.reaction(":tada"))
         assertEquals("👍", EmojiShortcodes.reaction(" :+1: "))
         assertEquals("👎", EmojiShortcodes.reaction(":-1"))
+    }
+
+    @Test
+    fun testReactionResolvesOneLetterNamesLikeTheWeb() {
+        // gemoji has one-letter names, so `:x` and `:o` are ❌ and ⭕ here as in the web's
+        // `reactionFromInput` — parity, pinned so a change to it is a decision for all three clients.
+        assertEquals("❌", EmojiShortcodes.reaction(":x"))
+        assertEquals("⭕", EmojiShortcodes.reaction(":o"))
     }
 
     @Test
