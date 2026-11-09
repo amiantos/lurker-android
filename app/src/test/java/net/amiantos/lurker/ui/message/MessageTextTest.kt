@@ -226,6 +226,42 @@ class MessageTextTest {
         assertEquals(":tada: 🎉", body(text, revealed = setOf(0)).text)
     }
 
+    // MARK: - Prose (a topic shown outside the log, lurker#1297)
+
+    @Test
+    fun `a topic renders as a body does - glyphs, links, formatting - in the colour it is given`() {
+        val line = MessageText.prose("\u0002Lurker\u0002 :tada: https://lurker.chat", style, Color.Red)
+        assertEquals("Lurker 🎉 https://lurker.chat", line.text)
+        assertEquals(FontWeight.Bold, line.styleAt(0).fontWeight)
+        assertEquals(Color.Red, line.styleAt(0).color)
+        assertEquals(Color.Red, line.styleAt(line.indexOf("🎉")).color)
+        assertEquals(listOf("https://lurker.chat" to "https://lurker.chat"), line.urls())
+        assertTrue(line.paragraphStyles.isEmpty())
+    }
+
+    @Test
+    fun `an unknown shortcode and a clock in a topic stay literal`() {
+        assertEquals("meeting :nope: at 12:00", MessageText.prose("meeting :nope: at 12:00", style, Color.Red).text)
+    }
+
+    @Test
+    fun `a spoiler in a topic is hidden until opened, as on the web, and kept out of the spoken form`() {
+        val text = "plan: \u000301,01secret\u0003 :tada:"
+        var toggled: Int? = null
+        val hidden = MessageText.prose(text, style, Color.Red) { toggled = it }
+        assertEquals("plan: secret 🎉", hidden.text)
+        assertEquals(listOf(0), MessageText.hiddenSpoilerOrdinals(hidden))
+        assertEquals("plan: hidden spoiler, double tap to reveal 🎉", MessageText.spoken(hidden))
+        val tap = hidden.getLinkAnnotations(0, hidden.length).single().item as LinkAnnotation.Clickable
+        tap.linkInteractionListener!!.onClick(tap)
+        assertEquals(0, toggled)
+        // Opened: the text in the colour the row was given, nothing left to announce or reveal.
+        val shown = MessageText.prose(text, style, Color.Red, revealed = setOf(0))
+        assertEquals(emptyList<Int>(), MessageText.hiddenSpoilerOrdinals(shown))
+        assertEquals("plan: secret 🎉", MessageText.spoken(shown))
+        assertEquals(Color.Red, shown.styleAt(shown.indexOf("secret")).color)
+    }
+
     @Test
     fun `a nick coloured inside a shortcode's name goes with the name`() {
         // `bone` is a nick here and `:bone:` a shortcode; the glyph wins and the colour is dropped.
@@ -359,6 +395,21 @@ class MessageTextTest {
         assertEquals("https://a.example", spoken.text.substring(link.start, link.end))
         // Only the link: the spoiler's own tap target stays behind.
         assertTrue(spoken.getLinkAnnotations(0, spoken.length).all { it.item is LinkAnnotation.Url })
+    }
+
+    @Test
+    fun `a spoken link opens through the opener it is given, never on its own`() {
+        // Without a listener Compose hands TalkBack a framework URLSpan, which opens the address
+        // itself, past the app's one door.
+        val line = body("see https://a.example")
+        var opened: String? = null
+        val spoken = MessageText.spokenAnnotated(line) { opened = it }
+        val link = spoken.getLinkAnnotations(0, spoken.length).single().item as LinkAnnotation.Url
+        assertNotNull(link.linkInteractionListener)
+        link.linkInteractionListener!!.onClick(link)
+        assertEquals("https://a.example", opened)
+        val bare = MessageText.spokenAnnotated(line).getLinkAnnotations(0, line.length).single().item as LinkAnnotation.Url
+        assertNull(bare.linkInteractionListener)
     }
 
     // MARK: - Line shapes

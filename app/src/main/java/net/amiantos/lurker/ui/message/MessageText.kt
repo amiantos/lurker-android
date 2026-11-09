@@ -631,8 +631,12 @@ object MessageText {
      * TalkBack as its text, so a link in a message stays actionable from TalkBack's links menu while
      * the hidden text never reaches it. Only links: a spoiler's own tap target, and every style, are
      * left behind.
+     *
+     * [open] is where the menu's tap goes. ⚠ A `Url` with no listener reaches TalkBack as a framework
+     * `URLSpan`, which opens the address itself — past `SafeUriHandler`, the door a finger's tap goes
+     * through — so a caller that draws links gives the opener it draws them with.
      */
-    fun spokenAnnotated(rendered: AnnotatedString): AnnotatedString {
+    fun spokenAnnotated(rendered: AnnotatedString, open: ((String) -> Unit)? = null): AnnotatedString {
         val plain = rendered.text
         val urls = rendered.getLinkAnnotations(0, rendered.length).filter { it.item is LinkAnnotation.Url }
         // Adjacent hidden runs that say the same thing are one announcement — a bold or italic
@@ -663,7 +667,9 @@ object MessageText {
                 append(plain, from, to)
                 for (url in urls) {
                     if (url.start >= from && url.end <= to) {
-                        addLink(url.item as LinkAnnotation.Url, url.start + offset, url.end + offset)
+                        val link = url.item as LinkAnnotation.Url
+                        val exported = if (open == null) link else LinkAnnotation.Url(link.url, link.styles) { open(link.url) }
+                        addLink(exported, url.start + offset, url.end + offset)
                     }
                 }
             }
@@ -1009,6 +1015,45 @@ object MessageText {
         highlighter: NickHighlighter? = null,
         revealed: Set<Int> = emptySet(),
         hiddenUrls: Set<String> = emptySet(),
+    ): StyledBody =
+        // ⚠ `id` is 0 for every ephemeral event, so a reveal keyed by it would be shared by all of
+        // them in a buffer and the redraw would flip a different line than the one tapped. An
+        // id-less line therefore gets no tap target: still hidden, still kept out of the spoken
+        // label, just not openable. Rare (notices, MOTD), and the alternative is a control that
+        // acts on the wrong message.
+        body(raw = message.text ?: "", revealable = message.id != 0L, style, fallback, highlighter, revealed, hiddenUrls)
+
+    /**
+     * Text shown as prose outside the log — a channel's topic in buffer info and channel settings
+     * (lurker#1297) — through the same pass a message body gets: mIRC colours, links, spoilers and
+     * `:shortcode:` glyphs, in [color]. The web renders a topic with `LinkedText`, its name for
+     * exactly this, and a spoiler in one is a button there, so it opens here too: [revealed] is the
+     * owning composable's own set, since only the one text stands behind it — the id-keyed hazard of
+     * the [Message] overload doesn't arise. No paragraph indent: this is a form row, not a line
+     * hanging by its nick.
+     */
+    fun prose(
+        text: String,
+        style: MessageTextStyle,
+        color: Color,
+        revealed: Set<Int> = emptySet(),
+        onToggleSpoiler: ((Int) -> Unit)? = null,
+    ): AnnotatedString =
+        body(text, revealable = true, style, fallback = color, revealed = revealed)
+            .toAnnotatedString(null, linkStyles(style), onToggleSpoiler)
+
+    /**
+     * The body pass proper, over the wire text [raw]. [revealable] is whether a spoiler in it may be
+     * opened — see the [Message] overload for why an id-less line's may not.
+     */
+    private fun body(
+        raw: String,
+        revealable: Boolean,
+        style: MessageTextStyle,
+        fallback: Color,
+        highlighter: NickHighlighter? = null,
+        revealed: Set<Int> = emptySet(),
+        hiddenUrls: Set<String> = emptySet(),
     ): StyledBody {
         val body = StyledBody()
         // The spans the sender coloured themselves — an explicit colour wins over nick colouring, so
@@ -1022,7 +1067,7 @@ object MessageText {
         var previousSpoilerColor: IRCColor? = null
         // Reversed runs the nick pass may still colour, with the ink their text is drawn in.
         val reversed = mutableListOf<Pair<TextRange, Color>>()
-        for (run in IRCFormatting.parse(message.text ?: "")) {
+        for (run in IRCFormatting.parse(raw)) {
             val explicitFg = run.fg?.let { ircColor(it, style) }
             val explicitBg = run.bg?.let { ircColor(it, style) }
             // `explicitFg != null` as well, so the reveal below can't trip on a slot the palette
@@ -1050,10 +1095,6 @@ object MessageText {
             // `\x0399,99text\x03` would otherwise announce "hidden spoiler" over text drawn in the
             // clear, with a tap that reveals nothing.
             if (isSpoiler) {
-                // ⚠ `id` is 0 for every ephemeral event, so a reveal keyed by it would be shared by
-                // all of them in a buffer. An id-less line gets no tap target: still hidden, still
-                // kept out of the spoken label, just not openable.
-                val revealable = message.id != 0L
                 // ⚠ Ordinals count spoiler BOXES, not formatting runs. A bold inside a spoiler splits
                 // it into several runs, and numbering those would make one box take three taps to
                 // open. Consecutive spoiler runs sharing a colour are one box and one ordinal.

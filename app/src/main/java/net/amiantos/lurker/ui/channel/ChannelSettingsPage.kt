@@ -17,6 +17,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -34,6 +35,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import net.amiantos.lurker.ui.message.ProseReveals
+import net.amiantos.lurker.ui.message.ProseText
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormInset
 import net.amiantos.lurker.ui.networks.FormSectionHeader
@@ -83,6 +86,9 @@ class ChannelSettingsState(
 
     /** Whether the key field shows its value. */
     var keyRevealed by mutableStateOf(false)
+
+    /** The topic's opened spoilers, the page's so a row's disposal keeps them (lurker#1297). */
+    val topicReveals = ProseReveals()
 
     private var slice = ChannelSlice.of(model.state, key)
     private var drafts = ChannelModeDrafts()
@@ -259,6 +265,7 @@ internal fun ChannelSettingsPage(state: ChannelSettingsState, onBack: () -> Unit
         onToggle = state::setOn,
         onValue = state::setValue,
         onToggleReveal = { state.keyRevealed = !state.keyRevealed },
+        reveals = state.topicReveals,
     )
 }
 
@@ -272,6 +279,7 @@ private fun ChannelSettingsContent(
     onToggle: (String, Boolean) -> Unit,
     onValue: (String, String) -> Unit,
     onToggleReveal: () -> Unit,
+    reveals: ProseReveals,
 ) {
     DialogPage(
         title = ChannelSettingsModel.TITLE,
@@ -293,7 +301,7 @@ private fun ChannelSettingsContent(
                     // around it come and go — a value row appearing under a switch, an error under Save.
                     for (row in section.items) {
                         item(key = row.id) {
-                            SettingsItemView(row, keyRevealed, onTopic, onToggle, onValue, onToggleReveal)
+                            SettingsItemView(row, keyRevealed, onTopic, onToggle, onValue, onToggleReveal, reveals)
                         }
                     }
                     section.footer?.let { footer ->
@@ -321,6 +329,7 @@ private fun SettingsItemView(
     onToggle: (String, Boolean) -> Unit,
     onValue: (String, String) -> Unit,
     onToggleReveal: () -> Unit,
+    reveals: ProseReveals,
 ) {
     when (item) {
         // Prose: the keyboard's help on. Several lines, because topics run long; a pasted newline goes
@@ -333,11 +342,15 @@ private fun SettingsItemView(
             singleLine = false,
             minLines = 2,
         )
-        is SettingsItem.TopicText -> Text(
+        // The topic, drawn as the log draws a body (lurker#1297). Where there is none, the model
+        // sends a `Notice` instead.
+        is SettingsItem.TopicText -> ProseText(
             item.text,
+            color = MaterialTheme.colorScheme.onSurface,
+            revealed = reveals.ordinalsFor(item.text),
+            onToggleSpoiler = { reveals.toggle(item.text, it) },
             modifier = Modifier.fillMaxWidth().padding(horizontal = FormInset, vertical = 12.dp),
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (item.muted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+            textStyle = MaterialTheme.typography.bodyLarge,
         )
         is SettingsItem.Notice -> Text(
             item.text,
@@ -432,7 +445,7 @@ private fun previewScreen(op: Boolean): ChannelSettingsScreen {
 @Composable
 private fun SettingsPreview(dark: Boolean, op: Boolean) {
     LurkerTheme(darkTheme = dark) {
-        ChannelSettingsContent(previewScreen(op), keyRevealed = false, onBack = {}, onSave = {}, onTopic = {}, onToggle = { _, _ -> }, onValue = { _, _ -> }, onToggleReveal = {})
+        ChannelSettingsContent(previewScreen(op), keyRevealed = false, onBack = {}, onSave = {}, onTopic = {}, onToggle = { _, _ -> }, onValue = { _, _ -> }, onToggleReveal = {}, reveals = remember { ProseReveals() })
     }
 }
 

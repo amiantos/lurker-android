@@ -6,6 +6,7 @@ package net.amiantos.lurker.ui.channel
 import net.amiantos.lurkerkit.model.BufferKey
 import net.amiantos.lurkerkit.model.ChannelAccess
 import net.amiantos.lurkerkit.model.ChannelModeDrafts
+import net.amiantos.lurkerkit.rendering.IRCFormatting
 import net.amiantos.lurkerkit.model.ChannelModeForm
 import net.amiantos.lurkerkit.model.ChannelModeState
 import net.amiantos.lurkerkit.model.ConnectionState
@@ -57,8 +58,8 @@ sealed interface SettingsItem {
         override val id: String get() = "topicField"
     }
 
-    /** The topic, read-only — or a sentence where there is none to show. */
-    data class TopicText(val text: String, val muted: Boolean) : SettingsItem {
+    /** The topic, read-only. Where there is none to show, a [Notice] stands in. */
+    data class TopicText(val text: String) : SettingsItem {
         override val id: String get() = "topicText"
     }
 
@@ -173,14 +174,17 @@ object ChannelSettingsModel {
         val out = mutableListOf<SettingsSection>()
 
         // Topic. Out of the channel we don't know it has no topic — or that it exists at all; only
-        // what we last saw.
+        // what we last saw. Judged on what would be drawn (`IRCFormatting.drawsNothing`): a topic of
+        // nothing but formatting codes renders as nothing, and a blank row under "Topic" says less
+        // than the placeholder.
+        val hasTopic = !IRCFormatting.drawsNothing(topic)
         val topicItem: SettingsItem = when {
             access.canSetTopic -> SettingsItem.TopicField(drafts.topic ?: topic)
-            topic.isNotEmpty() -> SettingsItem.TopicText(topic, muted = false)
-            else -> SettingsItem.TopicText(if (access.joined) "No topic set." else "Join the channel to see its topic.", muted = true)
+            hasTopic -> SettingsItem.TopicText(topic)
+            else -> SettingsItem.Notice("topic", if (access.joined) "No topic set." else "Join the channel to see its topic.")
         }
         val notes = mutableListOf<String>()
-        if (topic.isNotEmpty()) slice.modes?.topicSetterLine(dateTime)?.let(notes::add)
+        if (hasTopic) slice.modes?.topicSetterLine(dateTime)?.let(notes::add)
         val limit = access.spec?.topicLen
         if (access.canSetTopic && limit != null) {
             val bytes = ChannelModeForm.topicBytes(ChannelModeForm.topicToSend(drafts.topic ?: topic))

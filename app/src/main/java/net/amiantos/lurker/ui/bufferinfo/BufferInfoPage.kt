@@ -51,6 +51,8 @@ import net.amiantos.lurker.ui.networks.FormInset
 import net.amiantos.lurker.ui.networks.FormRefusalFooter
 import net.amiantos.lurker.ui.networks.FormSectionFooter
 import net.amiantos.lurker.ui.networks.FormSectionHeader
+import net.amiantos.lurker.ui.message.ProseReveals
+import net.amiantos.lurker.ui.message.ProseText
 import net.amiantos.lurker.ui.networks.PageExit
 import net.amiantos.lurker.ui.shell.StateView
 import net.amiantos.lurker.ui.shell.StatusDot
@@ -76,6 +78,9 @@ import java.time.Instant
 class BufferInfoState(private val model: ChatViewModel, val buffer: Buffer, private val scope: CoroutineScope) {
     private val inputsFlow = MutableStateFlow(BufferInfoInputs.of(model.state, buffer))
     val inputs = inputsFlow.asStateFlow()
+
+    /** The topic's opened spoilers, the page's so a row's disposal keeps them (lurker#1297). */
+    val topicReveals = ProseReveals()
 
     /**
      * The latest refusal, pinned under its section. A footer rather than an alert, for the reason the
@@ -202,6 +207,7 @@ internal fun BufferInfoPage(state: BufferInfoState, exit: PageExit, onExit: () -
         exit = exit,
         onExit = onExit,
         actions = actions,
+        reveals = state.topicReveals,
     )
 }
 
@@ -212,6 +218,7 @@ private fun BufferInfoContent(
     exit: PageExit,
     onExit: () -> Unit,
     actions: BufferInfoActions,
+    reveals: ProseReveals,
 ) {
     DialogPage(title = title, exit = exit, onExit = onExit) { padding ->
         if (sections.isEmpty()) {
@@ -223,7 +230,7 @@ private fun BufferInfoContent(
                 item(key = "section$index") {
                     Column {
                         section.header?.let { FormSectionHeader(it) }
-                        section.rows.forEach { row -> InfoRowView(row, actions) }
+                        section.rows.forEach { row -> InfoRowView(row, actions, reveals) }
                         if (section.holdsRefusals) {
                             FormRefusalFooter(section.footer, announces = section.announcesFooter)
                         } else {
@@ -237,13 +244,28 @@ private fun BufferInfoContent(
 }
 
 @Composable
-private fun InfoRowView(row: InfoRow, actions: BufferInfoActions) {
+private fun InfoRowView(row: InfoRow, actions: BufferInfoActions, reveals: ProseReveals) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val clear = ListItemDefaults.colors(containerColor = Color.Transparent)
     when (row) {
         // Prose of arbitrary length, not a label — it wraps, because a truncated topic is the half you
-        // don't need.
-        is InfoRow.Topic -> ListItem(colors = clear, headlineContent = { Text(row.text, color = if (row.muted) muted else Color.Unspecified) })
+        // don't need — drawn as the log draws a body (lurker#1297): links, colours, `:shortcode:`
+        // glyphs. The muted placeholder is the page's own words and stays plain.
+        is InfoRow.Topic -> ListItem(
+            colors = clear,
+            headlineContent = {
+                if (row.muted) {
+                    Text(row.text, color = muted)
+                } else {
+                    ProseText(
+                        row.text,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        revealed = reveals.ordinalsFor(row.text),
+                        onToggleSpoiler = { reveals.toggle(row.text, it) },
+                    )
+                }
+            },
+        )
         is InfoRow.ChannelSettings -> NavRow(LurkerIcons.Tune, "Channel Settings", row.modes, actions.onChannelSettings)
         is InfoRow.ModeList -> NavRow(LurkerIcons.ListBullet, row.name, null) { actions.onModeList(row.letter, row.name) }
         is InfoRow.Members -> NavRow(LurkerIcons.Group, "Members", row.count?.toString(), actions.onMembers)
@@ -339,6 +361,7 @@ private fun InfoPreview(dark: Boolean, title: String, inputs: BufferInfoInputs, 
             exit = PageExit.Close,
             onExit = {},
             actions = previewActions,
+            reveals = remember { ProseReveals() },
         )
     }
 }

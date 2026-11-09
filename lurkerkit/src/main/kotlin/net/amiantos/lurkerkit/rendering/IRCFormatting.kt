@@ -90,6 +90,15 @@ object IRCFormatting {
      */
     fun strip(text: String): String = parse(text).joinToString("") { it.text }
 
+    /**
+     * Whether [text] would draw nothing at all: only control codes, or whitespace no run paints. A
+     * background, reverse video, an underline or a strike on spaces is a box or a rule, and visible,
+     * so `\u000304,04   \u0003` draws and `\u000304   \u0003` doesn't. For judging a topic the way the
+     * log judges an activity body (lurker#1297): on what is drawn, not on what came over the wire.
+     */
+    fun drawsNothing(text: String): Boolean =
+        parse(text).all { it.text.isBlank() && it.bg == null && !it.reverse && !it.underline && !it.strike }
+
     fun parse(text: String): List<FormattingRun> {
         val runs = mutableListOf<FormattingRun>()
         val current = StringBuilder()
