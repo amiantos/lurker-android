@@ -237,6 +237,8 @@ class ChannelSettingsModelTest {
         assertEquals(SettingsItem.Notice("topic", "No topic set."), build(slice(mine = emptyList(), topic = null))[0].items.single())
         // Nothing but formatting codes draws as nothing, so it is no topic to show (lurker#1297).
         assertEquals(SettingsItem.Notice("topic", "No topic set."), build(slice(mine = emptyList(), topic = "\u0003\u0002 "))[0].items.single())
+        // Coloured spaces paint a box, which is a topic.
+        assertEquals(SettingsItem.TopicText("\u000304,04   \u0003"), build(slice(mine = emptyList(), topic = "\u000304,04   \u0003"))[0].items.single())
         assertEquals(
             SettingsItem.Notice("topic", "Join the channel to see its topic."),
             build(slice(topic = null, joined = false))[0].items.single(),

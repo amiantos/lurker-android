@@ -26,6 +26,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onPlaced
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -336,7 +337,9 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
             MessageText.renderCompactTyping(content.nicks, style) ?: AnnotatedString("")
         }
     }
-    val spokenBody = remember(body) { MessageText.spokenAnnotated(body) }
+    // The links TalkBack's menu opens go through the screen's `SafeUriHandler`, as a tap's do.
+    val uriHandler = LocalUriHandler.current
+    val spokenBody = remember(body, uriHandler) { MessageText.spokenAnnotated(body) { uriHandler.openUri(it) } }
     val label = MessageListLayout.spokenRow(plan.header, spokenBody)
     val ordinals = remember(body) { MessageText.hiddenSpoilerOrdinals(body) }
     val actions = buildList {

@@ -51,6 +51,7 @@ import net.amiantos.lurker.ui.networks.FormInset
 import net.amiantos.lurker.ui.networks.FormRefusalFooter
 import net.amiantos.lurker.ui.networks.FormSectionFooter
 import net.amiantos.lurker.ui.networks.FormSectionHeader
+import net.amiantos.lurker.ui.message.ProseReveals
 import net.amiantos.lurker.ui.message.ProseText
 import net.amiantos.lurker.ui.networks.PageExit
 import net.amiantos.lurker.ui.shell.StateView
@@ -77,6 +78,9 @@ import java.time.Instant
 class BufferInfoState(private val model: ChatViewModel, val buffer: Buffer, private val scope: CoroutineScope) {
     private val inputsFlow = MutableStateFlow(BufferInfoInputs.of(model.state, buffer))
     val inputs = inputsFlow.asStateFlow()
+
+    /** The topic's opened spoilers, the page's so a row's disposal keeps them (lurker#1297). */
+    val topicReveals = ProseReveals()
 
     /**
      * The latest refusal, pinned under its section. A footer rather than an alert, for the reason the
@@ -203,6 +207,7 @@ internal fun BufferInfoPage(state: BufferInfoState, exit: PageExit, onExit: () -
         exit = exit,
         onExit = onExit,
         actions = actions,
+        reveals = state.topicReveals,
     )
 }
 
@@ -213,6 +218,7 @@ private fun BufferInfoContent(
     exit: PageExit,
     onExit: () -> Unit,
     actions: BufferInfoActions,
+    reveals: ProseReveals,
 ) {
     DialogPage(title = title, exit = exit, onExit = onExit) { padding ->
         if (sections.isEmpty()) {
@@ -224,7 +230,7 @@ private fun BufferInfoContent(
                 item(key = "section$index") {
                     Column {
                         section.header?.let { FormSectionHeader(it) }
-                        section.rows.forEach { row -> InfoRowView(row, actions) }
+                        section.rows.forEach { row -> InfoRowView(row, actions, reveals) }
                         if (section.holdsRefusals) {
                             FormRefusalFooter(section.footer, announces = section.announcesFooter)
                         } else {
@@ -238,7 +244,7 @@ private fun BufferInfoContent(
 }
 
 @Composable
-private fun InfoRowView(row: InfoRow, actions: BufferInfoActions) {
+private fun InfoRowView(row: InfoRow, actions: BufferInfoActions, reveals: ProseReveals) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val clear = ListItemDefaults.colors(containerColor = Color.Transparent)
     when (row) {
@@ -248,7 +254,16 @@ private fun InfoRowView(row: InfoRow, actions: BufferInfoActions) {
         is InfoRow.Topic -> ListItem(
             colors = clear,
             headlineContent = {
-                if (row.muted) Text(row.text, color = muted) else ProseText(row.text, color = MaterialTheme.colorScheme.onSurface)
+                if (row.muted) {
+                    Text(row.text, color = muted)
+                } else {
+                    ProseText(
+                        row.text,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        revealed = reveals.ordinalsFor(row.text),
+                        onToggleSpoiler = { reveals.toggle(row.text, it) },
+                    )
+                }
             },
         )
         is InfoRow.ChannelSettings -> NavRow(LurkerIcons.Tune, "Channel Settings", row.modes, actions.onChannelSettings)
@@ -346,6 +361,7 @@ private fun InfoPreview(dark: Boolean, title: String, inputs: BufferInfoInputs, 
             exit = PageExit.Close,
             onExit = {},
             actions = previewActions,
+            reveals = remember { ProseReveals() },
         )
     }
 }

@@ -273,9 +273,10 @@ object BufferInfoModel {
                     emptyList()
                 }
                 val topic = inputs.topic
-                // Judged on what would be drawn: a topic of nothing but formatting codes renders as
-                // nothing, and a blank row under "Topic" says less than the placeholder.
-                val hasTopic = topic != null && IRCFormatting.strip(topic).isNotBlank()
+                // Judged on what would be drawn (`IRCFormatting.drawsNothing`): a topic of nothing but
+                // formatting codes renders as nothing, and a blank row under "Topic" says less than
+                // the placeholder.
+                val hasTopic = topic != null && !IRCFormatting.drawsNothing(topic)
                 listOf(
                     // Nothing under no topic: there's no one to credit.
                     InfoSection(

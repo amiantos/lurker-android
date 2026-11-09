@@ -631,8 +631,12 @@ object MessageText {
      * TalkBack as its text, so a link in a message stays actionable from TalkBack's links menu while
      * the hidden text never reaches it. Only links: a spoiler's own tap target, and every style, are
      * left behind.
+     *
+     * [open] is where the menu's tap goes. ⚠ A `Url` with no listener reaches TalkBack as a framework
+     * `URLSpan`, which opens the address itself — past `SafeUriHandler`, the door a finger's tap goes
+     * through — so a caller that draws links gives the opener it draws them with.
      */
-    fun spokenAnnotated(rendered: AnnotatedString): AnnotatedString {
+    fun spokenAnnotated(rendered: AnnotatedString, open: ((String) -> Unit)? = null): AnnotatedString {
         val plain = rendered.text
         val urls = rendered.getLinkAnnotations(0, rendered.length).filter { it.item is LinkAnnotation.Url }
         // Adjacent hidden runs that say the same thing are one announcement — a bold or italic
@@ -663,7 +667,9 @@ object MessageText {
                 append(plain, from, to)
                 for (url in urls) {
                     if (url.start >= from && url.end <= to) {
-                        addLink(url.item as LinkAnnotation.Url, url.start + offset, url.end + offset)
+                        val link = url.item as LinkAnnotation.Url
+                        val exported = if (open == null) link else LinkAnnotation.Url(link.url, link.styles) { open(link.url) }
+                        addLink(exported, url.start + offset, url.end + offset)
                     }
                 }
             }

@@ -397,6 +397,21 @@ class MessageTextTest {
         assertTrue(spoken.getLinkAnnotations(0, spoken.length).all { it.item is LinkAnnotation.Url })
     }
 
+    @Test
+    fun `a spoken link opens through the opener it is given, never on its own`() {
+        // Without a listener Compose hands TalkBack a framework URLSpan, which opens the address
+        // itself, past the app's one door.
+        val line = body("see https://a.example")
+        var opened: String? = null
+        val spoken = MessageText.spokenAnnotated(line) { opened = it }
+        val link = spoken.getLinkAnnotations(0, spoken.length).single().item as LinkAnnotation.Url
+        assertNotNull(link.linkInteractionListener)
+        link.linkInteractionListener!!.onClick(link)
+        assertEquals("https://a.example", opened)
+        val bare = MessageText.spokenAnnotated(line).getLinkAnnotations(0, line.length).single().item as LinkAnnotation.Url
+        assertNull(bare.linkInteractionListener)
+    }
+
     // MARK: - Line shapes
 
     @Test

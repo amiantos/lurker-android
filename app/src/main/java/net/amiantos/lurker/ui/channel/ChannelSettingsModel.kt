@@ -174,9 +174,10 @@ object ChannelSettingsModel {
         val out = mutableListOf<SettingsSection>()
 
         // Topic. Out of the channel we don't know it has no topic — or that it exists at all; only
-        // what we last saw. Judged on what would be drawn: a topic of nothing but formatting codes
-        // renders as nothing, and a blank row under "Topic" says less than the placeholder.
-        val hasTopic = IRCFormatting.strip(topic).isNotBlank()
+        // what we last saw. Judged on what would be drawn (`IRCFormatting.drawsNothing`): a topic of
+        // nothing but formatting codes renders as nothing, and a blank row under "Topic" says less
+        // than the placeholder.
+        val hasTopic = !IRCFormatting.drawsNothing(topic)
         val topicItem: SettingsItem = when {
             access.canSetTopic -> SettingsItem.TopicField(drafts.topic ?: topic)
             hasTopic -> SettingsItem.TopicText(topic)

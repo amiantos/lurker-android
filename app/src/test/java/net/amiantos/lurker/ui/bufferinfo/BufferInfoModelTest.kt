@@ -88,6 +88,8 @@ class BufferInfoModelTest {
         val codes = sections(state(topic = "\u0003\u0002 "))[0]
         assertEquals(InfoRow.Topic("No topic set.", muted = true), codes.rows.single())
         assertNull(codes.footer)
+        // Coloured spaces paint a box, which is a topic.
+        assertEquals(InfoRow.Topic("\u000304,04   \u0003", muted = false), sections(state(topic = "\u000304,04   \u0003"))[0].rows.single())
     }
 
     @Test
