@@ -15,6 +15,7 @@ import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.MemberPrefix
 import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.MessageOrder
 import net.amiantos.lurkerkit.model.MessageReaction
 import net.amiantos.lurkerkit.model.MessageRow
 import net.amiantos.lurkerkit.model.MessageRows
@@ -220,6 +221,10 @@ internal object ConversationModel {
      * Replies (lurker-ios#184) last of all: a quote and its stripped address are judged against the
      * line as it now displays, and the quote screens the CURRENT ignore rules.
      *
+     * All of it over the held rows in DISPLAY order (`MessageOrder`, lurker#1290): by time, so a
+     * line fetched after the fact sits where it was said. `inputs.messages` stays as the store has
+     * it, in id order, for everything that reads the list's ends.
+     *
      * [keeping] is the jump target (`RowOptions.keeping`), which the ignore filter must not drop: the
      * landing resolves its anchor against RENDERED rows, so a target a rule now covers would never
      * resolve and the jump would never land.
@@ -234,7 +239,7 @@ internal object ConversationModel {
             Redactions.presenting(
                 inputs.relayBots.reattributing(
                     inputs.ignores.visible(
-                        inputs.messages.orEmpty().filter { inputs.kind.renders(it.type) && it.isRenderable },
+                        MessageOrder.byTime(inputs.messages.orEmpty()).filter { inputs.kind.renders(it.type) && it.isRenderable },
                         networkId = key.networkId,
                         target = key.target,
                         keeping = keeping,

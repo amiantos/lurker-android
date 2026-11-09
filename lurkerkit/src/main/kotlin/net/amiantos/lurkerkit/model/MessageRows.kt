@@ -146,7 +146,7 @@ sealed interface MessageRow {
         when (this) {
             is Bubble -> message.id == id
             is Line -> message.id == id
-            is Consolidated -> summary.firstId <= id && id <= summary.lastId
+            is Consolidated -> id in summary.ids
             UnreadDivider, is DateDivider, StartOfHistory, is ClearedDivider, is AwayDivider, is BackDivider,
             is Typing -> false
         }
@@ -197,10 +197,13 @@ object MessageRows {
      * Port note: the presence lease is an exact `Duration` comparison where LurkerKit compares
      * `Double`s of seconds — see the note on `SmartFilter`, which holds here too.
      *
-     * @param messages this buffer's messages, already filtered to what it renders, in order.
+     * @param messages this buffer's messages, already filtered to what it renders, in the
+     *   order they are shown (`MessageOrder`): by time, which is not always id order.
      * @param dividerAfterId the latched read boundary, or null if the server hasn't said yet.
      *   The unread divider only shows when there was a real read point (`> 0`) *and*
      *   something sits past it — a brand-new buffer with nothing previously read shows none.
+     *   It goes above the first unread row SHOWN, so a line fetched after the fact can put
+     *   it over rows already read (lurker#1290).
      * @param hasMoreOlder whether the server has older history left. Pass `true` when unknown:
      *   "no more history" has to be something the server told us, not the absence of an
      *   answer, or an unhydrated buffer claims to have reached its beginning.

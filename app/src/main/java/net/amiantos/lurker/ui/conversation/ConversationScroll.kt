@@ -858,7 +858,9 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         ) {
             // By id, not by how much longer the list got: a restored row lands in the middle. And
             // not ephemerals (id 0) — a local echo isn't something the reader is missing below.
-            val tail = previous.lastOrNull { it.id != 0L }?.id ?: 0L
+            // The newest id, not the last row: shown by time (lurker#1290), a line fetched after
+            // the fact sits above rows with older ids.
+            val tail = previous.maxOfOrNull { it.id } ?: 0L
             val appended = built.visible.filter { it.id > tail }
             // What the reader will actually SEE arrive — the tier the list applies, so the two can't
             // disagree. At `none` a netsplit rejoin appends dozens of rows that build to nothing.
