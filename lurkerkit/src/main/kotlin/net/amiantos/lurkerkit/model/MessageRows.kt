@@ -152,16 +152,17 @@ sealed interface MessageRow {
         }
 
     /**
-     * Whether `id` falls between the lowest and highest ids of this summary's run. The place to
-     * land for an id that is held and that no row draws (an event the tier hides inside a run),
-     * and only for one: a run holding a line fetched after the fact also spans ids drawn
-     * elsewhere, which is why `represents` is asked first (the app's `BuiltRows.rowIndex`).
+     * How many ids lie between the lowest and highest of this summary's run, when `id` is one
+     * of them; null when it isn't, or this is no summary. The place to land for an id that is
+     * held and that no row draws (an event the tier hides inside a run), and only for one: a
+     * run holding a line fetched after the fact also spans ids drawn elsewhere, which is why
+     * `represents` is asked first and the NARROWEST span wins (the app's `BuiltRows.rowIndex`).
      */
-    fun spans(id: Long): Boolean {
-        if (this !is Consolidated) return false
-        val low = summary.ids.minOrNull() ?: return false
-        val high = summary.ids.maxOrNull() ?: return false
-        return id in low..high
+    fun spanOver(id: Long): Long? {
+        if (this !is Consolidated) return null
+        val low = summary.ids.minOrNull() ?: return null
+        val high = summary.ids.maxOrNull() ?: return null
+        return if (id in low..high) high - low else null
     }
 }
 

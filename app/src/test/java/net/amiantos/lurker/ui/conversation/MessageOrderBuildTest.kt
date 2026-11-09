@@ -14,6 +14,7 @@ import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -129,6 +130,23 @@ class MessageOrderBuildTest {
     }
 
     @Test
+    fun `of two runs that span a hidden id, the narrower one is its own`() {
+        // The first run holds a replayed join (105), so its ids span everything after it.
+        val rows = listOf(
+            msg(40, 10, nick = "bob", type = EventType.Part),
+            msg(105, 11, nick = "carol", type = EventType.Join),
+            msg(41, 12, "said"),
+            msg(43, 13, nick = "dave", type = EventType.Part),
+            msg(44, 14, nick = "dave", type = EventType.System),
+            msg(45, 15, nick = "dave", type = EventType.Join),
+        )
+        val built = build(state(rows))
+        assertEquals(listOf("summary", "41", "summary"), shown(built))
+        assertEquals(built.rowIndex(45), built.rowIndex(44))
+        assertNotEquals(built.rowIndex(40), built.rowIndex(44))
+    }
+
+    @Test
     fun `the badge counts what landed below the last row shown, once`() {
         val scroll = ConversationScroll(kind)
         scroll.onFrame(state(filledGap, lastReadId = 23), channel, seq = 0)
@@ -142,5 +160,12 @@ class MessageOrderBuildTest {
         // The last row shown is still 24, though the newest id is 25: 24 isn't counted again.
         scroll.onRows(build(state(filledGap + msg(24, 24) + msg(25, 21) + msg(26, 25)), scroll.options), wasNearBottom = false)
         assertEquals(2, scroll.newWhileAway)
+        // A late line older than everything loaded takes the top of the list, in the same frame
+        // as a live one. Nothing was paged: the live line counts.
+        scroll.onRows(
+            build(state(filledGap + msg(24, 24) + msg(25, 21) + msg(26, 25) + msg(27, 5) + msg(28, 26)), scroll.options),
+            wasNearBottom = false,
+        )
+        assertEquals(3, scroll.newWhileAway)
     }
 }

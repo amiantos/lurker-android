@@ -426,7 +426,7 @@ data class ConsolidationSummary(
      *
      * The ids themselves, not a first-to-last span: rows are shown by time (lurker#1290), so a
      * run can hold a line fetched after the fact whose id is far above its neighbours', and the
-     * span between them would claim rows drawn elsewhere. `MessageRow.spans` is the span, for
+     * span between them would claim rows drawn elsewhere. `MessageRow.spanOver` is the span, for
      * an id nothing draws.
      */
     val ids: Set<Long>,
