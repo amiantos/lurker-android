@@ -14,6 +14,8 @@ import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
 import java.time.Instant
 import java.time.ZoneOffset
@@ -110,18 +112,35 @@ class MessageOrderBuildTest {
     }
 
     @Test
-    fun `the badge counts a line above the newest id once, however the rows are shown`() {
+    fun `an id no row draws lands on the run that spans it`() {
+        // A part and a join fold into one run; between them sits a row a channel doesn't render,
+        // held and drawn by nothing.
+        val rows = listOf(
+            msg(49, 10, nick = "bob", type = EventType.Part),
+            msg(50, 11, nick = "bob", type = EventType.System),
+            msg(51, 12, nick = "bob", type = EventType.Join),
+            msg(52, 13, "said"),
+        )
+        val built = build(state(rows))
+        assertEquals(listOf("summary", "52"), shown(built))
+        assertNotNull(built.rowIndex(49))
+        assertEquals(built.rowIndex(49), built.rowIndex(50))
+        assertNull(built.rowIndex(53))
+    }
+
+    @Test
+    fun `the badge counts what landed below the last row shown, once`() {
         val scroll = ConversationScroll(kind)
         scroll.onFrame(state(filledGap, lastReadId = 23), channel, seq = 0)
         scroll.onRows(build(state(filledGap), scroll.options), wasNearBottom = false)
         // The last row SHOWN is 23, and so is the newest id. A live line lands: one new.
         scroll.onRows(build(state(filledGap + msg(24, 24)), scroll.options), wasNearBottom = false)
         assertEquals(1, scroll.newWhileAway)
-        // A late line of the gap lands above (id 25, said at :21). The last row shown is still
-        // 24; nothing already counted is counted again.
+        // A late line of the gap lands above (id 25, said at :21): not something below.
         scroll.onRows(build(state(filledGap + msg(24, 24) + msg(25, 21)), scroll.options), wasNearBottom = false)
-        assertEquals(2, scroll.newWhileAway)
+        assertEquals(1, scroll.newWhileAway)
+        // The last row shown is still 24, though the newest id is 25: 24 isn't counted again.
         scroll.onRows(build(state(filledGap + msg(24, 24) + msg(25, 21) + msg(26, 25)), scroll.options), wasNearBottom = false)
-        assertEquals(3, scroll.newWhileAway)
+        assertEquals(2, scroll.newWhileAway)
     }
 }

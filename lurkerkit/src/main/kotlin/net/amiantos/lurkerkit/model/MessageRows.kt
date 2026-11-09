@@ -139,8 +139,8 @@ sealed interface MessageRow {
         }
 
     /**
-     * Whether this row stands in for message `id` — its own row, or the summary whose span
-     * covers it after a history page merged it into a consolidated run.
+     * Whether this row stands in for message `id` — its own row, or the summary of the
+     * consolidated run a history page merged it into.
      */
     fun represents(id: Long): Boolean =
         when (this) {
@@ -150,6 +150,19 @@ sealed interface MessageRow {
             UnreadDivider, is DateDivider, StartOfHistory, is ClearedDivider, is AwayDivider, is BackDivider,
             is Typing -> false
         }
+
+    /**
+     * Whether `id` falls between the lowest and highest ids of this summary's run. The place to
+     * land for an id that is held and that no row draws (an event the tier hides inside a run),
+     * and only for one: a run holding a line fetched after the fact also spans ids drawn
+     * elsewhere, which is why `represents` is asked first (the app's `BuiltRows.rowIndex`).
+     */
+    fun spans(id: Long): Boolean {
+        if (this !is Consolidated) return false
+        val low = summary.ids.minOrNull() ?: return false
+        val high = summary.ids.maxOrNull() ?: return false
+        return id in low..high
+    }
 }
 
 /**

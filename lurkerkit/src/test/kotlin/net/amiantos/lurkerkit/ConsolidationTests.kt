@@ -489,15 +489,15 @@ class ConsolidationTests {
     }
 
     @Test
-    fun testSummarySpansItsEventIds() {
-        // The id span is what lets the scroll anchor re-find a line after a history page
-        // merges it into a summary. `msg` stamps id = offset + 1, so this run spans 1…31.
+    fun testSummaryCarriesItsEventIds() {
+        // The ids are what let the scroll anchor re-find a line after a history page
+        // merges it into a summary. `msg` stamps id = offset + 1, so this run holds 1 and 31.
         val summary = onlySummary(
             Consolidation.consolidate(
                 listOf(msg(EventType.Join, "alice", offset = 0), msg(EventType.Join, "bob", offset = 30)),
             ),
         )
-        assertEquals(1L, summary?.firstId)
+        assertEquals(setOf(1L, 31L), summary?.ids)
         assertEquals(31L, summary?.lastId)
     }
 }

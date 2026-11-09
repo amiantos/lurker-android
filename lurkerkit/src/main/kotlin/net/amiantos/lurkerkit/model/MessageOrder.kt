@@ -27,32 +27,49 @@ object MessageOrder {
         }
     }
 
-    /**
-     * Where a row sorts. A row with no clock (a line the app wrote itself, `appendLocal`) has
-     * nothing to be placed by, so it rides the row it arrived after and moves with it. A row
-     * with a clock and no id (an ephemeral) goes by its time, last among rows of that time.
-     */
-    private fun key(message: Message, previous: Key?, offset: Int): Key {
-        val date = message.date
-            ?: return Key(previous?.date ?: Instant.MIN, previous?.id ?: 0L, offset)
-        return Key(date, if (message.id != 0L) message.id else Long.MAX_VALUE, offset)
-    }
+    /** A row's id as it sorts: one with no id (an ephemeral) is last among rows of its time. */
+    private fun sortId(message: Message): Long = if (message.id != 0L) message.id else Long.MAX_VALUE
 
     /**
      * [rows] in display order. The list itself when it already is, which is every buffer that
-     * holds nothing replayed, so a build costs one pass.
+     * holds nothing replayed, so a build costs one pass and allocates nothing.
+     *
+     * A row with no clock (a line the app wrote itself, `appendLocal`) has nothing to be placed
+     * by, so it takes the latest key among the rows held before it: it stays under everything
+     * that was on screen when it was written. Not the key of the row before it, which can be a
+     * line fetched after the fact, shown far above.
      */
     fun byTime(rows: List<Message>): List<Message> {
+        if (isOrdered(rows)) return rows
         val keys = ArrayList<Key>(rows.size)
-        var ordered = true
-        var previous: Key? = null
+        var latest: Key? = null
         for ((offset, message) in rows.withIndex()) {
-            val next = key(message, previous, offset)
-            if (previous != null && previous > next) ordered = false
+            val date = message.date
+            val next = if (date == null) {
+                Key(latest?.date ?: Instant.MIN, latest?.id ?: 0L, offset)
+            } else {
+                Key(date, sortId(message), offset)
+            }
             keys.add(next)
-            previous = next
+            if (latest == null || next > latest) latest = next
         }
-        if (ordered) return rows
         return keys.sorted().map { rows[it.offset] }
+    }
+
+    /** While the rows are in order, the latest key so far is the previous dated row's. */
+    private fun isOrdered(rows: List<Message>): Boolean {
+        var lastDate: Instant? = null
+        var lastId = 0L
+        for (message in rows) {
+            val date = message.date ?: continue
+            val id = sortId(message)
+            if (lastDate != null) {
+                val byDate = lastDate.compareTo(date)
+                if (byDate > 0 || (byDate == 0 && lastId > id)) return false
+            }
+            lastDate = date
+            lastId = id
+        }
+        return true
     }
 }

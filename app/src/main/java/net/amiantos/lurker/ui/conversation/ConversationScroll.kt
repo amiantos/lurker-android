@@ -105,11 +105,14 @@ internal class BuiltRows(
         )
 
     /**
-     * The row that now stands for message [containing] — its own, or the summary whose span covers it after
-     * a page merged it into a consolidated run. Resolved by MESSAGE ID on every call, never a cached
-     * index: a rebuild between two passes shifts every index.
+     * The row that now stands for message [containing] — its own, or the summary of the run a page
+     * merged it into; failing both, a summary whose ids span it (an event the tier hides inside a
+     * run). Resolved by MESSAGE ID on every call, never a cached index: a rebuild between two passes
+     * shifts every index.
      */
-    fun rowIndex(containing: Long): Int? = rows.indexOfFirst { it.represents(containing) }.takeIf { it >= 0 }
+    fun rowIndex(containing: Long): Int? =
+        (rows.indexOfFirst { it.represents(containing) }.takeIf { it >= 0 }
+            ?: rows.indexOfFirst { it.spans(containing) }.takeIf { it >= 0 })
 
     /** The lazy list's item index for a row: the list is reverse-laid-out, newest row first. */
     fun itemIndex(row: Int): Int = rows.size - 1 - row
@@ -858,10 +861,14 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         ) {
             // By id, not by how much longer the list got: a restored row lands in the middle. And
             // not ephemerals (id 0) — a local echo isn't something the reader is missing below.
-            // The newest id, not the last row: shown by time (lurker#1290), a line fetched after
-            // the fact sits above rows with older ids.
+            // The newest id, not the last row's: shown by time (lurker#1290), a line fetched
+            // after the fact has a newer id than the rows under it. And only what landed BELOW the
+            // last row that was shown, which is what the badge promises: a filled gap goes in
+            // above the reader.
             val tail = previous.maxOfOrNull { it.id } ?: 0L
-            val appended = built.visible.filter { it.id > tail }
+            val last = previous.lastOrNull { it.id != 0L }?.id
+            val below = last?.let { id -> built.visible.indexOfLast { it.id == id } }?.takeIf { it >= 0 }?.plus(1) ?: 0
+            val appended = built.visible.drop(below).filter { it.id > tail }
             // What the reader will actually SEE arrive — the tier the list applies, so the two can't
             // disagree. At `none` a netsplit rejoin appends dozens of rows that build to nothing.
             newWhileAway += EventFilter.visible(

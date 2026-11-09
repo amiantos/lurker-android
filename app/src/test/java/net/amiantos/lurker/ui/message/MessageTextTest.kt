@@ -553,7 +553,7 @@ class MessageTextTest {
     }
 
     private fun summary(vararg groups: IdentityGroup) =
-        ConsolidationSummary(groups = groups.toList(), date = null, firstId = 1, lastId = 9, ids = (1L..9L).toSet())
+        ConsolidationSummary(groups = groups.toList(), date = null, lastId = 9, ids = (1L..9L).toSet())
 
     private fun nicks(vararg names: String) = names.map { Entry.Nick(it) }
 
@@ -685,7 +685,7 @@ class MessageTextTest {
     fun `a consolidation carries its time after its text`() {
         val summary = ConsolidationSummary(
             groups = listOf(IdentityGroup(Kind.Joined, listOf(Entry.Nick("a")), hidden = 0)),
-            date = null, firstId = 1, lastId = 2, ids = setOf(1L, 2L),
+            date = null, lastId = 2, ids = setOf(1L, 2L),
         )
         assertTrue(MessageText.renderCompactConsolidation(summary, style, trailingTime = "14:41").text.endsWith(" 1\u20604\u2060:\u20604\u20601"))
     }
