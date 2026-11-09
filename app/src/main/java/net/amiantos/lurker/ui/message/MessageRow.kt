@@ -735,7 +735,7 @@ private fun MarkersPreview(dark: Boolean) {
                             hidden = 3,
                         ),
                     ),
-                    date = away, firstId = 1, lastId = 5,
+                    date = away, lastId = 5, ids = (1L..5L).toSet(),
                 ),
             ),
         )

@@ -291,7 +291,7 @@ class MessageListLayoutTest {
     @Test
     fun `keys are unique, ephemerals numbered, duplicates suffixed`() {
         val at = Instant.parse("2026-07-25T00:00:00Z")
-        val summary = ConsolidationSummary(groups = emptyList(), date = null, firstId = 3, lastId = 5)
+        val summary = ConsolidationSummary(groups = emptyList(), date = null, lastId = 5, ids = setOf(3L, 4L, 5L))
         val ephemeral = Message(id = 0, type = EventType.System, nick = null, text = "local")
         val keys = MessageListLayout.rowKeys(
             listOf(

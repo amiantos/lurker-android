@@ -105,11 +105,24 @@ internal class BuiltRows(
         )
 
     /**
-     * The row that now stands for message [containing] — its own, or the summary whose span covers it after
-     * a page merged it into a consolidated run. Resolved by MESSAGE ID on every call, never a cached
-     * index: a rebuild between two passes shifts every index.
+     * The row that now stands for message [containing] — its own, or the summary of the run a page
+     * merged it into; failing both, the summary whose ids span it most narrowly (an event the tier
+     * hides inside a run). Resolved by MESSAGE ID on every call, never a cached index: a rebuild
+     * between two passes shifts every index.
      */
-    fun rowIndex(containing: Long): Int? = rows.indexOfFirst { it.represents(containing) }.takeIf { it >= 0 }
+    fun rowIndex(containing: Long): Int? {
+        rows.indexOfFirst { it.represents(containing) }.takeIf { it >= 0 }?.let { return it }
+        var best: Int? = null
+        var bestSpan = Long.MAX_VALUE
+        rows.forEachIndexed { index, row ->
+            val span = row.spanOver(containing)
+            if (span != null && span < bestSpan) {
+                best = index
+                bestSpan = span
+            }
+        }
+        return best
+    }
 
     /** The lazy list's item index for a row: the list is reverse-laid-out, newest row first. */
     fun itemIndex(row: Int): Int = rows.size - 1 - row
@@ -430,6 +443,9 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
 
     /** What the previous build drew, for telling a real append from everything else. */
     private var previousVisible: List<Message>? = null
+
+    /** The oldest id the previous build's buffer held, for telling an older page from an append. */
+    private var previousOldestHeld: Long? = null
 
     /** The rule set the previous build was filtered by — identity is the whole comparison. */
     private var lastIgnores: IgnoreSet? = null
@@ -853,13 +869,23 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
         // Appends only — the first id moving means older pages were pulled — and not while detached
         // (or just re-attached): a detached buffer holds live traffic out, so anything appended there
         // is a page the reader asked for, not a surprise from below.
-        if (previous != null && !wasNearBottom && !wasDetached && !nowDetached && !rulesChanged &&
-            built.visible.firstOrNull()?.id == previous.firstOrNull()?.id
-        ) {
+        //
+        // The first id HELD, not the first row shown: a line fetched after the fact can be older
+        // than everything loaded and take the top of the list (lurker#1290).
+        val oldestHeld = built.inputs.messages?.firstOrNull { it.id != 0L }?.id
+        val samePages = oldestHeld == previousOldestHeld
+        previousOldestHeld = oldestHeld
+        if (previous != null && !wasNearBottom && !wasDetached && !nowDetached && !rulesChanged && samePages) {
             // By id, not by how much longer the list got: a restored row lands in the middle. And
             // not ephemerals (id 0) — a local echo isn't something the reader is missing below.
-            val tail = previous.lastOrNull { it.id != 0L }?.id ?: 0L
-            val appended = built.visible.filter { it.id > tail }
+            // The newest id, not the last row's: shown by time (lurker#1290), a line fetched
+            // after the fact has a newer id than the rows under it. And only what landed BELOW the
+            // last row that was shown, which is what the badge promises: a filled gap goes in
+            // above the reader.
+            val tail = previous.maxOfOrNull { it.id } ?: 0L
+            val last = previous.lastOrNull { it.id != 0L }?.id
+            val below = last?.let { id -> built.visible.indexOfLast { it.id == id } }?.takeIf { it >= 0 }?.plus(1) ?: 0
+            val appended = built.visible.drop(below).filter { it.id > tail }
             // What the reader will actually SEE arrive — the tier the list applies, so the two can't
             // disagree. At `none` a netsplit rejoin appends dozens of rows that build to nothing.
             newWhileAway += EventFilter.visible(

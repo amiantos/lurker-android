@@ -139,17 +139,31 @@ sealed interface MessageRow {
         }
 
     /**
-     * Whether this row stands in for message `id` — its own row, or the summary whose span
-     * covers it after a history page merged it into a consolidated run.
+     * Whether this row stands in for message `id` — its own row, or the summary of the
+     * consolidated run a history page merged it into.
      */
     fun represents(id: Long): Boolean =
         when (this) {
             is Bubble -> message.id == id
             is Line -> message.id == id
-            is Consolidated -> summary.firstId <= id && id <= summary.lastId
+            is Consolidated -> id in summary.ids
             UnreadDivider, is DateDivider, StartOfHistory, is ClearedDivider, is AwayDivider, is BackDivider,
             is Typing -> false
         }
+
+    /**
+     * How many ids lie between the lowest and highest of this summary's run, when `id` is one
+     * of them; null when it isn't, or this is no summary. The place to land for an id that is
+     * held and that no row draws (an event the tier hides inside a run), and only for one: a
+     * run holding a line fetched after the fact also spans ids drawn elsewhere, which is why
+     * `represents` is asked first and the NARROWEST span wins (the app's `BuiltRows.rowIndex`).
+     */
+    fun spanOver(id: Long): Long? {
+        if (this !is Consolidated) return null
+        val low = summary.ids.minOrNull() ?: return null
+        val high = summary.ids.maxOrNull() ?: return null
+        return if (id in low..high) high - low else null
+    }
 }
 
 /**
@@ -197,10 +211,13 @@ object MessageRows {
      * Port note: the presence lease is an exact `Duration` comparison where LurkerKit compares
      * `Double`s of seconds — see the note on `SmartFilter`, which holds here too.
      *
-     * @param messages this buffer's messages, already filtered to what it renders, in order.
+     * @param messages this buffer's messages, already filtered to what it renders, in the
+     *   order they are shown (`MessageOrder`): by time, which is not always id order.
      * @param dividerAfterId the latched read boundary, or null if the server hasn't said yet.
      *   The unread divider only shows when there was a real read point (`> 0`) *and*
      *   something sits past it — a brand-new buffer with nothing previously read shows none.
+     *   It goes above the first unread row SHOWN, so a line fetched after the fact can put
+     *   it over rows already read (lurker#1290).
      * @param hasMoreOlder whether the server has older history left. Pass `true` when unknown:
      *   "no more history" has to be something the server told us, not the absence of an
      *   answer, or an unhydrated buffer claims to have reached its beginning.

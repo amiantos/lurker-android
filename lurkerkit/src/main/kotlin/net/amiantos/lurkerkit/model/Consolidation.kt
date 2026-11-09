@@ -137,8 +137,8 @@ object Consolidation {
             groups = identityGroups(presence, maxNames = maxOf(1, maxNames), recentSpeakers = recentSpeakers) +
                 modeGroups(modeEvents, maxNames = maxOf(1, maxNames), recentSpeakers = recentSpeakers),
             date = events.lastOrNull()?.date,
-            firstId = events.firstOrNull()?.id ?: 0,
             lastId = events.lastOrNull()?.id ?: 0,
+            ids = events.mapNotNullTo(HashSet()) { it.id.takeIf { id -> id != 0L } },
         )
     }
 
@@ -406,7 +406,7 @@ object Consolidation {
  * it data (not a string) means the summary can be styled — nicks in their colors, the
  * connective words muted — the same way the web client colors its `NickRef`s.
  *
- * Port note: `firstId` and `lastId` are message ids, so they are `Long` here (PORTING.md,
+ * Port note: `lastId` and `ids` are message ids, so they are `Long` here (PORTING.md,
  * Types).
  */
 data class ConsolidationSummary(
@@ -415,14 +415,21 @@ data class ConsolidationSummary(
     /** The last event's timestamp — what the summary reveals on a drag, matching a line. */
     val date: Instant?,
     /**
-     * The persisted-id span of the events this summary replaces. Lets the view find the
-     * summary that now stands in for a given line after a history page reshapes the run —
-     * which is what keeps scroll position pinned across a "load older" (see iOS's
-     * `ChatViewController`). A run grows only at its top as older history prepends, so
-     * `lastId` is a stable anchor.
+     * The last event this summary replaces, as shown: what the row is anchored and keyed by.
+     * A run mostly grows at its top, as older history prepends, so it seldom moves.
      */
-    val firstId: Long,
     val lastId: Long,
+    /**
+     * Every persisted event this summary replaces. Lets the view find the summary that now
+     * stands in for a given line after a history page reshapes the run — which is what keeps
+     * scroll position pinned across a "load older" (see iOS's `ChatViewController`).
+     *
+     * The ids themselves, not a first-to-last span: rows are shown by time (lurker#1290), so a
+     * run can hold a line fetched after the fact whose id is far above its neighbours', and the
+     * span between them would claim rows drawn elsewhere. `MessageRow.spanOver` is the span, for
+     * an id nothing draws.
+     */
+    val ids: Set<Long>,
 ) {
     /**
      * One identity within the summary: a nick that joined/left/reconnected/joined-briefly/

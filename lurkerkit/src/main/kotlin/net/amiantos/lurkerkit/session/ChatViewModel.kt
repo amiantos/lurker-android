@@ -61,6 +61,7 @@ import net.amiantos.lurkerkit.model.HistoryCountBy
 import net.amiantos.lurkerkit.model.JoinNotice
 import net.amiantos.lurkerkit.model.MediaFetch
 import net.amiantos.lurkerkit.model.Message
+import net.amiantos.lurkerkit.model.MessageOrder
 import net.amiantos.lurkerkit.model.StatusNotification
 import net.amiantos.lurkerkit.model.ModeListResult
 import net.amiantos.lurkerkit.model.Network
@@ -1900,12 +1901,32 @@ class ChatViewModel(
      * The buffer's held rows as the screen shows them where it matters to a command: a line
      * deleted while held reads as deleted (`Redactions.presenting`), so `/react` and `/delete`
      * never land on one. The stored rows carry no mark of their own — see `ChatState.redactions`.
+     *
+     * And in the order the screen shows them (`MessageOrder`, lurker#1290): "the last line" is the
+     * last one on screen, not the newest id, which after a filled gap is a line said earlier and
+     * shown higher up.
+     *
+     * And only the rows the screen shows. A line above the `/clear` marker and a line an ignore
+     * rule hides are both still held, and a command typed at the screen must not land on one:
+     * `/delete` with nothing said since a clear would otherwise take back a line the reader can't
+     * see, and `/react` could answer someone they ignore. The marker counts even while the screen
+     * is showing cleared history (view state this doesn't see): the command then says there is
+     * nothing here, which is the safe way to be wrong. The same filters the conversation build
+     * runs (`visibleMessages`, `MessageRows.build`); a hard hide added there belongs here too.
      */
-    private fun heldAsShown(key: BufferKey, state: ChatState): List<Message> =
-        Redactions.presenting(
-            state.messages[key.id].orEmpty(),
+    private fun heldAsShown(key: BufferKey, state: ChatState): List<Message> {
+        val buffer = state.buffers[key.id]
+        val cleared = if (buffer?.clearedAt == null) 0L else maxOf(0L, buffer.clearedBeforeId)
+        val ordered = MessageOrder.byTime(state.messages[key.id].orEmpty())
+        return Redactions.presenting(
+            state.ignores.visible(
+                if (cleared > 0) ordered.filter { it.id == 0L || it.id > cleared } else ordered,
+                networkId = key.networkId,
+                target = key.target,
+            ),
             redactions = if (key.networkId == null) emptyMap() else state.redactions,
         )
+    }
 
     /**
      * Run one of the REST connection verbs on `key`'s network and print its refusal, if any,
