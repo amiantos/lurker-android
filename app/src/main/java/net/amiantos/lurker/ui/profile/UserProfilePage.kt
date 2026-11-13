@@ -35,6 +35,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.unit.IntSize
 import net.amiantos.lurker.ui.media.DecodeSize
 import net.amiantos.lurker.ui.media.MediaSource
+import net.amiantos.lurker.ui.media.rememberAnimatedPicture
 import net.amiantos.lurker.ui.media.rememberPreviewStill
 import net.amiantos.lurker.ui.message.MessageText
 import net.amiantos.lurker.ui.message.rememberMessageTextStyle
@@ -211,14 +212,16 @@ private fun ProfileRowView(row: ProfileRow, onRow: (ProfileRow) -> Unit, media: 
             val px = with(LocalDensity.current) { 64.dp.roundToPx() }
             val still by rememberPreviewStill(row.path, media, IntSize(px, px), DecodeSize.Mode.Fill)
             val picture = still
+            // Playing if it moves, as the column's tile does (`rememberAnimatedPicture`).
+            val moving = rememberAnimatedPicture(picture, row.path, media, IntSize(px, px), DecodeSize.Mode.Fill)
             if (picture != null) {
                 Box(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp), contentAlignment = Alignment.Center) {
-                    Image(
-                        picture.image,
-                        contentDescription = "avatar",
-                        modifier = Modifier.size(64.dp).clip(RoundedCornerShape(6.dp)),
-                        contentScale = ContentScale.Crop,
-                    )
+                    val modifier = Modifier.size(64.dp).clip(RoundedCornerShape(6.dp))
+                    if (moving != null) {
+                        Image(moving, contentDescription = "avatar", modifier = modifier, contentScale = ContentScale.Crop)
+                    } else {
+                        Image(picture.image, contentDescription = "avatar", modifier = modifier, contentScale = ContentScale.Crop)
+                    }
                 }
             }
         }

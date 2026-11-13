@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.sp
 import net.amiantos.lurker.ui.media.DecodeSize
 import net.amiantos.lurker.ui.media.MediaSource
 import net.amiantos.lurker.ui.media.PreviewImageLoader
+import net.amiantos.lurker.ui.media.rememberAnimatedPicture
 import net.amiantos.lurker.ui.media.rememberPreviewStill
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurkerkit.model.AvatarInk
@@ -229,6 +230,9 @@ fun NickAvatarTile(spec: AvatarSpec, size: Dp, media: MediaSource, onTap: (() ->
     val avatar = rememberPreviewStill(spec.imagePath, media, box, DecodeSize.Mode.Fill)
     val tile = rememberPreviewStill(if (avatarCached != null) null else spec.tilePath, media, box, DecodeSize.Mode.Fill)
     val picture = avatar.value ?: tile.value
+    // A metadata avatar that moves plays, as the web's `<img>` does; a set tile never moves (the
+    // server skips animated tiles when a set is uploaded).
+    val moving = rememberAnimatedPicture(avatar.value, spec.imagePath, media, box, DecodeSize.Mode.Fill)
     val ink = AvatarColumn.ink(spec.ink)
     val description = spec.nick ?: ""
     Box(
@@ -251,6 +255,7 @@ fun NickAvatarTile(spec: AvatarSpec, size: Dp, media: MediaSource, onTap: (() ->
         contentAlignment = Alignment.Center,
     ) {
         when {
+            moving != null -> Image(moving, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             picture != null -> Image(picture.image, contentDescription = null, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
             spec.mark != null -> Icon(
                 if (spec.mark == AvatarMark.Notice) LurkerIcons.Campaign else LurkerIcons.Dns,

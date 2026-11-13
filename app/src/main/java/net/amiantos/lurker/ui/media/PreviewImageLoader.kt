@@ -211,6 +211,32 @@ object PreviewImageLoader {
     }
 
     /**
+     * The animation at [path] decoded for [box] in [mode], as its still was — for an avatar, the one
+     * inline picture that plays (`rememberAnimatedPicture`); null when the file doesn't move or can't
+     * be had, and the still stays. Not cached, as [loadFull] isn't: each tile holds its own and lets
+     * it go when it leaves composition, and the bytes are a local read from the kit's byte cache.
+     *
+     * Avatars only, and not every inline picture, because they are small and few: a box-sized decode
+     * of a ≤256 px WebP that `AnimatedImageDrawable` steps frame by frame, one per visible run.
+     */
+    suspend fun loadAnimation(path: String, media: MediaSource, mode: DecodeSize.Mode, box: DecodeSize.Pixels): AnimatedImageDrawable? {
+        val started = generation
+        val fetched = try {
+            media.fetch(path) as? MediaFetch.Success ?: return null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // Decoration: the still is already drawn, so a failed fetch just leaves it.
+            Log.w(TAG, "avatar animation fetch failed", e)
+            return null
+        }
+        val drawable = withContext(Dispatchers.Default) {
+            decode(fetched.data.toByteArray()) { w, h -> DecodeSize.inline(w, h, box, mode) }
+        }
+        return (drawable as? AnimatedImageDrawable)?.takeIf { started == generation }
+    }
+
+    /**
      * Drop everything. On sign-out — decoded pictures from the previous account must not survive into
      * the next one's session, and a different instance's signed proxy tokens wouldn't verify anyway.
      */
