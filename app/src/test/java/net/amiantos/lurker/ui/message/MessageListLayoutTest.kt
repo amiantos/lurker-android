@@ -365,6 +365,16 @@ class MessageListLayoutTest {
     }
 
     @Test
+    fun `the tile sits centred between the row's start and the hairline`() {
+        // The web's `--avatar-gutter`: `--space-4` before the tile and again before the hairline.
+        val size = 31.dp
+        val before = AvatarColumn.gutterPadding
+        val after = AvatarColumn.hairline(size) - (before + size)
+        assertEquals(before, after)
+        assertEquals(8.dp + 31.dp + 8.dp + 10.dp, AvatarColumn.gutter(size))
+    }
+
+    @Test
     fun `the tile is centred on the head and first line, lifted, and never above the row`() {
         val metrics = CompactMetrics(blockGap = 12.dp)
         fun top(startsBlock: Boolean, lineHeight: Dp, size: Dp, lift: Dp = 4.dp): Float =
