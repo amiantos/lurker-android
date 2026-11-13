@@ -139,17 +139,21 @@ data class AvatarSpec(
 
 /** The avatar column's measurements — the web's `--avatar-size`, `--space-4` and `--space-5`. */
 object AvatarColumn {
-    /** The web's `--space-4` between the tile and the hairline. The tile itself sits at the row's side margin. */
+    /**
+     * The web's `--space-4`, on both sides of the tile: the list's own padding before it and the gap
+     * to the hairline after it, so the tile sits centred in its panel. The tile takes this inset in
+     * place of the row's side margin, which would leave it off-centre — 20dp before, 8dp after.
+     */
     val gutterPadding: Dp = 8.dp
 
     /** The web's `--space-5` after the hairline, before the text. */
     val gutterAfterLine: Dp = 10.dp
 
-    /** How far the text column sits in from the side margin while avatars are on: the tile, the gap, the hairline, the gap. */
-    fun gutter(size: Dp): Dp = size + gutterPadding + gutterAfterLine
+    /** How far the text column sits in from the row's start while avatars are on: the gap, the tile, the gap, the hairline, the gap. */
+    fun gutter(size: Dp): Dp = hairline(size) + gutterAfterLine
 
-    /** Where the hairline runs, from the side margin. */
-    fun hairline(size: Dp): Dp = size + gutterPadding
+    /** Where the hairline runs, from the row's start. */
+    fun hairline(size: Dp): Dp = gutterPadding + size + gutterPadding
 
     /**
      * The tile's side from measurements already in dp: the web's `min(2.25em, 2lh)` at phone width

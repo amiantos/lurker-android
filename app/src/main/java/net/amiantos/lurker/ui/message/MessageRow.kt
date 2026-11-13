@@ -398,13 +398,14 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
 
     // The avatar column (lurker#607). Every row takes the gutter while avatars are on — continuations
     // and narration too, so bodies stay on one edge — and only a run's first row draws a tile, centred
-    // on its head and first body line, the two lines a short message's wash covers. The tile at the
-    // side margin where the text otherwise starts, the web's `--space-4`, a hairline, then `--space-5`
-    // before the text. The hairline is the row's whole height, the block gap it ends with included,
-    // so the rows abutting make it one line: it has to be drawn on the outer column, outside that
-    // gap's padding, and after the content so a matched block's wash stays under it. On the row
-    // rather than the list, as the web's `.line::before` is; the web also paints a copy on the
-    // scroller that spans its dividers, which neither app does.
+    // on its head and first body line, the two lines a short message's wash covers. The tile with the
+    // web's `--space-4` on either side of it — not the row's side margin, which would leave it
+    // off-centre in its panel — a hairline, then `--space-5` before the text. The hairline is the
+    // row's whole height, the block gap it ends with included, so the rows abutting make it one
+    // line: it has to be drawn on the outer column, outside that gap's padding, and after the
+    // content so a matched block's wash stays under it. On the row rather than the list, as the
+    // web's `.line::before` is; the web also paints a copy on the scroller that spans its dividers,
+    // which neither app does.
     // Swipe to reply (lurker#1248): only a row standing for one message, and only where the screen
     // has a composer to reply from. Whether THIS line takes one is asked when a swipe takes hold.
     val blockGapBelow = if (plan.endsBlock) metrics.blockGap - metrics.wash * 2 else 0.dp
@@ -440,7 +441,7 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                     // as two paler half-lines. The geometry is cached; it moves only with the size.
                     Modifier.drawWithCache {
                         val width = 1.dp.toPx().roundToInt().coerceAtLeast(1).toFloat()
-                        val inset = (CompactMetrics.side + AvatarColumn.hairline(avatars.size)).toPx().roundToInt()
+                        val inset = AvatarColumn.hairline(avatars.size).toPx().roundToInt()
                         val edge = if (layoutDirection == LayoutDirection.Rtl) size.width.roundToInt() - inset else inset
                         val x = edge + width / 2
                         onDrawWithContent {
@@ -461,7 +462,7 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
         Column(
             Modifier
                 .fillMaxWidth()
-                .padding(start = CompactMetrics.side + gutter, end = CompactMetrics.side)
+                .padding(start = if (avatars != null) gutter else CompactMetrics.side, end = CompactMetrics.side)
                 .padding(
                     top = if (plan.startsBlock) metrics.wash else 0.dp,
                     bottom = if (plan.endsBlock) metrics.wash + CompactMetrics.washBottomNudge else 0.dp,
@@ -548,7 +549,7 @@ private fun CompactRow(plan: RowPlan.Compact, context: MessageListContext, modif
                 // A placeholder tile — a notice's megaphone, the server's rack — isn't a person, so a
                 // tap on it falls through to the row as the web lets it.
                 onTap = if (tile.isPerson && message != null) ({ avatars.onTap(message) }) else null,
-                modifier = Modifier.padding(start = CompactMetrics.side, top = top),
+                modifier = Modifier.padding(start = AvatarColumn.gutterPadding, top = top),
             )
         }
         }
