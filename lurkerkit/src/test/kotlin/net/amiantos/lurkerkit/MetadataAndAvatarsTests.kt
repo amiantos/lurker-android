@@ -18,12 +18,15 @@ import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.MetadataLimits
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NickCompletion
+import net.amiantos.lurkerkit.model.SettingOption
+import net.amiantos.lurkerkit.model.SettingType
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.model.SpeakerMap
 import net.amiantos.lurkerkit.model.UploadedAvatarSet
 import net.amiantos.lurkerkit.model.UserMetadata
 import net.amiantos.lurkerkit.rendering.AvatarTiles
+import net.amiantos.lurkerkit.rendering.IRCPalette
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.LurkerStore
 import kotlin.test.Test
@@ -338,12 +341,12 @@ class MetadataAndAvatarsTests {
         Settings(registry = emptyMap(), values = values)
 
     @Test
-    fun testThePointerResolvesAndADanglingOneFallsBackToInitialDark() {
+    fun testThePointerResolvesAndADanglingOneFallsBackToInitial() {
         var sets = AvatarSets()
-        assertEquals("initial-dark", sets.active(settings = settings(emptyMap())).id)
-        assertEquals("plain-light", sets.active(settings = settings(mapOf(AvatarSets.settingKey to SettingValue.String("plain-light")))).id)
-        assertEquals("initial-dark", sets.active(settings = settings(mapOf(AvatarSets.settingKey to SettingValue.String("7")))).id, "unfetched upload")
-        assertEquals("initial-dark", sets.active(settings = settings(mapOf(AvatarSets.settingKey to SettingValue.String("nope")))).id)
+        assertEquals("initial", sets.active(settings = settings(emptyMap())).id)
+        assertEquals("plain", sets.active(settings = settings(mapOf(AvatarSets.settingKey to SettingValue.String("plain")))).id)
+        assertEquals("initial", sets.active(settings = settings(mapOf(AvatarSets.settingKey to SettingValue.String("7")))).id, "unfetched upload")
+        assertEquals("initial", sets.active(settings = settings(mapOf(AvatarSets.settingKey to SettingValue.String("nope")))).id)
         sets = sets.copy(uploaded = listOf(UploadedAvatarSet(id = 7, name = "Cats", count = 12)))
         val active = sets.active(settings = settings(mapOf(AvatarSets.settingKey to SettingValue.String("7"))))
         assertEquals("Cats", active.name)
@@ -351,20 +354,107 @@ class MetadataAndAvatarsTests {
         assertFalse(active.builtin)
     }
 
+    /**
+     * A server from before its schema v28 still stores the ids Initial and Plain had while each
+     * came in two inks. They mean the set they became, not "unknown, so the default".
+     */
+    @Test
+    fun testAnIdFromBeforeTheInkWasAutomaticMeansTheSetItBecame() {
+        val sets = AvatarSets()
+        for ((old, now) in listOf("initial-light" to "initial", "initial-dark" to "initial", "plain-light" to "plain", "plain-dark" to "plain")) {
+            assertEquals(now, AvatarSets.currentSetId(old))
+            assertEquals(now, sets.active(settings = settings(mapOf(AvatarSets.settingKey to SettingValue.String(old)))).id)
+            assertEquals(now, sets.set(old)?.id)
+        }
+        for (id in listOf("ealain", "initial", "plain", "7", "nope")) {
+            assertEquals(id, AvatarSets.currentSetId(id))
+        }
+    }
+
     @Test
     fun testTilePathNeedsAManifestAndAnInitialSetHasNone() {
         var sets = AvatarSets()
         val ealain = settings(mapOf(AvatarSets.settingKey to SettingValue.String("ealain")))
-        assertNull(sets.tilePath(nick = "bob", settings = ealain), "no manifest yet: colour only")
+        assertNull(sets.tilePath(nick = "bob", settings = ealain, ink = AvatarInk.Dark), "no manifest yet: colour only")
         sets = sets.copy(manifests = sets.manifests + ("ealain" to AvatarSetManifest(count = 140)))
-        assertEquals("/avatars/ealain/004.webp", sets.tilePath(nick = "bob", settings = ealain))
-        assertNull(sets.tilePath(nick = "bob", settings = settings(emptyMap())), "initial-dark draws a letter")
-        assertEquals(AvatarInk.Dark, sets.active(settings = settings(emptyMap())).ink)
-        assertEquals(AvatarInk.Light, sets.active(settings = ealain).ink)
+        assertEquals("/avatars/ealain/004.webp", sets.tilePath(nick = "bob", settings = ealain, ink = AvatarInk.Dark))
+        assertEquals("/avatars/ealain/004.webp", sets.tilePath(nick = "bob", settings = ealain, ink = AvatarInk.Light), "art has one ink")
+        assertNull(sets.tilePath(nick = "bob", settings = settings(emptyMap()), ink = AvatarInk.Dark), "Initial draws a letter")
         // The stop chars follow the colour's setting.
-        sets = sets.copy(manifests = sets.manifests + ("ealain" to AvatarSetManifest(count = 140)))
         val dash = settings(mapOf(AvatarSets.settingKey to SettingValue.String("ealain"), "look.nick.color_stop_chars" to SettingValue.String("-")))
-        assertEquals("/avatars/ealain/004.webp", sets.tilePath(nick = "bob-x", settings = dash))
+        assertEquals("/avatars/ealain/004.webp", sets.tilePath(nick = "bob-x", settings = dash, ink = AvatarInk.Dark))
+    }
+
+    /**
+     * The other direction: that server's web client knows no `plain` or `initial`, so a pick made
+     * here is written under the id it does know.
+     */
+    @Test
+    fun testAPickIsWrittenUnderTheIdTheServerKnows() {
+        fun server(default: String): Settings {
+            val option = SettingOption(
+                key = AvatarSets.settingKey, label = "Set", description = "", type = SettingType.String,
+                default = SettingValue.String(default),
+            )
+            return Settings(registry = mapOf(AvatarSets.settingKey to option), values = emptyMap())
+        }
+        val old = server("initial-dark")
+        assertEquals("plain-dark", AvatarSets.storedSetId("plain", settings = old))
+        assertEquals("initial-dark", AvatarSets.storedSetId("initial", settings = old))
+        assertEquals("ealain", AvatarSets.storedSetId("ealain", settings = old))
+        assertEquals("7", AvatarSets.storedSetId("7", settings = old))
+        // Whatever is written reads back as the set that was picked.
+        for (id in listOf("plain", "initial", "ealain")) {
+            assertEquals(id, AvatarSets.currentSetId(AvatarSets.storedSetId(id, settings = old)))
+        }
+        val current = server("initial")
+        for (id in listOf("plain", "initial", "ealain", "7")) {
+            assertEquals(id, AvatarSets.storedSetId(id, settings = current))
+            assertEquals(id, AvatarSets.storedSetId(id, settings = settings(emptyMap())), "no registry yet")
+        }
+    }
+
+    @Test
+    fun testAPlainSetTakesItsSilhouetteFromTheDirectoryOfTheInk() {
+        var sets = AvatarSets()
+        val plain = settings(mapOf(AvatarSets.settingKey to SettingValue.String("plain")))
+        assertNull(sets.tilePath(nick = "bob", settings = plain, ink = AvatarInk.Light), "no manifest yet")
+        // Each directory is counted by its own manifest, as the web counts them: one that has
+        // not been read draws colour only, whatever the other says.
+        sets = sets.copy(manifests = sets.manifests + ("plain-light" to AvatarSetManifest(count = 1)))
+        assertEquals("/avatars/plain-light/000.webp", sets.tilePath(nick = "bob", settings = plain, ink = AvatarInk.Light))
+        assertNull(sets.tilePath(nick = "bob", settings = plain, ink = AvatarInk.Dark))
+        sets = sets.copy(manifests = sets.manifests + ("plain-dark" to AvatarSetManifest(count = 1, ext = "png")))
+        assertEquals("/avatars/plain-light/000.webp", sets.tilePath(nick = "bob", settings = plain, ink = AvatarInk.Light))
+        assertEquals("/avatars/plain-dark/000.png", sets.tilePath(nick = "bob", settings = plain, ink = AvatarInk.Dark))
+        assertEquals(1, sets.active(settings = plain).tileCount)
+    }
+
+    @Test
+    fun testInkFollowsTheLuminanceOfTheColourUnderIt() {
+        fun ink(hex: Int): AvatarInk =
+            AvatarInk.on(red = ((hex shr 16) and 0xff) / 255.0, green = ((hex shr 8) and 0xff) / 255.0, blue = (hex and 0xff) / 255.0)
+        assertEquals(AvatarInk.Dark, ink(0xffffff))
+        assertEquals(AvatarInk.Light, ink(0x000000))
+        // Both built-in nick palettes, whole: the dark theme's pastels take dark ink, the light
+        // theme's deeper hues light. A palette edit that crosses the line fails here.
+        fun hex(string: String): Int = string.drop(1).toInt(16)
+        for (colour in IRCPalette.nick) assertEquals(AvatarInk.Dark, ink(hex(colour)), colour)
+        for (colour in IRCPalette.nickLight) assertEquals(AvatarInk.Light, ink(hex(colour)), colour)
+        // The muted greys under a server line's mark (the app's fgMuted), dark and light.
+        assertEquals(AvatarInk.Dark, ink(0x939293))
+        assertEquals(AvatarInk.Light, ink(0x706b6e))
+        assertEquals(0.28, AvatarInk.luminanceThreshold)
+        assertEquals(1.0, AvatarInk.relativeLuminance(1.0, 1.0, 1.0), 1e-9)
+        assertEquals(0.0, AvatarInk.relativeLuminance(0.0, 0.0, 0.0), 1e-9)
+        // The line itself: above it dark, at or below it light. Greys either side, by search.
+        var below = 0
+        while (AvatarInk.relativeLuminance((below + 1) / 255.0, (below + 1) / 255.0, (below + 1) / 255.0) <= AvatarInk.luminanceThreshold) below++
+        val grey = { v: Int -> AvatarInk.on(v / 255.0, v / 255.0, v / 255.0) }
+        assertEquals(AvatarInk.Light, grey(below))
+        assertEquals(AvatarInk.Dark, grey(below + 1))
+        // Out-of-gamut channels clamp rather than poison the sum.
+        assertEquals(AvatarInk.Dark, AvatarInk.on(red = 1.2, green = 1.1, blue = -0.1))
     }
 
     @Test
@@ -380,9 +470,10 @@ class MetadataAndAvatarsTests {
 
     @Test
     fun testBuiltinsMatchTheWeb() {
-        assertEquals(listOf("ealain", "plain-light", "plain-dark", "initial-light", "initial-dark"), AvatarSets.builtins.map { it.id })
-        assertEquals(listOf("ealain", "plain-light", "plain-dark"), AvatarSets.builtinTileSetIds)
-        assertEquals("initial-dark", AvatarSets.defaultSetId)
+        assertEquals(listOf("ealain", "plain", "initial"), AvatarSets.builtins.map { it.id })
+        assertEquals(listOf("Ealain", "Plain", "Initial"), AvatarSets.builtins.map { it.name })
+        assertEquals(listOf("ealain", "plain-light", "plain-dark"), AvatarSets.builtinManifestDirs)
+        assertEquals("initial", AvatarSets.defaultSetId)
     }
 
     // MARK: - Density
@@ -403,10 +494,10 @@ class MetadataAndAvatarsTests {
         var sets = AvatarSets()
         sets = sets.copy(manifests = sets.manifests + ("ealain" to AvatarSetManifest(count = 140)))
         val active = sets.active(settings = settings(mapOf(AvatarSets.settingKey to SettingValue.String("ealain"))))
-        assertEquals("/avatars/ealain/004.webp", active.tilePath(nick = "bob", stopChars = AvatarTiles.defaultStopChars))
-        assertEquals("/avatars/ealain/004.webp", active.tilePath(nick = "bob-x", stopChars = setOf('-'.code)))
-        assertNull(active.tilePath(nick = null, stopChars = emptySet()))
-        assertNull(sets.active(settings = settings(emptyMap())).tilePath(nick = "bob", stopChars = emptySet()), "an Initial set draws a letter")
+        assertEquals("/avatars/ealain/004.webp", active.tilePath(nick = "bob", stopChars = AvatarTiles.defaultStopChars, ink = AvatarInk.Dark))
+        assertEquals("/avatars/ealain/004.webp", active.tilePath(nick = "bob-x", stopChars = setOf('-'.code), ink = AvatarInk.Dark))
+        assertNull(active.tilePath(nick = null, stopChars = emptySet(), ink = AvatarInk.Dark))
+        assertNull(sets.active(settings = settings(emptyMap())).tilePath(nick = "bob", stopChars = emptySet(), ink = AvatarInk.Dark), "an Initial set draws a letter")
         assertEquals(setOf('-'.code), AvatarSets.stopChars(settings = settings(mapOf("look.nick.color_stop_chars" to SettingValue.String("-")))))
     }
 

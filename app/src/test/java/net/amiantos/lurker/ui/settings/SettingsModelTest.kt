@@ -499,7 +499,7 @@ class SettingsModelTest {
             SettingRow("Avatar placeholders", avatarSet), Settings(mapOf(avatarSet.key to avatarSet), mapOf(avatarSet.key to SettingValue.String("7"))),
             SettingsEdits(), sets,
         ).control as SettingControl.Menu
-        assertEquals(listOf("ealain", "plain-light", "plain-dark", "initial-light", "initial-dark", "7"), control.choices.map { it.value })
+        assertEquals(listOf("ealain", "plain", "initial", "7"), control.choices.map { it.value })
         assertEquals("Cats", control.title)
         assertEquals("Cats", control.spokenTitle)
     }
@@ -511,9 +511,9 @@ class SettingsModelTest {
             SettingsEdits(), AvatarSets.none,
         ).control as SettingControl.Menu
         assertEquals(AvatarSets.defaultSetId, control.current)
-        assertEquals("Initial (Dark)", control.title)
-        assertEquals(5, control.choices.size)
-        // Without the sets at all the row is still a pull-down of the bundled five.
+        assertEquals("Initial", control.title)
+        assertEquals(3, control.choices.size)
+        // Without the sets at all the row is still a pull-down of the bundled three.
         assertTrue(rowState(avatarSet).control is SettingControl.Menu)
     }
 }

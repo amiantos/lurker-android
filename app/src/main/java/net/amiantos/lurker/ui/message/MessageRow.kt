@@ -85,7 +85,7 @@ import java.time.ZoneOffset
  * run's later lines carry no time. A run lasts while the same author keeps talking within
  * `look.message.collapse_authors_window`, whatever the minute. A header-less row — a `/me`, a join, a
  * collapsed run — carries its time after its text. Nothing sits at the trailing edge (lurker#1237).
- * How far apart it all sits is `look.message.compact.*` (lurker#1224), on `MessageTextStyle.density`.
+ * How far apart it all sits is `look.message.modern.*` (lurker#1224), on `MessageTextStyle.density`.
  *
  * What to draw is `MessageListLayout.plan`'s decision; this file only draws it.
  */
@@ -95,7 +95,7 @@ import java.time.ZoneOffset
  * way irssi and weechat look. `bodyMedium`, the buffer list's size (`rosterTextStyle`), so the list
  * and the log beside it read as one surface. lurker-ios's `MessageRenderer.compactFont`.
  *
- * Its line height is `look.message.compact.line_height`, a percentage of the font size as the web's
+ * Its line height is `look.message.modern.line_height`, a percentage of the font size as the web's
  * CSS reads it — the leading Compose splits above and below each line, which is the gap iOS spends
  * between wrapped lines and around each row (`CompactSpacing.lineGap`).
  */
@@ -147,7 +147,7 @@ fun rememberMessageTextStyle(compact: CompactDensity = CompactDensity.standard):
 @Immutable
 internal data class CompactMetrics(
     /**
-     * The gap after the last row of an author block: `look.message.compact.group_gap`, in sp so it
+     * The gap after the last row of an author block: `look.message.modern.group_gap`, in sp so it
      * scales with the font as iOS's scales with Dynamic Type (`CompactSpacing.blockGap`).
      */
     val blockGap: Dp,
@@ -177,7 +177,7 @@ internal data class CompactMetrics(
     }
 
     companion object {
-        /** `look.message.compact.group_gap` at [density]'s font scale. */
+        /** `look.message.modern.group_gap` at [density]'s font scale. */
         fun of(compact: CompactDensity, density: Density): CompactMetrics =
             CompactMetrics(blockGap = with(density) { compact.groupGap.sp.toDp() })
 

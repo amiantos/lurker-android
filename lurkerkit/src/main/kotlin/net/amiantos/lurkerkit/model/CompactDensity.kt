@@ -4,7 +4,7 @@
 package net.amiantos.lurkerkit.model
 
 /**
- * How tightly the compact layout sits: the three `look.message.compact.*` settings (lurker#1186,
+ * How tightly the compact layout sits: the three `look.message.modern.*` settings (lurker#1186,
  * Mobile lurker#1224), in the units the registry stores them in. Turning them into dp and sp is the
  * renderer's job, since that needs the font.
  *
@@ -46,9 +46,9 @@ data class CompactDensity private constructor(
         get() = of(groupGap = groupGap, lineHeightPercent = lineHeightPercent, indent = 0)
 
     companion object {
-        const val groupGapKey = "look.message.compact.group_gap"
-        const val lineHeightKey = "look.message.compact.line_height"
-        const val indentKey = "look.message.compact.indent"
+        const val groupGapKey = "look.message.modern.group_gap"
+        const val lineHeightKey = "look.message.modern.line_height"
+        const val indentKey = "look.message.modern.indent"
         /** The avatar column in the compact layout (lurker#607). Default off. */
         const val avatarsKey = "look.message.avatars"
 

@@ -194,7 +194,14 @@ data class Settings(
      * for a key this server doesn't know. Mirrors the server's `effectiveSetting`
      * (`settingsService.ts:14`) and the web's `settings.effective`.
      */
-    fun effective(key: String): SettingValue? = values[key] ?: registry[key]?.default
+    fun effective(key: String): SettingValue? {
+        values[key]?.let { return it }
+        registry[key]?.default?.let { return it }
+        // A key the server renamed, read under its old name from a server that still has it
+        // there: a self-hosted instance can be older than the app talking to it.
+        val former = SettingsRenames.formerKeys[key] ?: return null
+        return values[former] ?: registry[former]?.default
+    }
 
     /**
      * `effective` with a caller-supplied fallback for the window before bootstrap returns —
@@ -223,8 +230,19 @@ data class Settings(
      * flipping the dependency back has to restore what the user had rather than a default.
      * Mirrors `vue_client/src/utils/settingsRegistry.ts:optionEnabled`.
      */
+    /**
+     * The registry's entry for `key`, under the name this server has it by
+     * ([SettingsRenames.formerKeys]).
+     *
+     * ⚠ Reads only. Nothing here writes a renamed key, and none has a row on the settings screen;
+     * one that gains either has to write the name the server knows, which is the key of the entry
+     * this returns.
+     */
+    fun option(key: String): SettingOption? =
+        registry[key] ?: SettingsRenames.formerKeys[key]?.let { registry[it] }
+
     fun isActive(key: String, depth: Int = 0): Boolean {
-        val option = registry[key]
+        val option = option(key)
         if (option == null || option.dependsOn.isEmpty()) return true
         if (depth >= maxDependencyDepth) return false
         return option.dependsOn.any { dependency ->
@@ -278,4 +296,20 @@ data class Settings(
          */
         const val maxDependencyDepth = 8
     }
+}
+
+/**
+ * Settings the server renamed, new key → the key it had before. The message layouts were
+ * "standard" and "compact" until the server's schema v28 named them Traditional and Modern and
+ * moved every key that said so (`shared/settingsRenames.ts`). [Settings.effective] reads the old
+ * key from a server that still has it there.
+ */
+object SettingsRenames {
+    val formerKeys: Map<String, String> = mapOf(
+        "look.message.modern.group_gap" to "look.message.compact.group_gap",
+        "look.message.modern.line_height" to "look.message.compact.line_height",
+        "look.message.modern.indent" to "look.message.compact.indent",
+        "look.buffer.time_format_modern" to "look.buffer.time_format_compact",
+        "look.buffer.date_format_modern" to "look.buffer.date_format_compact",
+    )
 }

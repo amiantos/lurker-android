@@ -1053,7 +1053,7 @@ class ChatViewModel(
     /**
      * Re-read the uploaded sets and every bundled manifest. The manifests too, every time: a
      * deploy that re-cuts a set changes its count without changing its URL, and a deploy is what
-     * drops the socket — the same reason `/api/config` is read on every reconnect. Three small
+     * drops the socket — the same reason `/api/config` is read on every reconnect. A few small
      * revalidating GETs. A failed read keeps the last answer — one 502 must not blank every tile.
      *
      * Port note: the tickets are taken before the task is launched, as the Swift takes them before
@@ -1064,13 +1064,14 @@ class ChatViewModel(
         val uploadedRead = uploadedSetReads.start()
         val manifestRead = manifestReads.start()
         scope.task {
-            // The four reads at once: they are independent, and tiles after a connect shouldn't wait
-            // for three round trips in a row.
+            // Every read at once: they are independent, and tiles after a connect shouldn't wait
+            // for one round trip after another. The manifests are read by directory name under
+            // `/avatars`, not by set id: a Plain set has one per ink.
             val (uploaded, manifests) = coroutineScope {
                 val list = async { client.fetchAvatarSets() }
-                val reads = AvatarSets.builtinTileSetIds.map { id -> async { id to client.fetchAvatarManifest(setId = id) } }
+                val reads = AvatarSets.builtinManifestDirs.map { dir -> async { dir to client.fetchAvatarManifest(setId = dir) } }
                 val manifests = LinkedHashMap<String, AvatarSetManifest>()
-                for ((id, manifest) in reads.awaitAll()) manifest?.let { manifests[id] = it }
+                for ((dir, manifest) in reads.awaitAll()) manifest?.let { manifests[dir] = it }
                 list.await() to manifests
             }
             if (session != SessionState.LoggedIn) return@task

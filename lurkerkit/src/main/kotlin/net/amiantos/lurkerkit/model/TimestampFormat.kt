@@ -70,12 +70,12 @@ object TimestampFormat {
         return out.toString()
     }
 
-    const val compactTimeKey = "look.buffer.time_format_compact"
-    const val compactDateKey = "look.buffer.date_format_compact"
+    const val compactTimeKey = "look.buffer.time_format_modern"
+    const val compactDateKey = "look.buffer.date_format_modern"
 
     /**
-     * A compact-layout line's time: `look.buffer.time_format_compact`, with
-     * `look.buffer.date_format_compact` before it on a line from a day other than today (lurker#1237),
+     * A compact-layout line's time: `look.buffer.time_format_modern`, with
+     * `look.buffer.date_format_modern` before it on a line from a day other than today (lurker#1237),
      * as the web's `MessageList` builds it. Null when the time format is empty, which hides the time —
      * and the date with it.
      *
