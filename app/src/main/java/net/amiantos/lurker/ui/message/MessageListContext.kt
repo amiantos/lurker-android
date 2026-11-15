@@ -392,7 +392,7 @@ object MessageListLayout {
         }
 
     /**
-     * A compact line's time: `look.buffer.time_format_compact`, with the date before it on a line from
+     * A compact line's time: `look.buffer.time_format_modern`, with the date before it on a line from
      * a day other than [MessageListContext.today] — the screen's day, advanced at midnight, so a
      * redraw past midnight dates yesterday's lines. Null when the format hides it, or the line has no
      * clock.

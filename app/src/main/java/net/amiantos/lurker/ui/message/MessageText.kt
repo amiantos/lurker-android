@@ -55,7 +55,7 @@ import kotlin.math.min
 
 /**
  * What the renderer draws with: the scheme's colours, the compact face's two measurements, and the
- * density (`look.message.compact.*`, lurker#1224). lurker-ios's `UITraitCollection` + `Palette` +
+ * density (`look.message.modern.*`, lurker#1224). lurker-ios's `UITraitCollection` + `Palette` +
  * `CompactSpacing`, as the inputs `MessageRenderer` takes — a plain value, so every function below is
  * pure and runs in a JVM test.
  *
@@ -85,7 +85,7 @@ data class MessageTextStyle(
     val indentEm: Float = 0.6f,
 ) {
     /**
-     * How far a message body sits in from its author: `look.message.compact.indent` characters
+     * How far a message body sits in from its author: `look.message.modern.indent` characters
      * (iOS's `CompactSpacing.bodyIndent`), in em so it is that many characters at any font scale.
      * Narration keeps its own one-character hang, as the web's setting applies only to message bodies.
      */
@@ -789,14 +789,14 @@ object MessageText {
 
     /**
      * Indent and seal a line: a message body sits under its author throughout, by
-     * `look.message.compact.indent` ([MessageTextStyle.bodyIndent]); narration that names its own
+     * `look.message.modern.indent` ([MessageTextStyle.bodyIndent]); narration that names its own
      * actor — a `/me`, a join, a collapsed run — starts flush, since it *is* the nick line, and only
      * its wrapped continuations tuck in, by its own hang: [indentCharacters] characters, two for a
      * `/me`, whose `* ` prefix is two wide. The setting leaves that hang alone, as the web's applies
      * only to message bodies. iOS's `spaced`.
      *
      * The line spacing iOS sets here (`CompactSpacing.lineGap`) is the text style's line height on
-     * Android (`compactTextStyle`, from `look.message.compact.line_height`): it puts a wrapped line the
+     * Android (`compactTextStyle`, from `look.message.modern.line_height`): it puts a wrapped line the
      * same distance from the next as one message is from the next, which is the rhythm the gap exists
      * to keep.
      */
