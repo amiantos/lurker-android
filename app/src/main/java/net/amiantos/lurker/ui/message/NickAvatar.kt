@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.colorspace.ColorSpaces
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -65,10 +66,14 @@ data class AvatarSpec(
     val color: Color,
     /** The metadata avatar's server-minted path, or null for the generated tile. */
     val imagePath: String?,
-    /** The active set's tile for this nick, or null for an Initial set or an unread manifest. */
+    /**
+     * The active set's tile for this nick (a Plain set's in the ink that reads on [color]), or
+     * null for an Initial set or an unread manifest.
+     */
     val tilePath: String?,
     /** The letter an Initial set draws, upper-cased. */
     val letter: String?,
+    /** What reads on [color]: the letter's ink and a placeholder glyph's. */
     val ink: AvatarInk,
     val mark: AvatarMark?,
 ) {
@@ -124,13 +129,14 @@ data class AvatarSpec(
                 // The first code point, as the web's `Array.from(name)[0]`, upper-cased.
                 letter = (shown ?: nick)?.takeIf { it.isNotEmpty() }?.let { String(Character.toChars(it.codePointAt(0))).uppercase() }
             }
+            val ink = AvatarColumn.inkOn(color)
             return AvatarSpec(
                 nick = nick,
                 color = color,
                 imagePath = meta?.avatarUrl,
-                tilePath = if (mark == null) active.tilePath(nick, stopChars) else null,
+                tilePath = if (mark == null) active.tilePath(nick, stopChars, ink) else null,
                 letter = letter,
-                ink = active.ink,
+                ink = ink,
                 mark = mark,
             )
         }
@@ -161,6 +167,16 @@ object AvatarColumn {
     fun size(fontDp: Dp, lineHeightDp: Dp, wide: Boolean): Dp {
         val em = if (wide) 2.7f else 2.25f
         return minOf(fontDp * em, lineHeightDp * 2).value.toInt().dp
+    }
+
+    /**
+     * The ink that reads on a tile of [color] ([AvatarInk.on], the web's `avatarInk`). The
+     * colours here are a theme's or a palette's, already resolved; read as sRGB whatever space
+     * the value is carried in.
+     */
+    fun inkOn(color: Color): AvatarInk {
+        val srgb = color.convert(ColorSpaces.Srgb)
+        return AvatarInk.on(red = srgb.red.toDouble(), green = srgb.green.toDouble(), blue = srgb.blue.toDouble())
     }
 
     /** The web's two inks: `rgba(255,255,255,0.85)` and `rgba(28,26,30,0.85)`. */

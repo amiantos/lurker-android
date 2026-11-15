@@ -505,7 +505,7 @@ object SettingsModel {
 
     /**
      * Choices that depend on what the server holds, so they can't be a static table: the avatar sets
-     * (lurker#607) are the five bundled ones plus whatever the account uploaded on the web. A pointer
+     * (lurker#607) are the three bundled ones plus whatever the account uploaded on the web. A pointer
      * at a set we don't know — one deleted elsewhere, or not fetched yet — reads as the registry
      * default, which is what the list then draws (`AvatarSets.active`).
      */

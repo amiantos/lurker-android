@@ -1068,7 +1068,7 @@ class ChatViewModel(
             // for three round trips in a row.
             val (uploaded, manifests) = coroutineScope {
                 val list = async { client.fetchAvatarSets() }
-                val reads = AvatarSets.builtinTileSetIds.map { id -> async { id to client.fetchAvatarManifest(setId = id) } }
+                val reads = AvatarSets.builtinManifestDirs.map { id -> async { id to client.fetchAvatarManifest(setId = id) } }
                 val manifests = LinkedHashMap<String, AvatarSetManifest>()
                 for ((id, manifest) in reads.awaitAll()) manifest?.let { manifests[id] = it }
                 list.await() to manifests

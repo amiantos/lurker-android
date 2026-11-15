@@ -10,14 +10,38 @@ import net.amiantos.lurkerkit.client.intOrNull
 import net.amiantos.lurkerkit.client.string
 import net.amiantos.lurkerkit.rendering.AvatarTiles
 import kotlin.math.max
+import kotlin.math.pow
 
-/** The ink an Initial set draws its letter in, and a placeholder tile draws its glyph in. */
+/**
+ * What a letter, a silhouette or a placeholder glyph is drawn in over a tile's colour: near-white
+ * or near-black, whichever reads on it. Mirrors `avatarInk` in the web's `shared/avatarTiles.ts`.
+ */
 enum class AvatarInk(val rawValue: String) {
     Light("light"),
     Dark("dark");
 
     companion object {
         fun fromRawValue(raw: String): AvatarInk? = entries.firstOrNull { it.rawValue == raw }
+
+        /**
+         * Above this relative luminance a tile's colour takes dark ink, at or below it light. The
+         * two built-in nick palettes sit either side (the dark theme's pastels start at 0.305, the
+         * light theme's stop at 0.274), so each keeps the ink it was drawn for.
+         */
+        const val luminanceThreshold = 0.29
+
+        /** WCAG 2 relative luminance of an sRGB colour, channels 0..1 (clamped), 0 (black) .. 1 (white). */
+        fun relativeLuminance(red: Double, green: Double, blue: Double): Double {
+            fun linear(channel: Double): Double {
+                val c = channel.coerceIn(0.0, 1.0)
+                return if (c <= 0.04045) c / 12.92 else ((c + 0.055) / 1.055).pow(2.4)
+            }
+            return 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue)
+        }
+
+        /** The ink for a tile of this sRGB colour, channels 0..1. */
+        fun on(red: Double, green: Double, blue: Double): AvatarInk =
+            if (relativeLuminance(red, green, blue) > luminanceThreshold) Dark else Light
     }
 }
 
@@ -43,29 +67,37 @@ data class AvatarSet(
          */
         data class Tiles(val baseUrl: String, val count: Int, val ext: String) : Kind
 
-        /** No files: the first letter of the shown name, in `ink`. */
-        data class Initial(val ink: AvatarInk) : Kind
+        /**
+         * One silhouette kept in both inks, each a directory of tiles like [Tiles]: the tile's
+         * colour says which ([AvatarInk.on]).
+         */
+        data class Plain(val light: String, val dark: String, val count: Int, val ext: String) : Kind
+
+        /** No files: the first letter of the shown name. */
+        data object Initial : Kind
     }
 
-    /**
-     * The ink for a letter or a placeholder glyph on this set's tiles: an Initial set's own,
-     * light for a tiles set — the web's `NickAvatar` makes the same choice.
-     */
-    val ink: AvatarInk
-        get() = (kind as? Kind.Initial)?.ink ?: AvatarInk.Light
-
     val tileCount: Int
-        get() = (kind as? Kind.Tiles)?.count ?: 0
+        get() = when (kind) {
+            is Kind.Tiles -> kind.count
+            is Kind.Plain -> kind.count
+            Kind.Initial -> 0
+        }
 
     /**
      * The server-relative path of `nick`'s tile in this set, or null when there is no image to
-     * draw: an Initial set, a tiles set whose manifest hasn't landed, or no nick. `stopChars` is
+     * draw: an Initial set, a tiles set whose manifest hasn't landed, or no nick. `ink` is what
+     * reads on the nick's colour — a Plain set has its silhouette in each. `stopChars` is
      * the colour's (`look.nick.color_stop_chars`), resolved once by the caller for every row.
      */
-    fun tilePath(nick: String?, stopChars: Set<Int>): String? {
-        val tiles = kind as? Kind.Tiles ?: return null
-        val index = AvatarTiles.index(nick = nick, count = tiles.count, stopChars = stopChars) ?: return null
-        return AvatarTiles.url(base = tiles.baseUrl, index = index, ext = tiles.ext)
+    fun tilePath(nick: String?, stopChars: Set<Int>, ink: AvatarInk): String? {
+        val (base, count, ext) = when (kind) {
+            is Kind.Tiles -> Triple(kind.baseUrl, kind.count, kind.ext)
+            is Kind.Plain -> Triple(if (ink == AvatarInk.Light) kind.light else kind.dark, kind.count, kind.ext)
+            Kind.Initial -> return null
+        }
+        val index = AvatarTiles.index(nick = nick, count = count, stopChars = stopChars) ?: return null
+        return AvatarTiles.url(base = base, index = index, ext = ext)
     }
 }
 
@@ -91,7 +123,7 @@ data class AvatarSetManifest(
  * in `ChatState.settings` like every other key; `active(settings)` resolves the pointer.
  */
 data class AvatarSets(
-    /** The bundled tiles sets whose manifests have been read, by id. */
+    /** The bundled tile directories whose manifests have been read, by directory name (`/avatars/<name>`). */
     val manifests: Map<String, AvatarSetManifest> = emptyMap(),
     val uploaded: List<UploadedAvatarSet> = emptyList(),
 ) {
@@ -99,16 +131,19 @@ data class AvatarSets(
     val all: List<AvatarSet>
         get() {
             val bundled = builtins.map { set ->
-                val tiles = set.kind as? AvatarSet.Kind.Tiles ?: return@map set
-                val manifest = manifests[set.id] ?: return@map set
-                AvatarSet(
-                    id = set.id, name = set.name,
-                    kind = AvatarSet.Kind.Tiles(
-                        baseUrl = tiles.baseUrl, count = manifest.count,
-                        ext = if (manifest.ext.isEmpty()) tiles.ext else manifest.ext,
-                    ),
-                    builtin = true,
-                )
+                val manifest = manifestDir(set.kind)?.let { manifests[it] } ?: return@map set
+                val kind = when (val was = set.kind) {
+                    is AvatarSet.Kind.Tiles -> AvatarSet.Kind.Tiles(
+                        baseUrl = was.baseUrl, count = manifest.count,
+                        ext = if (manifest.ext.isEmpty()) was.ext else manifest.ext,
+                    )
+                    is AvatarSet.Kind.Plain -> was.copy(
+                        count = manifest.count,
+                        ext = if (manifest.ext.isEmpty()) was.ext else manifest.ext,
+                    )
+                    AvatarSet.Kind.Initial -> return@map set
+                }
+                AvatarSet(id = set.id, name = set.name, kind = kind, builtin = true)
             }
             val mine = uploaded.map { row ->
                 AvatarSet(
@@ -120,7 +155,11 @@ data class AvatarSets(
             return bundled + mine
         }
 
-    fun set(id: String): AvatarSet? = all.firstOrNull { it.id == id }
+    /** The set an id names, an id from before the ink was automatic included. */
+    fun set(id: String): AvatarSet? {
+        val current = currentSetId(id)
+        return all.firstOrNull { it.id == current }
+    }
 
     /**
      * The set `look.avatars.set` points at, or the default when it names nothing we know: an
@@ -136,13 +175,13 @@ data class AvatarSets(
      * `nick`'s tile in the active set — `AvatarSet.tilePath` after `active(settings)`. For one
      * lookup; a list resolves the set once and asks it per row.
      */
-    fun tilePath(nick: String?, settings: Settings): String? =
-        active(settings = settings).tilePath(nick = nick, stopChars = stopChars(settings = settings))
+    fun tilePath(nick: String?, settings: Settings, ink: AvatarInk): String? =
+        active(settings = settings).tilePath(nick = nick, stopChars = stopChars(settings = settings), ink = ink)
 
     companion object {
         const val settingKey = "look.avatars.set"
         /** What the registry defaults to and where a dangling pointer falls back. */
-        const val defaultSetId = "initial-dark"
+        const val defaultSetId = "initial"
         const val ealainSetId = "ealain"
 
         /**
@@ -151,17 +190,39 @@ data class AvatarSets(
          */
         val builtins: List<AvatarSet> = listOf(
             AvatarSet(id = ealainSetId, name = "Ealain", kind = AvatarSet.Kind.Tiles(baseUrl = "/avatars/ealain", count = 0, ext = "webp"), builtin = true),
-            AvatarSet(id = "plain-light", name = "Plain (Light)", kind = AvatarSet.Kind.Tiles(baseUrl = "/avatars/plain-light", count = 0, ext = "webp"), builtin = true),
-            AvatarSet(id = "plain-dark", name = "Plain (Dark)", kind = AvatarSet.Kind.Tiles(baseUrl = "/avatars/plain-dark", count = 0, ext = "webp"), builtin = true),
-            AvatarSet(id = "initial-light", name = "Initial (Light)", kind = AvatarSet.Kind.Initial(ink = AvatarInk.Light), builtin = true),
-            AvatarSet(id = "initial-dark", name = "Initial (Dark)", kind = AvatarSet.Kind.Initial(ink = AvatarInk.Dark), builtin = true),
+            AvatarSet(
+                id = "plain", name = "Plain",
+                kind = AvatarSet.Kind.Plain(light = "/avatars/plain-light", dark = "/avatars/plain-dark", count = 0, ext = "webp"),
+                builtin = true,
+            ),
+            AvatarSet(id = "initial", name = "Initial", kind = AvatarSet.Kind.Initial, builtin = true),
         )
 
         val none = AvatarSets()
 
-        /** The bundled ids that have files to fetch a manifest for. */
-        val builtinTileSetIds: List<String>
-            get() = builtins.mapNotNull { set -> if (set.kind is AvatarSet.Kind.Tiles) set.id else null }
+        /**
+         * Initial and Plain each came in a light and a dark ink the user chose between, until the
+         * ink followed the tile's colour. The server moves a stored pointer (its schema v28); a
+         * server from before that still holds the old id, which means the set it became here.
+         */
+        fun currentSetId(id: String): String = when (id) {
+            "initial-light", "initial-dark" -> "initial"
+            "plain-light", "plain-dark" -> "plain"
+            else -> id
+        }
+
+        /**
+         * The bundled directories to fetch a manifest from. A Plain set's two hold the same
+         * tiles, so the light one speaks for the count.
+         */
+        val builtinManifestDirs: List<String>
+            get() = builtins.mapNotNull { set -> manifestDir(set.kind) }
+
+        private fun manifestDir(kind: AvatarSet.Kind): String? = when (kind) {
+            is AvatarSet.Kind.Tiles -> kind.baseUrl
+            is AvatarSet.Kind.Plain -> kind.light
+            AvatarSet.Kind.Initial -> null
+        }?.substringAfterLast('/')
 
         /** The colour's stop characters as the tile hash wants them (`look.nick.color_stop_chars`). */
         fun stopChars(settings: Settings): Set<Int> =
