@@ -26,9 +26,11 @@ enum class AvatarInk(val rawValue: String) {
         /**
          * Above this relative luminance a tile's colour takes dark ink, at or below it light. The
          * two built-in nick palettes sit either side (the dark theme's pastels start at 0.305, the
-         * light theme's stop at 0.274), so each keeps the ink it was drawn for.
+         * light theme's stop at 0.274), so each keeps the ink it was drawn for. The dark theme's
+         * muted grey (#939293, 0.289), which the apps put under a server line's mark, is above it
+         * too.
          */
-        const val luminanceThreshold = 0.29
+        const val luminanceThreshold = 0.28
 
         /** WCAG 2 relative luminance of an sRGB colour, channels 0..1 (clamped), 0 (black) .. 1 (white). */
         fun relativeLuminance(red: Double, green: Double, blue: Double): Double {
@@ -65,24 +67,55 @@ data class AvatarSet(
          * Static image files under `baseUrl` (server-relative), numbered `000.<ext>` up to
          * `count`. Zero tiles means the manifest hasn't been read yet: draw colour only.
          */
-        data class Tiles(val baseUrl: String, val count: Int, val ext: String) : Kind
+        data class Tiles(val baseUrl: String, val count: Int = 0, val ext: String = "webp") : Kind {
+            /** The directory's name under `/avatars`, which is what its manifest is read and kept by. */
+            val dir: String get() = baseUrl.substringAfterLast('/')
+
+            override fun countedBy(manifests: Map<String, AvatarSetManifest>): Tiles {
+                val manifest = manifests[dir] ?: return this
+                return copy(count = manifest.count, ext = manifest.ext.ifEmpty { ext })
+            }
+        }
 
         /**
-         * One silhouette kept in both inks, each a directory of tiles like [Tiles]: the tile's
-         * colour says which ([AvatarInk.on]).
+         * One silhouette kept in both inks, each its own directory of tiles with its own
+         * manifest: the tile's colour says which ([AvatarInk.on]).
          */
-        data class Plain(val light: String, val dark: String, val count: Int, val ext: String) : Kind
+        data class Plain(val light: Tiles, val dark: Tiles) : Kind {
+            override fun countedBy(manifests: Map<String, AvatarSetManifest>): Plain =
+                Plain(light = light.countedBy(manifests), dark = dark.countedBy(manifests))
+        }
 
         /** No files: the first letter of the shown name. */
-        data object Initial : Kind
+        data object Initial : Kind {
+            override fun countedBy(manifests: Map<String, AvatarSetManifest>): Initial = this
+        }
+
+        /** The tiles a nick on `ink` draws from, null for a set with no files. */
+        fun tiles(ink: AvatarInk): Tiles? = when (this) {
+            is Tiles -> this
+            is Plain -> if (ink == AvatarInk.Light) light else dark
+            Initial -> null
+        }
+
+        /** Every directory of tiles the set has. */
+        val directories: List<Tiles>
+            get() = when (this) {
+                is Tiles -> listOf(this)
+                is Plain -> listOf(light, dark)
+                Initial -> emptyList()
+            }
+
+        /** The set's tiles, each directory counted by its own manifest where it has been read. */
+        fun countedBy(manifests: Map<String, AvatarSetManifest>): Kind
     }
 
+    /**
+     * How many tiles the set draws from; a Plain set's two directories hold the same tiles, so
+     * either says.
+     */
     val tileCount: Int
-        get() = when (kind) {
-            is Kind.Tiles -> kind.count
-            is Kind.Plain -> kind.count
-            Kind.Initial -> 0
-        }
+        get() = kind.directories.maxOfOrNull { it.count } ?: 0
 
     /**
      * The server-relative path of `nick`'s tile in this set, or null when there is no image to
@@ -91,13 +124,9 @@ data class AvatarSet(
      * the colour's (`look.nick.color_stop_chars`), resolved once by the caller for every row.
      */
     fun tilePath(nick: String?, stopChars: Set<Int>, ink: AvatarInk): String? {
-        val (base, count, ext) = when (kind) {
-            is Kind.Tiles -> Triple(kind.baseUrl, kind.count, kind.ext)
-            is Kind.Plain -> Triple(if (ink == AvatarInk.Light) kind.light else kind.dark, kind.count, kind.ext)
-            Kind.Initial -> return null
-        }
-        val index = AvatarTiles.index(nick = nick, count = count, stopChars = stopChars) ?: return null
-        return AvatarTiles.url(base = base, index = index, ext = ext)
+        val tiles = kind.tiles(ink) ?: return null
+        val index = AvatarTiles.index(nick = nick, count = tiles.count, stopChars = stopChars) ?: return null
+        return AvatarTiles.url(base = tiles.baseUrl, index = index, ext = tiles.ext)
     }
 }
 
@@ -130,21 +159,7 @@ data class AvatarSets(
     /** Every set, bundled first in the web's order, then the uploaded ones as listed. */
     val all: List<AvatarSet>
         get() {
-            val bundled = builtins.map { set ->
-                val manifest = manifestDir(set.kind)?.let { manifests[it] } ?: return@map set
-                val kind = when (val was = set.kind) {
-                    is AvatarSet.Kind.Tiles -> AvatarSet.Kind.Tiles(
-                        baseUrl = was.baseUrl, count = manifest.count,
-                        ext = if (manifest.ext.isEmpty()) was.ext else manifest.ext,
-                    )
-                    is AvatarSet.Kind.Plain -> was.copy(
-                        count = manifest.count,
-                        ext = if (manifest.ext.isEmpty()) was.ext else manifest.ext,
-                    )
-                    AvatarSet.Kind.Initial -> return@map set
-                }
-                AvatarSet(id = set.id, name = set.name, kind = kind, builtin = true)
-            }
+            val bundled = builtins.map { set -> set.copy(kind = set.kind.countedBy(manifests)) }
             val mine = uploaded.map { row ->
                 AvatarSet(
                     id = row.id.toString(), name = row.name,
@@ -189,10 +204,13 @@ data class AvatarSets(
          * Same ids, names and order as the web.
          */
         val builtins: List<AvatarSet> = listOf(
-            AvatarSet(id = ealainSetId, name = "Ealain", kind = AvatarSet.Kind.Tiles(baseUrl = "/avatars/ealain", count = 0, ext = "webp"), builtin = true),
+            AvatarSet(id = ealainSetId, name = "Ealain", kind = AvatarSet.Kind.Tiles(baseUrl = "/avatars/ealain"), builtin = true),
             AvatarSet(
                 id = "plain", name = "Plain",
-                kind = AvatarSet.Kind.Plain(light = "/avatars/plain-light", dark = "/avatars/plain-dark", count = 0, ext = "webp"),
+                kind = AvatarSet.Kind.Plain(
+                    light = AvatarSet.Kind.Tiles(baseUrl = "/avatars/plain-light"),
+                    dark = AvatarSet.Kind.Tiles(baseUrl = "/avatars/plain-dark"),
+                ),
                 builtin = true,
             ),
             AvatarSet(id = "initial", name = "Initial", kind = AvatarSet.Kind.Initial, builtin = true),
@@ -212,17 +230,31 @@ data class AvatarSets(
         }
 
         /**
-         * The bundled directories to fetch a manifest from. A Plain set's two hold the same
-         * tiles, so the light one speaks for the count.
+         * The id to write for a set: its own, or on a server from before schema v28 (one whose
+         * registry default is still an old id) the dark-ink id the set had there. That server's
+         * web client knows no `plain` or `initial` and would draw its default for either; the
+         * dark ink is the one its default had. Read back, either id is the same set here
+         * ([currentSetId]).
+         */
+        fun storedSetId(id: String, settings: Settings): String =
+            storedSetId(id = id, serverDefault = settings.registry[settingKey]?.default?.stringValue)
+
+        /** [storedSetId] for a caller already holding the registry's default for the key. */
+        fun storedSetId(id: String, serverDefault: String?): String {
+            if (serverDefault == null || currentSetId(serverDefault) == serverDefault) return id
+            return when (id) {
+                "initial" -> "initial-dark"
+                "plain" -> "plain-dark"
+                else -> id
+            }
+        }
+
+        /**
+         * The bundled directories to fetch a manifest from, by name. A Plain set has one per ink,
+         * each counted by its own, as the web counts them.
          */
         val builtinManifestDirs: List<String>
-            get() = builtins.mapNotNull { set -> manifestDir(set.kind) }
-
-        private fun manifestDir(kind: AvatarSet.Kind): String? = when (kind) {
-            is AvatarSet.Kind.Tiles -> kind.baseUrl
-            is AvatarSet.Kind.Plain -> kind.light
-            AvatarSet.Kind.Initial -> null
-        }?.substringAfterLast('/')
+            get() = builtins.flatMap { set -> set.kind.directories.map { it.dir } }
 
         /** The colour's stop characters as the tile hash wants them (`look.nick.color_stop_chars`). */
         fun stopChars(settings: Settings): Set<Int> =

@@ -230,8 +230,19 @@ data class Settings(
      * flipping the dependency back has to restore what the user had rather than a default.
      * Mirrors `vue_client/src/utils/settingsRegistry.ts:optionEnabled`.
      */
+    /**
+     * The registry's entry for `key`, under the name this server has it by
+     * ([SettingsRenames.formerKeys]).
+     *
+     * ⚠ Reads only. Nothing here writes a renamed key, and none has a row on the settings screen;
+     * one that gains either has to write the name the server knows, which is the key of the entry
+     * this returns.
+     */
+    fun option(key: String): SettingOption? =
+        registry[key] ?: SettingsRenames.formerKeys[key]?.let { registry[it] }
+
     fun isActive(key: String, depth: Int = 0): Boolean {
-        val option = registry[key]
+        val option = option(key)
         if (option == null || option.dependsOn.isEmpty()) return true
         if (depth >= maxDependencyDepth) return false
         return option.dependsOn.any { dependency ->

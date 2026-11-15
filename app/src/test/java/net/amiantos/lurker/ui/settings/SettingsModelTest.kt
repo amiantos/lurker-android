@@ -513,7 +513,7 @@ class SettingsModelTest {
         assertEquals(AvatarSets.defaultSetId, control.current)
         assertEquals("Initial", control.title)
         assertEquals(3, control.choices.size)
-        // Without the sets at all the row is still a pull-down of the bundled five.
+        // Without the sets at all the row is still a pull-down of the bundled three.
         assertTrue(rowState(avatarSet).control is SettingControl.Menu)
     }
 }

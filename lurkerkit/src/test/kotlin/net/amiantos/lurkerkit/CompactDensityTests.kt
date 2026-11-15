@@ -4,6 +4,7 @@
 package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.model.CompactDensity
+import net.amiantos.lurkerkit.model.SettingDependency
 import net.amiantos.lurkerkit.model.SettingOption
 import net.amiantos.lurkerkit.model.SettingType
 import net.amiantos.lurkerkit.model.SettingValue
@@ -123,5 +124,19 @@ class CompactDensityTests {
         val old = Settings(registry = emptyMap(), values = mapOf("look.buffer.time_format_compact" to SettingValue.String("h:mm a")))
         assertEquals("h:mm a", old.string(TimestampFormat.compactTimeKey, default = "HH:mm"))
         assertNull(Settings(registry = emptyMap(), values = emptyMap()).effective(TimestampFormat.compactTimeKey))
+    }
+
+    /** A dependency is read off the registry's entry, which an older server keeps under the old key. */
+    @Test
+    fun testARenamedKeysRegistryEntryIsFoundUnderItsOldName() {
+        val former = SettingsRenames.formerKeys.getValue(CompactDensity.indentKey)
+        val entry = SettingOption(
+            key = former, label = "Indent", description = "", type = SettingType.Int, default = SettingValue.Int(1),
+            dependsOn = listOf(SettingDependency(key = "look.message.avatars", values = listOf(SettingValue.Bool(false)))),
+        )
+        val old = Settings(registry = mapOf(former to entry), values = mapOf("look.message.avatars" to SettingValue.Bool(true)))
+        assertEquals(former, old.option(CompactDensity.indentKey)?.key)
+        assertFalse(old.isActive(CompactDensity.indentKey), "the old entry's dependency still counts")
+        assertNull(old.option("look.no.such.key"))
     }
 }

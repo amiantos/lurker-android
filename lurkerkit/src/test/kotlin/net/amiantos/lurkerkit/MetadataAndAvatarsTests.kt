@@ -18,12 +18,15 @@ import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.MetadataLimits
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NickCompletion
+import net.amiantos.lurkerkit.model.SettingOption
+import net.amiantos.lurkerkit.model.SettingType
 import net.amiantos.lurkerkit.model.SettingValue
 import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.model.SpeakerMap
 import net.amiantos.lurkerkit.model.UploadedAvatarSet
 import net.amiantos.lurkerkit.model.UserMetadata
 import net.amiantos.lurkerkit.rendering.AvatarTiles
+import net.amiantos.lurkerkit.rendering.IRCPalette
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.LurkerStore
 import kotlin.test.Test
@@ -382,15 +385,48 @@ class MetadataAndAvatarsTests {
         assertEquals("/avatars/ealain/004.webp", sets.tilePath(nick = "bob-x", settings = dash, ink = AvatarInk.Dark))
     }
 
+    /**
+     * The other direction: that server's web client knows no `plain` or `initial`, so a pick made
+     * here is written under the id it does know.
+     */
+    @Test
+    fun testAPickIsWrittenUnderTheIdTheServerKnows() {
+        fun server(default: String): Settings {
+            val option = SettingOption(
+                key = AvatarSets.settingKey, label = "Set", description = "", type = SettingType.String,
+                default = SettingValue.String(default),
+            )
+            return Settings(registry = mapOf(AvatarSets.settingKey to option), values = emptyMap())
+        }
+        val old = server("initial-dark")
+        assertEquals("plain-dark", AvatarSets.storedSetId("plain", settings = old))
+        assertEquals("initial-dark", AvatarSets.storedSetId("initial", settings = old))
+        assertEquals("ealain", AvatarSets.storedSetId("ealain", settings = old))
+        assertEquals("7", AvatarSets.storedSetId("7", settings = old))
+        // Whatever is written reads back as the set that was picked.
+        for (id in listOf("plain", "initial", "ealain")) {
+            assertEquals(id, AvatarSets.currentSetId(AvatarSets.storedSetId(id, settings = old)))
+        }
+        val current = server("initial")
+        for (id in listOf("plain", "initial", "ealain", "7")) {
+            assertEquals(id, AvatarSets.storedSetId(id, settings = current))
+            assertEquals(id, AvatarSets.storedSetId(id, settings = settings(emptyMap())), "no registry yet")
+        }
+    }
+
     @Test
     fun testAPlainSetTakesItsSilhouetteFromTheDirectoryOfTheInk() {
         var sets = AvatarSets()
         val plain = settings(mapOf(AvatarSets.settingKey to SettingValue.String("plain")))
         assertNull(sets.tilePath(nick = "bob", settings = plain, ink = AvatarInk.Light), "no manifest yet")
-        // The light directory's manifest speaks for both.
+        // Each directory is counted by its own manifest, as the web counts them: one that has
+        // not been read draws colour only, whatever the other says.
         sets = sets.copy(manifests = sets.manifests + ("plain-light" to AvatarSetManifest(count = 1)))
         assertEquals("/avatars/plain-light/000.webp", sets.tilePath(nick = "bob", settings = plain, ink = AvatarInk.Light))
-        assertEquals("/avatars/plain-dark/000.webp", sets.tilePath(nick = "bob", settings = plain, ink = AvatarInk.Dark))
+        assertNull(sets.tilePath(nick = "bob", settings = plain, ink = AvatarInk.Dark))
+        sets = sets.copy(manifests = sets.manifests + ("plain-dark" to AvatarSetManifest(count = 1, ext = "png")))
+        assertEquals("/avatars/plain-light/000.webp", sets.tilePath(nick = "bob", settings = plain, ink = AvatarInk.Light))
+        assertEquals("/avatars/plain-dark/000.png", sets.tilePath(nick = "bob", settings = plain, ink = AvatarInk.Dark))
         assertEquals(1, sets.active(settings = plain).tileCount)
     }
 
@@ -400,13 +436,15 @@ class MetadataAndAvatarsTests {
             AvatarInk.on(red = ((hex shr 16) and 0xff) / 255.0, green = ((hex shr 8) and 0xff) / 255.0, blue = (hex and 0xff) / 255.0)
         assertEquals(AvatarInk.Dark, ink(0xffffff))
         assertEquals(AvatarInk.Light, ink(0x000000))
-        // One from each built-in nick palette: the dark theme's pastels take dark ink, the light
-        // theme's deeper hues light.
-        assertEquals(AvatarInk.Dark, ink(0xffd866))
-        assertEquals(AvatarInk.Dark, ink(0xff6188), "the dark palette's darkest, 0.305")
-        assertEquals(AvatarInk.Light, ink(0x3163c0))
-        assertEquals(AvatarInk.Light, ink(0xcc7a0a), "the light palette's lightest, 0.274")
-        assertEquals(0.29, AvatarInk.luminanceThreshold)
+        // Both built-in nick palettes, whole: the dark theme's pastels take dark ink, the light
+        // theme's deeper hues light. A palette edit that crosses the line fails here.
+        fun hex(string: String): Int = string.drop(1).toInt(16)
+        for (colour in IRCPalette.nick) assertEquals(AvatarInk.Dark, ink(hex(colour)), colour)
+        for (colour in IRCPalette.nickLight) assertEquals(AvatarInk.Light, ink(hex(colour)), colour)
+        // The muted greys under a server line's mark (the app's fgMuted), dark and light.
+        assertEquals(AvatarInk.Dark, ink(0x939293))
+        assertEquals(AvatarInk.Light, ink(0x706b6e))
+        assertEquals(0.28, AvatarInk.luminanceThreshold)
         assertEquals(1.0, AvatarInk.relativeLuminance(1.0, 1.0, 1.0), 1e-9)
         assertEquals(0.0, AvatarInk.relativeLuminance(0.0, 0.0, 0.0), 1e-9)
         // The line itself: above it dark, at or below it light. Greys either side, by search.
@@ -434,7 +472,7 @@ class MetadataAndAvatarsTests {
     fun testBuiltinsMatchTheWeb() {
         assertEquals(listOf("ealain", "plain", "initial"), AvatarSets.builtins.map { it.id })
         assertEquals(listOf("Ealain", "Plain", "Initial"), AvatarSets.builtins.map { it.name })
-        assertEquals(listOf("ealain", "plain-light"), AvatarSets.builtinManifestDirs)
+        assertEquals(listOf("ealain", "plain-light", "plain-dark"), AvatarSets.builtinManifestDirs)
         assertEquals("initial", AvatarSets.defaultSetId)
     }
 

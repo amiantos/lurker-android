@@ -21,9 +21,15 @@ class AvatarInkTest {
 
     @Test
     fun eitherSideOfTheLineInTheBuiltInPalettes() {
-        // The dark palette's darkest and the light palette's lightest: 0.305 and 0.274 around 0.29.
-        assertEquals(AvatarInk.Dark, AvatarColumn.inkOn(Color(0xFFFF6188)))
-        assertEquals(AvatarInk.Light, AvatarColumn.inkOn(Color(0xFFCC7A0A)))
+        // The colours nearest the line: the dark palette's darkest (#ed6c89, 0.305) and the light
+        // palette's lightest (#409ba9, 0.274), around 0.28. The kit's test walks both whole.
+        assertEquals(AvatarInk.Dark, AvatarColumn.inkOn(Color(0xFFED6C89)))
+        assertEquals(AvatarInk.Light, AvatarColumn.inkOn(Color(0xFF409BA9)))
+    }
+
+    @Test
+    fun theMutedGreyUnderAServerMarkKeepsDarkInkOnTheDarkTheme() {
+        assertEquals(AvatarInk.Dark, AvatarColumn.inkOn(Color(0xFF939293)))
     }
 
     @Test
