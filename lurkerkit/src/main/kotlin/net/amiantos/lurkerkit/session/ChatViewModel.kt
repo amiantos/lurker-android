@@ -319,6 +319,10 @@ class ChatViewModel(
     private val channelEventsSubject = MutableSharedFlow<ChannelEvent>(extraBufferCapacity = Int.MAX_VALUE - 1)
 
     sealed interface ChannelEvent {
+        /**
+         * ⚠ Never a row fetched after the fact (`Message.replay`): those screens fold a line in
+         * as the newest word on the channel, and an old `-b` or `+k` from a filled gap is not.
+         */
         data class Line(val key: BufferKey, val message: Message) : ChannelEvent
 
         /**
@@ -3111,9 +3115,11 @@ class ChatViewModel(
 
         when (frame) {
             is ServerFrame.Live -> {
-                channelEventsSubject.tryEmit(
-                    ChannelEvent.Line(BufferKey(networkId = frame.networkId, target = frame.target), frame.message),
-                )
+                if (!frame.message.replay) {
+                    channelEventsSubject.tryEmit(
+                        ChannelEvent.Line(BufferKey(networkId = frame.networkId, target = frame.target), frame.message),
+                    )
+                }
                 noteUnknownCommand(frame.networkId, frame.message)
                 // Not for a line already held — the store dropped it, and the alert went with it.
                 if (!repeatsLine) {

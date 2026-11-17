@@ -350,6 +350,22 @@ class FrameParserTests {
         )
     }
 
+    /** lurker#1283: a line fetched after the fact says so, and the store must be able to tell. */
+    @Test
+    fun testALiveLineCarriesItsReplayFlag() {
+        val replayed = FrameParser.parseWs(
+            """{"kind":"irc","networkId":1,"target":"#lurker","type":"join","id":7,"nick":"bob","replay":true}""",
+        )
+        if (replayed !is ServerFrame.Live) fail("expected live, got $replayed")
+        assertTrue(replayed.message.replay)
+
+        val heard = FrameParser.parseWs(
+            """{"kind":"irc","networkId":1,"target":"#lurker","type":"join","id":8,"nick":"bob"}""",
+        )
+        if (heard !is ServerFrame.Live) fail("expected live, got $heard")
+        assertFalse(heard.message.replay)
+    }
+
     @Test
     fun testAMemberUpdateParsesItsMemberSnapshot() {
         val frame = FrameParser.parseWs(

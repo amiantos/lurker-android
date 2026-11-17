@@ -1589,6 +1589,7 @@ internal object FrameParser {
             dm = event.bool("dm"),
             notifyAlways = event.bool("notifyAlways"),
             selfKicked = event.bool("selfKicked"),
+            replay = event.bool("replay"),
             // Absent on every line that wasn't deleted (lurker#1013); `text` is null beside it.
             redaction = parseRedaction(event["redaction"]),
         )

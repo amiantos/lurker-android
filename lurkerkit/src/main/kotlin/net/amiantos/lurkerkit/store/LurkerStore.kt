@@ -2485,7 +2485,11 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             // `join-error` is aimed at the channel it refused — and a row minted for it read
             // joined, so the list showed the refused channel and `/join`'s wait switched the user
             // into it.
-            if (next.buffers[key] == null && message.id == 0L &&
+            //
+            // A row fetched after the fact (`replay`) is no better evidence: it is persisted, but
+            // it says where things stood, and a channel closed on this device mid-fill came back
+            // joined.
+            if (next.buffers[key] == null && (message.id == 0L || message.replay) &&
                 BufferKind.of(networkId = networkId, target = target) == BufferKind.Channel
             ) {
                 return next
@@ -2517,7 +2521,11 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             // overlap would otherwise re-apply an old topic over the current one, silently
             // reverting the channel's topic to whatever it was at replay time. The Vue client
             // hit this first and its handler carries the same warning.
-            if (message.type == EventType.Topic) {
+            //
+            // ⚠ And not at all for a row fetched after the fact (`replay`, §9.6): a gap filled
+            // from the network's history is new as a row and old as state, whatever its id. The
+            // rejoin's 332 and NAMES already said where things stand.
+            if (message.type == EventType.Topic && !message.replay) {
                 val buffer = next.buffers[key]
                 if (buffer != null) {
                     // …and who set it, from the same line: its author and its time.
@@ -2534,7 +2542,10 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             // replayed join must not resurrect a member who has since parted. Backlog and
             // history replays deliberately don't fold — the snapshot/`names` list is the
             // authoritative baseline those events predate.
-            next = next.copy(members = next.members.setting(key, foldMembership(next.members[key], message)))
+            // A fetched-after-the-fact row (`replay`) doesn't fold either, for the same reason.
+            if (!message.replay) {
+                next = next.copy(members = next.members.setting(key, foldMembership(next.members[key], message)))
+            }
             // Who spoke here and when (lurker-ios#63) — the same seat below the id de-dupe as the
             // fold above, so a replayed line can't restate a speaker's recency.
             //
@@ -2552,6 +2563,8 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             // A rename carries the entry with it, so someone who spoke and then went `_afk`
             // doesn't read as a stranger when they quit ten seconds later.
             val newNick = message.newNick
+            // A replayed rename carries it too: a replayed line records its speaker just above,
+            // and the entry has to end up under the nick they hold now.
             if (message.type == EventType.Nick && nick != null && newNick != null) {
                 val map = next.speakers[key]
                 if (map != null) next = next.copy(speakers = next.speakers + (key to map.rename(old = nick, new = newNick)))
@@ -2572,7 +2585,8 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             // left. The web does the same, keyed off the resolved buffer (`stores/buffers.ts:444`).
             val speaker = message.nick?.lowercase()
             val typists = next.typing[key]
-            if (speaker != null && typists != null && typists[speaker] != null) {
+            // Not for a replayed row: an old line says nothing about who is typing now.
+            if (!message.replay && speaker != null && typists != null && typists[speaker] != null) {
                 val remaining = typists - speaker
                 next = next.copy(typing = next.typing.setting(key, if (remaining.isEmpty()) null else remaining))
             }

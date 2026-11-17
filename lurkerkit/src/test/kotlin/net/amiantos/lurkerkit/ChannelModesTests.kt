@@ -236,6 +236,18 @@ class ChannelModesTests {
                 ),
             ),
         )
+        // A row fetched after the fact (lurker#1283) is not the newest word on the channel: an
+        // old `-b` from a filled gap would take a ban that is in force off an open list.
+        model.handle(
+            ServerFrame.Live(
+                networkId = 1, target = "#C",
+                message = Message(
+                    id = 8, type = EventType.Mode, nick = "op", text = "-b x",
+                    modes = listOf(ModeChange(mode = "-b", param = "x", kind = ModeChangeKind.List)),
+                    replay = true,
+                ),
+            ),
+        )
         model.handle(ServerFrame.SocketOpen)
         model.handle(
             ServerFrame.Snapshot(

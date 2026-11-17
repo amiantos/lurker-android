@@ -1057,6 +1057,113 @@ class LurkerStoreTests {
         assertEquals(2, store.state.messages[chanKey]?.size, "and must not re-print the line")
     }
 
+    // Rows fetched after the fact (lurker#1283, §9.6).
+    //
+    // A gap filled from the network's history arrives on the live socket with ids NEWER than
+    // anything held, so the id de-dupe waves it through. `replay` is what says it is old: such
+    // a row is drawn, and moves neither the nicklist nor the topic.
+
+    @Test
+    fun testAReplayRowIsDrawnButDoesNotMoveTheNicklist() {
+        val store = LurkerStore()
+        seedMembers(store, listOf(Member(nick = "alice"), Member(nick = "bob")))
+        val rows = listOf(
+            Message(id = 20, type = EventType.Join, nick = "carol", text = null, replay = true),
+            Message(id = 21, type = EventType.Part, nick = "alice", text = null, replay = true),
+            Message(id = 22, type = EventType.Quit, nick = "bob", text = null, replay = true),
+            Message(id = 23, type = EventType.Kick, nick = "op", text = null, kicked = "alice", replay = true),
+            Message(id = 24, type = EventType.Nick, nick = "bob", text = null, newNick = "robert", replay = true),
+        )
+        for (row in rows) store.apply(live("#lurker", row))
+
+        assertEquals(listOf("alice", "bob"), store.state.members[chanKey]!!.map { it.nick })
+        assertEquals(
+            listOf(20L, 21L, 22L, 23L, 24L),
+            store.state.messages[chanKey]?.map { it.id },
+            "the rows are still lines",
+        )
+    }
+
+    @Test
+    fun testAReplayedTopicRowDoesNotSetTheTopic() {
+        val store = LurkerStore()
+        store.apply(channelBuffer(hydrated = true, messages = emptyList()))
+        store.apply(live("#lurker", topicEvent(5, "current")))
+
+        store.apply(
+            live(
+                "#lurker",
+                Message(id = 9, type = EventType.Topic, nick = "alice", text = "from last week", replay = true),
+            ),
+        )
+
+        assertEquals("current", store.state.buffers[chanKey]!!.topic)
+        assertEquals("alice", store.state.channelModes[chanKey]?.topicSetBy, "nor who set it")
+        assertEquals(2, store.state.messages[chanKey]?.size, "the old change is still a line")
+    }
+
+    @Test
+    fun testAReplayRowLeavesATypistTyping() {
+        val store = LurkerStore()
+        seedMembers(store, listOf(Member(nick = "alice")))
+        store.apply(aliceTyping)
+        assertNotNull(store.state.typing[chanKey]?.get("alice"))
+
+        store.apply(
+            live(
+                "#lurker",
+                Message(id = 30, type = EventType.Message, nick = "alice", text = "from before the drop", replay = true),
+            ),
+        )
+        assertNotNull(store.state.typing[chanKey]?.get("alice"), "an old line says nothing about now")
+
+        store.apply(live("#lurker", Message(id = 31, type = EventType.Message, nick = "alice", text = "now")))
+        assertNull(store.state.typing[chanKey]?.get("alice"), "the control: a live line ends the run")
+    }
+
+    /**
+     * A replayed line records its speaker, so the replayed rename after it has to carry the
+     * entry: the nick they hold now is the one a later quit is looked up under.
+     */
+    @Test
+    fun testAReplayedRenameCarriesTheSpeaker() {
+        val store = LurkerStore()
+        seedMembers(store, listOf(Member(nick = "robert")))
+        store.apply(live("#lurker", Message(id = 40, type = EventType.Message, nick = "bob", text = "hi", replay = true)))
+        store.apply(
+            live(
+                "#lurker",
+                Message(id = 41, type = EventType.Nick, nick = "bob", text = null, newNick = "robert", replay = true),
+            ),
+        )
+
+        assertEquals(listOf("robert"), store.state.members[chanKey]!!.map { it.nick }, "the nicklist is untouched")
+        assertNotNull(store.state.speakers[chanKey]?.get("robert"))
+        assertNull(store.state.speakers[chanKey]?.get("bob"))
+    }
+
+    /** A replayed row is no sign we are in a channel this device holds no row for. */
+    @Test
+    fun testAReplayRowDoesNotMintAChannel() {
+        val store = LurkerStore()
+        seedMembers(store, emptyList())
+        val key = BufferKey(networkId = 1, target = "#closed").id
+        store.apply(live("#closed", Message(id = 50, type = EventType.Message, nick = "alice", text = "old", replay = true)))
+        assertNull(store.state.buffers[key])
+    }
+
+    /** The control: the same rows heard live do move state. */
+    @Test
+    fun testTheSameRowsHeardLiveDoMoveState() {
+        val store = LurkerStore()
+        seedMembers(store, listOf(Member(nick = "alice")))
+        store.apply(live("#lurker", Message(id = 20, type = EventType.Join, nick = "carol", text = null)))
+        store.apply(live("#lurker", topicEvent(21, "new")))
+
+        assertEquals(listOf("alice", "carol"), store.state.members[chanKey]!!.map { it.nick })
+        assertEquals("new", store.state.buffers[chanKey]!!.topic)
+    }
+
     @Test
     fun testAClearedTopicReadsAsNoTopicRatherThanTheLastOne() {
         val store = LurkerStore()
