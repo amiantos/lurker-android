@@ -1057,6 +1057,62 @@ class LurkerStoreTests {
         assertEquals(2, store.state.messages[chanKey]?.size, "and must not re-print the line")
     }
 
+    // Rows fetched after the fact (lurker#1283, §9.6).
+    //
+    // A gap filled from the network's history arrives on the live socket with ids NEWER than
+    // anything held, so the id de-dupe waves it through. `replay` is what says it is old: such
+    // a row is drawn, and moves neither the nicklist nor the topic.
+
+    @Test
+    fun testAReplayRowIsDrawnButDoesNotMoveTheNicklist() {
+        val store = LurkerStore()
+        seedMembers(store, listOf(Member(nick = "alice"), Member(nick = "bob")))
+        val rows = listOf(
+            Message(id = 20, type = EventType.Join, nick = "carol", text = null, replay = true),
+            Message(id = 21, type = EventType.Part, nick = "alice", text = null, replay = true),
+            Message(id = 22, type = EventType.Quit, nick = "bob", text = null, replay = true),
+            Message(id = 23, type = EventType.Kick, nick = "op", text = null, kicked = "alice", replay = true),
+            Message(id = 24, type = EventType.Nick, nick = "bob", text = null, newNick = "robert", replay = true),
+        )
+        for (row in rows) store.apply(live("#lurker", row))
+
+        assertEquals(listOf("alice", "bob"), store.state.members[chanKey]!!.map { it.nick })
+        assertEquals(
+            listOf(20L, 21L, 22L, 23L, 24L),
+            store.state.messages[chanKey]?.map { it.id },
+            "the rows are still lines",
+        )
+    }
+
+    @Test
+    fun testAReplayedTopicRowDoesNotSetTheTopic() {
+        val store = LurkerStore()
+        store.apply(channelBuffer(hydrated = true, messages = emptyList()))
+        store.apply(live("#lurker", topicEvent(5, "current")))
+
+        store.apply(
+            live(
+                "#lurker",
+                Message(id = 9, type = EventType.Topic, nick = "alice", text = "from last week", replay = true),
+            ),
+        )
+
+        assertEquals("current", store.state.buffers[chanKey]!!.topic)
+        assertEquals(2, store.state.messages[chanKey]?.size, "the old change is still a line")
+    }
+
+    /** The control: the same rows heard live do move state. */
+    @Test
+    fun testTheSameRowsHeardLiveDoMoveState() {
+        val store = LurkerStore()
+        seedMembers(store, listOf(Member(nick = "alice")))
+        store.apply(live("#lurker", Message(id = 20, type = EventType.Join, nick = "carol", text = null)))
+        store.apply(live("#lurker", topicEvent(21, "new")))
+
+        assertEquals(listOf("alice", "carol"), store.state.members[chanKey]!!.map { it.nick })
+        assertEquals("new", store.state.buffers[chanKey]!!.topic)
+    }
+
     @Test
     fun testAClearedTopicReadsAsNoTopicRatherThanTheLastOne() {
         val store = LurkerStore()

@@ -161,6 +161,13 @@ data class Message private constructor(
     /** A kick of us — only the server knows the nick we wore when it landed. */
     val selfKicked: Boolean,
     /**
+     * A line Lurker fetched after the fact, not one heard live (§9.3, lurker#1283): a gap filled
+     * from the network's history after a reconnect, or a bouncer's playback at attach. Only the
+     * live frame carries it. Such a row is drawn and counted like any other, but it is old as
+     * state: it must not move the nicklist or the topic (§9.6), whatever its id.
+     */
+    val replay: Boolean,
+    /**
      * The line was deleted (lurker#1013): the server NULLed its text and this says who and when.
      * On the wire for a row read back deleted; set by [deleted] for one deleted while held.
      *
@@ -229,6 +236,7 @@ data class Message private constructor(
         dm: Boolean = false,
         notifyAlways: Boolean = false,
         selfKicked: Boolean = false,
+        replay: Boolean = false,
         redaction: Redaction? = null,
     ) : this(
         id = id,
@@ -260,6 +268,7 @@ data class Message private constructor(
         dm = dm,
         notifyAlways = notifyAlways,
         selfKicked = selfKicked,
+        replay = replay,
         redaction = redaction,
         replyQuote = null,
         unstrippedText = null,
