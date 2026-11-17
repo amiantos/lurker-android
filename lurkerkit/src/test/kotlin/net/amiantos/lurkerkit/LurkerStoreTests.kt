@@ -1098,7 +1098,58 @@ class LurkerStoreTests {
         )
 
         assertEquals("current", store.state.buffers[chanKey]!!.topic)
+        assertEquals("alice", store.state.channelModes[chanKey]?.topicSetBy, "nor who set it")
         assertEquals(2, store.state.messages[chanKey]?.size, "the old change is still a line")
+    }
+
+    @Test
+    fun testAReplayRowLeavesATypistTyping() {
+        val store = LurkerStore()
+        seedMembers(store, listOf(Member(nick = "alice")))
+        store.apply(aliceTyping)
+        assertNotNull(store.state.typing[chanKey]?.get("alice"))
+
+        store.apply(
+            live(
+                "#lurker",
+                Message(id = 30, type = EventType.Message, nick = "alice", text = "from before the drop", replay = true),
+            ),
+        )
+        assertNotNull(store.state.typing[chanKey]?.get("alice"), "an old line says nothing about now")
+
+        store.apply(live("#lurker", Message(id = 31, type = EventType.Message, nick = "alice", text = "now")))
+        assertNull(store.state.typing[chanKey]?.get("alice"), "the control: a live line ends the run")
+    }
+
+    /**
+     * A replayed line records its speaker, so the replayed rename after it has to carry the
+     * entry: the nick they hold now is the one a later quit is looked up under.
+     */
+    @Test
+    fun testAReplayedRenameCarriesTheSpeaker() {
+        val store = LurkerStore()
+        seedMembers(store, listOf(Member(nick = "robert")))
+        store.apply(live("#lurker", Message(id = 40, type = EventType.Message, nick = "bob", text = "hi", replay = true)))
+        store.apply(
+            live(
+                "#lurker",
+                Message(id = 41, type = EventType.Nick, nick = "bob", text = null, newNick = "robert", replay = true),
+            ),
+        )
+
+        assertEquals(listOf("robert"), store.state.members[chanKey]!!.map { it.nick }, "the nicklist is untouched")
+        assertNotNull(store.state.speakers[chanKey]?.get("robert"))
+        assertNull(store.state.speakers[chanKey]?.get("bob"))
+    }
+
+    /** A replayed row is no sign we are in a channel this device holds no row for. */
+    @Test
+    fun testAReplayRowDoesNotMintAChannel() {
+        val store = LurkerStore()
+        seedMembers(store, emptyList())
+        val key = BufferKey(networkId = 1, target = "#closed").id
+        store.apply(live("#closed", Message(id = 50, type = EventType.Message, nick = "alice", text = "old", replay = true)))
+        assertNull(store.state.buffers[key])
     }
 
     /** The control: the same rows heard live do move state. */

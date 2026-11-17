@@ -2485,7 +2485,11 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             // `join-error` is aimed at the channel it refused — and a row minted for it read
             // joined, so the list showed the refused channel and `/join`'s wait switched the user
             // into it.
-            if (next.buffers[key] == null && message.id == 0L &&
+            //
+            // A row fetched after the fact (`replay`) is no better evidence: it is persisted, but
+            // it says where things stood, and a channel closed on this device mid-fill came back
+            // joined.
+            if (next.buffers[key] == null && (message.id == 0L || message.replay) &&
                 BufferKind.of(networkId = networkId, target = target) == BufferKind.Channel
             ) {
                 return next
@@ -2559,7 +2563,9 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             // A rename carries the entry with it, so someone who spoke and then went `_afk`
             // doesn't read as a stranger when they quit ten seconds later.
             val newNick = message.newNick
-            if (message.type == EventType.Nick && !message.replay && nick != null && newNick != null) {
+            // A replayed rename carries it too: a replayed line records its speaker just above,
+            // and the entry has to end up under the nick they hold now.
+            if (message.type == EventType.Nick && nick != null && newNick != null) {
                 val map = next.speakers[key]
                 if (map != null) next = next.copy(speakers = next.speakers + (key to map.rename(old = nick, new = newNick)))
             }
