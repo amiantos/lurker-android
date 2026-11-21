@@ -62,8 +62,12 @@ data class PushMessage(
     }
 
     companion object {
-        /** The keys `NotificationTap.parse` reads. */
-        val TAP_KEYS = listOf("networkId", "target", "messageId")
+        /**
+         * The keys `NotificationTap.parse` reads. `kind` is one of them: it is how a tap on a test
+         * push (`kind: "test"`, placeholder routing keys) is told from a tap that names a buffer
+         * (lurker#1273), so it has to ride the intent with the rest.
+         */
+        val TAP_KEYS = listOf("networkId", "target", "messageId", "kind")
 
         /**
          * Null when there is nothing to show: no `title` means a server older than lurker#1046, which

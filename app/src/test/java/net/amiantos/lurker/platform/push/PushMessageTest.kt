@@ -48,7 +48,44 @@ class PushMessageTest {
         val tap = NotificationTap.parse(PushMessage.parse(dm)!!.tap)
         assertEquals(NotificationTap(networkId = 7, target = "bob", messageId = 42), tap)
         // Only the routing keys ride the intent; the message text stays out of it.
-        assertEquals(setOf("networkId", "target", "messageId"), PushMessage.parse(dm)!!.tap.keys)
+        assertEquals(setOf("networkId", "target", "messageId", "kind"), PushMessage.parse(dm)!!.tap.keys)
+    }
+
+    /**
+     * The server's test push (lurker#1273, `POST /api/push/test`): placeholder routing keys, there
+     * because parsers refuse a payload without them. Tapped, it opens nothing.
+     */
+    private val testPush = mapOf(
+        "kind" to "test",
+        "networkId" to "0",
+        "networkName" to "Lurker",
+        "target" to "test",
+        "text" to "Lurker can reach this device.",
+        "time" to "2026-10-05T12:00:00.000Z",
+        "title" to "Test notification",
+        "body" to "Push is working.",
+        "tag" to "test",
+    )
+
+    @Test
+    fun aTapOnATestPushOpensNothing() {
+        val message = PushMessage.parse(testPush)!!
+        // Still shown: that it arrives is the whole point of it.
+        assertEquals("Test notification", message.title)
+        // `kind` rides the intent, which is what lets the kit refuse the placeholder destination.
+        assertEquals("test", message.tap["kind"])
+        assertNull(NotificationTap.parse(message.tap))
+        // ⚠ Without it the same keys are a destination: buffer `test` on network 0.
+        assertEquals(NotificationTap(networkId = 0, target = "test"), NotificationTap.parse(message.tap - "kind"))
+    }
+
+    @Test
+    fun aRelayedTestPushOpensNothingEither() {
+        // The relayed road: the Web Push body, decrypted and flattened into the same string map.
+        val body =
+            """{"title":"Test notification","body":"Push is working.","tag":"test","networkId":0,"target":"test","kind":"test"}"""
+        val message = PushMessage.parse(RelayPush.flatten(body)!!)!!
+        assertNull(NotificationTap.parse(message.tap))
     }
 
     @Test
@@ -70,7 +107,7 @@ class PushMessageTest {
         val online = dm + mapOf("kind" to "friend_online", "body" to "", "tag" to "7::bob::presence") - "text" - "messageId"
         val message = PushMessage.parse(online)!!
         assertEquals("", message.body)
-        assertEquals(setOf("networkId", "target"), message.tap.keys)
+        assertEquals(setOf("networkId", "target", "kind"), message.tap.keys)
     }
 
     @Test
