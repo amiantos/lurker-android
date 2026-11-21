@@ -441,6 +441,35 @@ class FeedPagerTest {
     }
 
     @Test
+    fun aPullThatReplacesARetryTakesItsBusyNoticeDown() {
+        // A page-in's retry is out, its notice busy below the rows; the reader pulls. The pull
+        // replaces the retry, so nothing is left for the notice to be busy with.
+        val pager = FeedPager(supersedes = false)
+        pager.land(pager.reload()!!, page(3, 2, next = 2))
+        pager.land(pager.loadMore()!!, FeedAnswer.Failed)
+        val stale = pager.retry()!!
+        assertTrue(pager.snapshot().retrying)
+        val pull = pager.reload(byPull = true)!!
+        assertFalse(pager.snapshot().retrying)
+        assertNull(pager.snapshot().failure)
+        assertTrue(pager.snapshot().refreshing)
+        assertNull(pager.land(stale, FeedAnswer.Failed))
+        assertNull(pager.snapshot().failure)
+        pager.land(pull, page(5, 4))
+        assertNull(pager.snapshot().failure)
+
+        // A repeat pull that is dropped issues nothing, and leaves a first-page retry's notice busy:
+        // that retry is still the fetch in flight.
+        val busy = FeedPager(supersedes = false)
+        busy.land(busy.reload()!!, page(3, 2, next = 2))
+        busy.land(busy.reload(byPull = true)!!, FeedAnswer.Failed)
+        assertNotNull(busy.retry())
+        assertNull(busy.reload(byPull = true))
+        assertTrue(busy.snapshot().retrying)
+        assertNotNull(busy.snapshot().failureAbove)
+    }
+
+    @Test
     fun aFailedOpenSaysTheServersReasonInThePlaceholder() {
         val error = StateModel("Couldn't search", StateSymbol.Warning, "Pull to try again, or edit your search.")
         val pager = FeedPager(supersedes = true)

@@ -693,6 +693,10 @@ internal class LurkerClient(
     /**
      * `goneIsDone` is for a removal: a 404 says the thing is already gone, which is what was
      * asked for, so it is success rather than a refusal to show the user.
+     *
+     * ⚠ Only the server's own 404, the one with a JSON `{error}` body. A 404 without one came
+     * from somewhere else — a reverse proxy while the server restarts, or a server too old to
+     * have the route (Express answers those in HTML) — and says nothing about the row.
      */
     private suspend fun act(
         method: String,
@@ -755,7 +759,8 @@ internal class LurkerClient(
                 reportUnauthorized(sentWith = token)
                 return RestResult.Failure("Signed out.")
             }
-            if (code in 200..<300 || (goneIsDone && code == 404)) return RestResult.Ok(text)
+            val gone = goneIsDone && code == 404 && FrameParser.errorMessage(text) != null
+            if (code in 200..<300 || gone) return RestResult.Ok(text)
             // The server explains its own refusals — a host the admin's allowlist excludes, a
             // missing field, a paused account — and its wording is better than anything this
             // layer could infer from a status code.
@@ -1580,10 +1585,9 @@ internal class LurkerClient(
      * must not be stuck on the list.
      */
     suspend fun forgetUpload(id: Int): String? {
-        // ⚠ No `goneIsDone` here, unlike the delete above. This route is new in lurker 2.7.0, and
-        // an older server answers 404 for the route itself; read as "already gone" that would
-        // take the row off the screen while the server still holds it.
-        return act("DELETE", forgetUploadPath(id = id))
+        // This route is new in lurker 2.7.0. An older server answers 404 for the route itself,
+        // in HTML, which `goneIsDone` does not take for "already gone".
+        return act("DELETE", forgetUploadPath(id = id), goneIsDone = true)
     }
 
     /**

@@ -187,11 +187,27 @@ class FeedRequestTests {
         }
 
     @Test
+    fun testForgettingARowThatIsAlreadyGoneIsDone() =
+        signedIn("DELETE /api/uploads/7/record" to (404 to """{"error":"not found"}""")) { h ->
+            val refusal = h.onMain { h.model.forgetUpload(id = 7) }
+            assertNull(refusal)
+        }
+
+    @Test
     fun testForgettingOnAServerWithoutTheRouteIsNotReadAsDone() =
-        // Before lurker 2.7.0 the route itself is a 404; the row is still there.
-        signedIn { h ->
+        // Before lurker 2.7.0 the route itself is a 404, answered by Express in HTML; the row is
+        // still there.
+        signedIn("DELETE /api/uploads/7/record" to (404 to "<pre>Cannot DELETE /api/uploads/7/record</pre>")) { h ->
             val refusal = h.onMain { h.model.forgetUpload(id = 7) }
             assertNotNull(refusal)
             assertEquals(1, asked(h.server, "DELETE /api/uploads/7/record"))
+        }
+
+    @Test
+    fun testA404ThatIsNotTheServersOwnDoesNotCountAsDeleted() =
+        // A reverse proxy answering while the server restarts: the file was never destroyed.
+        signedIn("DELETE /api/uploads/7" to (404 to "404 page not found")) { h ->
+            val refusal = h.onMain { h.model.deleteUpload(id = 7) }
+            assertNotNull(refusal)
         }
 }

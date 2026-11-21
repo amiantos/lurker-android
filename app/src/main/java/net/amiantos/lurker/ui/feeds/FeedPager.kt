@@ -136,6 +136,9 @@ class FeedPager(
         }
         reloadGeneration = fetch.generation
         refreshing = byPull
+        // A pull or a new question replaces a retry that was out: its notice is no longer busy
+        // with anything.
+        retrying = null
         return fetch
     }
 
