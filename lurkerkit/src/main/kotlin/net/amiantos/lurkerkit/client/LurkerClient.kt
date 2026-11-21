@@ -1548,11 +1548,18 @@ internal class LurkerClient(
     /**
      * Destroy an upload's bytes and drop its row. Null on success, else the server's own reason.
      *
-     * ⚠⚠ Only ever called for a row whose `canDelete` is set. There is deliberately no
-     * remove-the-record-but-leave-the-file path — the route answers 409 for a row whose bytes
-     * can't be destroyed, so asking for one is a bug on this side, not a case to handle.
+     * ⚠⚠ Only ever called for a row whose `canDelete` is set: the route answers 409 for a row
+     * whose bytes can't be destroyed. That row leaves the list through `forgetUpload`.
      */
     suspend fun deleteUpload(id: Int): String? = act("DELETE", "/api/uploads/$id")
+
+    /**
+     * Drop an upload's row and leave its file wherever it is (lurker#1289). Null on success,
+     * else the server's own reason. For a row that can't be deleted, and the way out for one
+     * whose delete failed: the server's `can_delete` is a judgment, and a row it gets wrong
+     * must not be stuck on the list.
+     */
+    suspend fun forgetUpload(id: Int): String? = act("DELETE", forgetUploadPath(id = id))
 
     /**
      * Tell the network we're composing. Fire-and-forget: the server turns it into a
@@ -2626,6 +2633,8 @@ internal class LurkerClient(
     }
 
     internal companion object {
+        fun forgetUploadPath(id: Int): String = "/api/uploads/$id/record"
+
         /** OkHttp's close code for "going away" — LurkerKit's `.goingAway`. */
         private const val GOING_AWAY = 1001
 

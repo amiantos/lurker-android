@@ -4,7 +4,10 @@
 package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.client.FrameParser
+import net.amiantos.lurkerkit.client.LurkerClient
+import net.amiantos.lurkerkit.model.UploadItem
 import net.amiantos.lurkerkit.model.UploadKind
+import net.amiantos.lurkerkit.model.UploadRemoval
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -118,5 +121,41 @@ class UploadHistoryTests {
     fun garbageIsEmpty() {
         assertTrue(FrameParser.parseUploads("not json").items.isEmpty())
         assertTrue(FrameParser.parseUploads("""{"items":[]}""").items.isEmpty())
+    }
+}
+
+/** How a row leaves the list (lurker#1289, lurker#1295). */
+class UploadRemovalTests {
+
+    private fun item(canDelete: Boolean, removed: Boolean = false): UploadItem =
+        UploadItem(id = 7, url = "https://files.example/a.png", canDelete = canDelete, removed = removed)
+
+    /** a row whose file can be destroyed offers Delete */
+    @Test
+    fun deletableRowIsDestroyed() {
+        assertEquals(UploadRemoval.Destroy, item(canDelete = true).removal)
+    }
+
+    /** a row whose file is out of reach is taken off the list instead */
+    @Test
+    fun undeletableRowIsForgotten() {
+        // The case the issue is about: before this the row offered nothing, and stayed forever.
+        assertEquals(UploadRemoval.Forget, item(canDelete = false).removal)
+        // A moderation tombstone is one of them: the server sends `can_delete: false` for it.
+        assertEquals(UploadRemoval.Forget, item(canDelete = false, removed = true).removal)
+    }
+
+    /** the confirmation says the file stays, except where there is no file left */
+    @Test
+    fun forgetMessageDropsTheReassuranceOnATombstone() {
+        assertTrue(item(canDelete = false).forgetMessage?.contains("stays where it is") == true)
+        assertNull(item(canDelete = false, removed = true).forgetMessage)
+    }
+
+    /** forgetting asks for the record route, not the delete route */
+    @Test
+    fun forgetPathIsTheRecordRoute() {
+        // ⚠ One path segment apart from the route that destroys the file.
+        assertEquals("/api/uploads/7/record", LurkerClient.forgetUploadPath(id = 7))
     }
 }

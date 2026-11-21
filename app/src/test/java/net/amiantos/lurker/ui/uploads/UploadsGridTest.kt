@@ -278,9 +278,36 @@ class UploadsGridTest {
     }
 
     @Test
-    fun aTombstoneOffersOnlyToClearAStarItAlreadyHas() {
-        assertEquals(emptyList<UploadAction>(), UploadTiles.actions(item(1, removed = true), canInsert = true))
-        assertEquals(listOf(UploadAction.Unstar), UploadTiles.actions(item(1, removed = true, favorite = true), canInsert = true))
+    fun aRowWhoseFileIsOutOfReachIsTakenOffTheListInstead() {
+        // lurker#1295: before this the row offered no way off the list, and stayed forever.
+        val stuck = UploadTiles.actions(item(1, canDelete = false), canInsert = true)
+        assertEquals(UploadAction.RemoveFromList, stuck.last())
+        // One or the other, never both: a row has one way to leave.
+        val deletable = UploadTiles.actions(item(1, canDelete = true), canInsert = true)
+        assertEquals(UploadAction.Delete, deletable.last())
+        assertFalse(UploadAction.RemoveFromList in deletable)
+        assertTrue(UploadAction.Delete.destructive)
+        assertTrue(UploadAction.RemoveFromList.destructive)
+        assertFalse(UploadAction.CopyLink.destructive)
+    }
+
+    @Test
+    fun aTombstoneOffersToLeaveTheListAndToClearAStarItAlreadyHas() {
+        // The server sends `can_delete: false` for a tombstone, so it too can only be taken off the list.
+        assertEquals(listOf(UploadAction.RemoveFromList), UploadTiles.actions(item(1, removed = true), canInsert = true))
+        assertEquals(
+            listOf(UploadAction.Unstar, UploadAction.RemoveFromList),
+            UploadTiles.actions(item(1, removed = true, favorite = true), canInsert = true),
+        )
+    }
+
+    @Test
+    fun aRowTakenOffTheListGoesAsADeletedOneDoes() {
+        // Either road ends in `deleted`: the row goes, and a star refusal still out never brings it back.
+        val (optimistic, revert) = loaded(3, 2, 1).star(item(2))!!
+        val gone = optimistic.deleted(2)
+        assertEquals(listOf(3, 1), gone.items.map { it.id })
+        assertEquals(gone, gone.revert(revert))
     }
 
     @Test

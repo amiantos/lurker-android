@@ -1402,6 +1402,12 @@ class ChatViewModel(
     suspend fun deleteUpload(id: Int): String? = client.deleteUpload(id = id)
 
     /**
+     * Take an upload off the list and leave its file alone (lurker#1289). Null on success, else
+     * the server's own reason.
+     */
+    suspend fun forgetUpload(id: Int): String? = client.forgetUpload(id = id)
+
+    /**
      * What the UI should do after a line of input — almost always nothing. `/msg` and `/query`
      * to a channel ask the composer's owner to switch to it. To a nick they ask nothing of the
      * screen: the DM opens once its row exists (`openAndShow`), which a screen switching at once

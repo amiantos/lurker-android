@@ -9,6 +9,7 @@ import net.amiantos.lurkerkit.model.LinkPreview
 import net.amiantos.lurkerkit.model.PreviewKind
 import net.amiantos.lurkerkit.model.UploadItem
 import net.amiantos.lurkerkit.model.UploadKind
+import net.amiantos.lurkerkit.model.UploadRemoval
 import net.amiantos.lurkerkit.model.UploadsFilter
 import net.amiantos.lurkerkit.model.UploadsPage
 import net.amiantos.lurkerkit.model.UploadsRequest
@@ -188,7 +189,10 @@ data class UploadsGrid(
         return if (pendingStars[id] == revert.token) copy(pendingStars = pendingStars - id) else this
     }
 
-    /** A delete went through: the row goes, and any star change still out for it is void. */
+    /**
+     * The row is gone from the server, by either road — a delete, or taken off the list with its file
+     * left alone (lurker#1295): the row goes, and any star change still out for it is void.
+     */
     fun deleted(id: Int): UploadsGrid {
         val gone = copy(deletedIds = deletedIds + id, pendingStars = pendingStars - id)
         val index = items.indexOfFirst { it.id == id }
@@ -274,6 +278,17 @@ enum class UploadAction(val title: String) {
     CopyLink("Copy Link"),
     Share("Share…"),
     Delete("Delete"),
+
+    /**
+     * Take the row off the list and leave the file wherever it is (lurker#1295). What a row offers
+     * when its file can't be destroyed from here: another uploader's, one whose config is gone, a
+     * moderation tombstone.
+     */
+    RemoveFromList("Remove from List"),
+    ;
+
+    /** Drawn in the error colour: the row goes, and there is no undo. */
+    val destructive: Boolean get() = this == Delete || this == RemoveFromList
 }
 
 /** The tile's words and menu, pure — lurker-ios's `UploadTileCell` and `actions(for:)`. */
@@ -287,7 +302,9 @@ object UploadTiles {
      * it, so it survives a restore), so a tombstone can arrive starred — and hiding the control on every
      * removed row would strand that star with no way to clear it.
      *
-     * ⚠ Delete only where [UploadItem.canDelete] says the bytes really can be destroyed.
+     * ⚠ Delete only where [UploadItem.canDelete] says the bytes really can be destroyed. Every other
+     * row — a tombstone included — offers Remove from List in its place ([UploadItem.removal]), so no
+     * row is stuck on the list (lurker#1295).
      */
     fun actions(item: UploadItem, canInsert: Boolean, viewable: Boolean = preview(item) != null): List<UploadAction> =
         buildList {
@@ -298,7 +315,12 @@ object UploadTiles {
                 add(UploadAction.CopyLink)
                 add(UploadAction.Share)
             }
-            if (item.canDelete) add(UploadAction.Delete)
+            add(
+                when (item.removal) {
+                    UploadRemoval.Destroy -> UploadAction.Delete
+                    UploadRemoval.Forget -> UploadAction.RemoveFromList
+                },
+            )
         }
 
     /**

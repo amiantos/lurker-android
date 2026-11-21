@@ -34,11 +34,11 @@ data class UploadItem(
     /**
      * Whether deleting this row would actually destroy the stored bytes.
      *
-     * ⚠⚠ **Never offer a delete affordance without it.** There is no remove-the-record-only
-     * path: the route refuses a delete for a row whose bytes can't be destroyed (no ref, a
-     * driver that can't delete, a config since removed, a moderation tombstone), so a button
-     * offered anyway would be one that reliably fails. Anonymous and legacy rows can't be
-     * deleted, and that is a fact about where the file went, not a permission.
+     * ⚠⚠ **Never offer Delete without it.** The route refuses a delete for a row whose bytes
+     * can't be destroyed (no ref, a driver that can't delete, a config since removed, a
+     * moderation tombstone), so a Delete offered anyway would be one that reliably fails.
+     * Anonymous and legacy rows can't be deleted, and that is a fact about where the file
+     * went, not a permission. Such a row is taken off the list instead — see `removal`.
      */
     val canDelete: Boolean = false,
     /**
@@ -65,6 +65,28 @@ data class UploadItem(
      * from the URL's last path segment would show the storage key, which means nothing.
      */
     val displayName: String get() = filename ?: "(pasted)"
+
+    /**
+     * The one way this row leaves the list (lurker#1289). The web's tile offers the same pair:
+     * the trash where the file can be destroyed, "remove from list" everywhere else.
+     */
+    val removal: UploadRemoval get() = if (canDelete) UploadRemoval.Destroy else UploadRemoval.Forget
+
+    /**
+     * What the confirmation says before a row is taken off the list with its file left alone.
+     * A tombstone's file is already gone, so there is no file to reassure anyone about.
+     */
+    val forgetMessage: String?
+        get() = if (removed) null else "The file stays where it is. This only takes it off your uploads list."
+}
+
+/** How an upload's row can be removed. */
+enum class UploadRemoval {
+    /** `DELETE /api/uploads/:id`: the stored bytes are destroyed, then the row goes. */
+    Destroy,
+
+    /** `DELETE /api/uploads/:id/record`: the row goes and the file stays wherever it is. */
+    Forget,
 }
 
 /**
