@@ -63,7 +63,7 @@ class PushMessageTest {
         "text" to "Lurker can reach this device.",
         "time" to "2026-10-05T12:00:00.000Z",
         "title" to "Test notification",
-        "body" to "Push is working.",
+        "body" to "Lurker can reach this device.",
         "tag" to "test",
     )
 
@@ -83,7 +83,7 @@ class PushMessageTest {
     fun aRelayedTestPushOpensNothingEither() {
         // The relayed road: the Web Push body, decrypted and flattened into the same string map.
         val body =
-            """{"title":"Test notification","body":"Push is working.","tag":"test","networkId":0,"target":"test","kind":"test"}"""
+            """{"title":"Test notification","body":"Lurker can reach this device.","tag":"test","networkId":0,"target":"test","kind":"test"}"""
         val message = PushMessage.parse(RelayPush.flatten(body)!!)!!
         assertNull(NotificationTap.parse(message.tap))
     }

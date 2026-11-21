@@ -690,8 +690,17 @@ internal class LurkerClient(
             is RestResult.Failure -> CertificateExport.Failure(message = result.message)
         }
 
-    private suspend fun act(method: String, path: String, body: JsonObject? = null): String? =
-        when (val result = rest(method, path, body = body)) {
+    /**
+     * `goneIsDone` is for a removal: a 404 says the thing is already gone, which is what was
+     * asked for, so it is success rather than a refusal to show the user.
+     */
+    private suspend fun act(
+        method: String,
+        path: String,
+        body: JsonObject? = null,
+        goneIsDone: Boolean = false,
+    ): String? =
+        when (val result = rest(method, path, body = body, goneIsDone = goneIsDone)) {
             is RestResult.Ok -> null
             is RestResult.Failure -> result.message
         }
@@ -721,7 +730,12 @@ internal class LurkerClient(
      * request." has nothing to answer here. A POST, PUT or PATCH with no body sends an empty
      * one, as `URLSession` does; OkHttp refuses those methods without a body.
      */
-    private suspend fun rest(method: String, path: String, body: JsonObject? = null): RestResult {
+    private suspend fun rest(
+        method: String,
+        path: String,
+        body: JsonObject? = null,
+        goneIsDone: Boolean = false,
+    ): RestResult {
         val token = token ?: return RestResult.Failure("Not signed in.")
         val url = (baseURL + path).toHttpUrlOrNull() ?: return RestResult.Failure("Not signed in.")
         val builder = Request.Builder().url(url).header("Authorization", "Bearer $token")
@@ -741,7 +755,7 @@ internal class LurkerClient(
                 reportUnauthorized(sentWith = token)
                 return RestResult.Failure("Signed out.")
             }
-            if (code in 200..<300) return RestResult.Ok(text)
+            if (code in 200..<300 || (goneIsDone && code == 404)) return RestResult.Ok(text)
             // The server explains its own refusals — a host the admin's allowlist excludes, a
             // missing field, a paused account — and its wording is better than anything this
             // layer could infer from a status code.
@@ -1553,8 +1567,11 @@ internal class LurkerClient(
      *
      * ⚠⚠ Only ever called for a row whose `canDelete` is set: the route answers 409 for a row
      * whose bytes can't be destroyed. That row leaves the list through `forgetUpload`.
+     *
+     * A 404 is success: the row was removed somewhere else while this list was up, and saying
+     * "not found" about a file the user is trying to be rid of leaves it stuck on screen.
      */
-    suspend fun deleteUpload(id: Int): String? = act("DELETE", "/api/uploads/$id")
+    suspend fun deleteUpload(id: Int): String? = act("DELETE", "/api/uploads/$id", goneIsDone = true)
 
     /**
      * Drop an upload's row and leave its file wherever it is (lurker#1289). Null on success,
@@ -1562,7 +1579,12 @@ internal class LurkerClient(
      * whose delete failed: the server's `can_delete` is a judgment, and a row it gets wrong
      * must not be stuck on the list.
      */
-    suspend fun forgetUpload(id: Int): String? = act("DELETE", forgetUploadPath(id = id))
+    suspend fun forgetUpload(id: Int): String? {
+        // ⚠ No `goneIsDone` here, unlike the delete above. This route is new in lurker 2.7.0, and
+        // an older server answers 404 for the route itself; read as "already gone" that would
+        // take the row off the screen while the server still holds it.
+        return act("DELETE", forgetUploadPath(id = id))
+    }
 
     /**
      * Tell the network we're composing. Fire-and-forget: the server turns it into a

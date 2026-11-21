@@ -266,9 +266,8 @@ internal fun UploadsPage(
             // A tombstone's file is already gone, so there is no second line (`forgetMessage`).
             text = item.forgetMessage?.let { message -> { Text(message) } },
             dismissButton = { TextButton(onClick = { state.confirmingForget = null }) { Text("Cancel") } },
-            confirmButton = {
-                TextButton(onClick = { state.forget(item) }) { Text("Remove", color = MaterialTheme.colorScheme.error) }
-            },
+            // Not the error colour: nothing is destroyed, and it has to read differently from Delete.
+            confirmButton = { TextButton(onClick = { state.forget(item) }) { Text("Remove") } },
         )
     }
     state.confirmingDelete?.let { item ->

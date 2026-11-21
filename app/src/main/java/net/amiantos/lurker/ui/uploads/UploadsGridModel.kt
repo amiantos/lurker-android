@@ -62,6 +62,11 @@ data class UploadsGrid(
     val starTokens: Long = 0,
     /** Uploads deleted from under this browser — a late refusal must never bring one back. */
     val deletedIds: Set<Int> = emptySet(),
+    /**
+     * Rows with a delete or a remove-from-list out. A second ask for the same row, from a menu reopened
+     * while the first is still in flight, is dropped rather than answered twice ([removalStarted]).
+     */
+    val removingIds: Set<Int> = emptySet(),
 ) {
     /** One request to make: its generation, its question, its cursor. */
     data class Request(val generation: Int, val filter: UploadsFilter, val before: Int?, val limit: Int)
@@ -121,7 +126,9 @@ data class UploadsGrid(
             }
         }
         return settled.copy(
-            items = page.items,
+            // A list read before a removal landed can arrive after it, and would put the row back. The
+            // cursor is still the page's own last row: it is where the server's next page starts.
+            items = page.items.filter { it.id !in deletedIds },
             cursor = page.items.lastOrNull()?.id,
             hasMore = UploadsRequest.hasMore(request.filter, received = page.items.size, limit = request.limit),
             isTruncated = UploadsRequest.isTruncated(request.filter, received = page.items.size),
@@ -137,10 +144,9 @@ data class UploadsGrid(
         if (request.generation != generation) return this
         val settled = copy(isLoading = false)
         if (page == null) return settled.copy(pageInFailed = true)
-        val all = items + page.items
         return settled.copy(
-            items = all,
-            cursor = all.lastOrNull()?.id,
+            items = items + page.items.filter { it.id !in deletedIds },
+            cursor = page.items.lastOrNull()?.id ?: cursor,
             hasMore = UploadsRequest.hasMore(request.filter, received = page.items.size, limit = request.limit),
         )
     }
@@ -194,10 +200,16 @@ data class UploadsGrid(
      * left alone (lurker#1295): the row goes, and any star change still out for it is void.
      */
     fun deleted(id: Int): UploadsGrid {
-        val gone = copy(deletedIds = deletedIds + id, pendingStars = pendingStars - id)
+        val gone = copy(deletedIds = deletedIds + id, pendingStars = pendingStars - id, removingIds = removingIds - id)
         val index = items.indexOfFirst { it.id == id }
         return if (index < 0) gone else gone.removing(index)
     }
+
+    /** A delete or a remove-from-list is going out for [id]. Null when one already is: ask nothing. */
+    fun removalStarted(id: Int): UploadsGrid? = if (id in removingIds) null else copy(removingIds = removingIds + id)
+
+    /** The removal for [id] was refused: the row stays, and may be asked about again. */
+    fun removalRefused(id: Int): UploadsGrid = copy(removingIds = removingIds - id)
 
     private fun removing(index: Int): UploadsGrid {
         val all = items.toMutableList().also { it.removeAt(index) }
@@ -287,8 +299,11 @@ enum class UploadAction(val title: String) {
     RemoveFromList("Remove from List"),
     ;
 
-    /** Drawn in the error colour: the row goes, and there is no undo. */
-    val destructive: Boolean get() = this == Delete || this == RemoveFromList
+    /**
+     * Drawn in the error colour: the file is destroyed. Not Remove from List — nothing is destroyed,
+     * and it has to read differently from Delete, which does destroy the file.
+     */
+    val destructive: Boolean get() = this == Delete
 }
 
 /** The tile's words and menu, pure — lurker-ios's `UploadTileCell` and `actions(for:)`. */

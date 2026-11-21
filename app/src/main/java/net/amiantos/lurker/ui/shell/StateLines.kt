@@ -9,7 +9,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -84,14 +86,22 @@ fun Announcer(words: String?, modifier: Modifier = Modifier, live: Boolean = wor
  * "Couldn't load more." and the button that asks again, at the foot of a paged list (the feeds,
  * Search, the uploads grid). Paging fires as rows come on screen, and at the bottom none ever will
  * again — so the way to ask again is said, and tapped, here. [words] is for a list that can say more
- * about what failed: the feeds quote the server's reason (lurker#1308).
+ * about what failed: the feeds quote the server's reason (lurker#1308). [busy] is the retry on its
+ * way: the row stays, its button disabled beside a spinner — the sign the tap was heard — rather
+ * than vanishing on the tap and coming back if the retry fails too.
  *
  * Composed whether or not a page has failed (see [AnnouncedSlot]): 1dp of nothing until one does,
  * so the failure is read out to a reader who has scrolled to the bottom and is waiting on it. The
  * button sits beside the announcement, as its own stop.
  */
 @Composable
-fun RetryRow(failed: Boolean, onRetry: () -> Unit, modifier: Modifier = Modifier, words: String = RETRY_WORDS) {
+fun RetryRow(
+    failed: Boolean,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+    words: String = RETRY_WORDS,
+    busy: Boolean = false,
+) {
     Row(
         modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
@@ -100,7 +110,10 @@ fun RetryRow(failed: Boolean, onRetry: () -> Unit, modifier: Modifier = Modifier
         AnnouncedSlot(words = if (failed) words else null, modifier = Modifier.weight(1f)) {
             Text(words, style = MaterialTheme.typography.bodyMedium, color = LurkerTheme.colors.fgMuted)
         }
-        if (failed) TextButton(onClick = onRetry) { Text("Try Again", style = MaterialTheme.typography.bodyMedium) }
+        if (failed) {
+            if (busy) CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+            TextButton(onClick = onRetry, enabled = !busy) { Text("Try Again", style = MaterialTheme.typography.bodyMedium) }
+        }
     }
 }
 

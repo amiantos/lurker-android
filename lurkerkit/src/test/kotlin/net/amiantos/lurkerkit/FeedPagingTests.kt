@@ -447,6 +447,31 @@ class FeedPagingTests {
         assertNull(fine.retry())
     }
 
+    /**
+     * A failed pull's notice sits above the rows. Scrolling on pages in beneath them, and that
+     * must not take the notice down: the newest page is still the one that didn't arrive.
+     */
+    @Test
+    fun testScrollingOnDoesNotEraseAFailedPull() {
+        val paging = loaded(supersedes = false)
+        paging.land(FeedAnswer.Unavailable(reason = "search took too long"), paging.reload()!!, visible)
+        val more = paging.loadMore()!!
+        assertEquals(true, paging.failure?.firstPage, "asking for an older page says nothing about the pull")
+        paging.land(page(listOf(20L, 19L), nextBefore = null), more, visible)
+        assertEquals(true, paging.failure?.firstPage, "nor does that page arriving")
+        assertEquals(12, ids(paging).size)
+    }
+
+    @Test
+    fun testAskingForThePageAgainTakesAFailedPageInDown() {
+        val paging = loaded(supersedes = false)
+        paging.land(FeedAnswer.Failed, paging.loadMore()!!, visible)
+        assertNotNull(paging.failure)
+        // The next scroll re-arms the page-in, and the notice goes while it is asked.
+        assertNotNull(paging.loadMore())
+        assertNull(paging.failure)
+    }
+
     @Test
     fun testTheNextAnswerClearsTheFailure() {
         val paging = loaded(supersedes = false)

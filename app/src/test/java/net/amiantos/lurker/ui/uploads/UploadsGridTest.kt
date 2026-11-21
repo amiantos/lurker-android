@@ -12,6 +12,7 @@ import net.amiantos.lurkerkit.model.UploadsPage
 import net.amiantos.lurkerkit.model.UploadsRequest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -286,8 +287,9 @@ class UploadsGridTest {
         val deletable = UploadTiles.actions(item(1, canDelete = true), canInsert = true)
         assertEquals(UploadAction.Delete, deletable.last())
         assertFalse(UploadAction.RemoveFromList in deletable)
+        // Only Delete reads as destructive: Remove from List destroys nothing, and must not look like it does.
         assertTrue(UploadAction.Delete.destructive)
-        assertTrue(UploadAction.RemoveFromList.destructive)
+        assertFalse(UploadAction.RemoveFromList.destructive)
         assertFalse(UploadAction.CopyLink.destructive)
     }
 
@@ -299,6 +301,39 @@ class UploadsGridTest {
             listOf(UploadAction.Unstar, UploadAction.RemoveFromList),
             UploadTiles.actions(item(1, removed = true, favorite = true), canInsert = true),
         )
+    }
+
+    @Test
+    fun aListReadBeforeARemovalLandedDoesNotPutTheRowBack() {
+        // A pull out when the delete lands: its page still holds the row.
+        val (pulling, pull) = loaded(3, 2, 1).reload(byPull = true)
+        val (landed, _) = pulling.deleted(2).firstPage(pull, page(3, 2, 1))
+        assertEquals(listOf(3, 1), landed.items.map { it.id })
+        // The cursor is the page's own last row, removed or not: it is where the next page starts.
+        val (again, repull) = loaded(3, 2, 1).reload(byPull = true)
+        assertEquals(1, again.deleted(1).firstPage(repull, page(3, 2, 1)).first.cursor)
+
+        // A page-in out when the delete lands, likewise.
+        val (paging, more) = loaded(*(100 downTo 51).toList().toIntArray()).loadMore()!!
+        val appended = paging.deleted(60).nextPage(more, page(60, 50, 49))
+        assertEquals(listOf(52, 51, 50, 49), appended.items.takeLast(4).map { it.id })
+        assertFalse(60 in appended.items.map { it.id })
+        assertEquals(49, appended.cursor)
+        // A page that held only removed rows still moves the cursor past them.
+        val (pagingOn, further) = loaded(*(100 downTo 51).toList().toIntArray()).loadMore()!!
+        assertEquals(50, pagingOn.deleted(50).nextPage(further, page(50)).cursor)
+    }
+
+    @Test
+    fun aSecondRemovalForARowWithOneOutIsDropped() {
+        val out = loaded(3, 2, 1).removalStarted(2)!!
+        assertNull(out.removalStarted(2))
+        // Another row is its own question.
+        assertNotNull(out.removalStarted(3))
+        // Refused: the row stays, and can be asked about again.
+        assertNotNull(out.removalRefused(2).removalStarted(2))
+        // Gone: nothing left out for it.
+        assertTrue(out.deleted(2).removingIds.isEmpty())
     }
 
     @Test

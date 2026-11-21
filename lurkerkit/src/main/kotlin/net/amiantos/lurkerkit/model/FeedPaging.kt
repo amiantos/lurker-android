@@ -205,7 +205,10 @@ class FeedPaging(
         val cursor = nextCursor ?: return null
         isLoading = true
         firstInFlight = false
-        failure = null
+        // Asking for the page again takes a failed page-in down. A failed pull stays: this is
+        // also what a scroll does, and the reader scrolling on must not erase the notice that
+        // the list above them is not as fresh as they asked for.
+        if (failure?.firstPage == false) failure = null
         return Fetch(generation = generation, cursor = cursor)
     }
 
@@ -248,7 +251,12 @@ class FeedPaging(
         if (!isCurrent(fetch)) return null
         isLoading = false
         val page = answer.page
-        failure = if (page == null) Failure(reason = answer.reason, firstPage = fetch.isFirstPage) else null
+        if (page == null) {
+            failure = Failure(reason = answer.reason, firstPage = fetch.isFirstPage)
+        } else if (fetch.isFirstPage || failure?.firstPage == false) {
+            // A page-in that lands answers a failed page-in, not a failed pull.
+            failure = null
+        }
         return if (fetch.isFirstPage) landFirst(page, visible) else landMore(page, visible)
     }
 

@@ -87,8 +87,9 @@ class FeedController(
     }
 
     /**
-     * The retry row under the rows: ask again for the page that failed — the newest one after a failed
-     * pull, the same older one after a failed page-in ([FeedPager.retry]).
+     * The failure notice's Try Again: ask again for the page that failed — the newest one after a
+     * failed pull, the same older one after a failed page-in ([FeedPager.retry]). A second tap while
+     * that is out asks nothing.
      */
     fun retry() {
         val again = pager.retry() ?: return

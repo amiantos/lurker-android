@@ -235,9 +235,11 @@ class UploadsBrowserState(private val model: ChatViewModel, private val scope: C
      */
     fun delete(item: UploadItem) {
         confirmingDelete = null
+        grid = grid.removalStarted(item.id) ?: return
         scope.launch {
             val refusal = withContext(NonCancellable) { model.deleteUpload(id = item.id) }
             if (refusal != null) {
+                grid = grid.removalRefused(item.id)
                 alert = UploadsAlert("Couldn't Delete", refusal, forgetInstead = item)
             } else {
                 grid = grid.deleted(item.id)
@@ -257,9 +259,11 @@ class UploadsBrowserState(private val model: ChatViewModel, private val scope: C
     /** ⚠ A WRITE: the row goes from the account's list on every device. The file is not touched. */
     fun forget(item: UploadItem) {
         confirmingForget = null
+        grid = grid.removalStarted(item.id) ?: return
         scope.launch {
             val refusal = withContext(NonCancellable) { model.forgetUpload(id = item.id) }
             if (refusal != null) {
+                grid = grid.removalRefused(item.id)
                 alert = UploadsAlert("Couldn't Remove", refusal)
             } else {
                 grid = grid.deleted(item.id)

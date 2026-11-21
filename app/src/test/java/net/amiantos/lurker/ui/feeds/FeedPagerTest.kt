@@ -179,10 +179,10 @@ class FeedPagerTest {
         assertEquals(listOf(2L), pager.items.map { it.message.id })
         assertNull(pager.placeholder)
         // The list ends in a retry row, since no row will come on screen to ask again…
-        assertNotNull(pager.snapshot().failureUnderRows)
+        assertNotNull(pager.snapshot().failureBelow)
         // …and it isn't latched at the end: asking again works, and takes the retry row down.
         assertNotNull(pager.loadMore())
-        assertNull(pager.snapshot().failureUnderRows)
+        assertNull(pager.snapshot().failureBelow)
 
         val emptied = FeedPager(supersedes = false, visible = hidingSpam)
         val next = emptied.land(emptied.reload()!!, HighlightsPage(listOf(item(2, "spammer")), nextBefore = 2))!!
@@ -350,12 +350,12 @@ class FeedPagerTest {
         val pager = FeedPager(supersedes = false, visible = hidingSpam)
         pager.land(pager.reload()!!, page(9, next = 9))
         pager.land(pager.loadMore()!!, null)
-        assertNotNull(pager.snapshot().failureUnderRows)
+        assertNotNull(pager.snapshot().failureBelow)
         val retry = pager.loadMore()!!
-        assertNull(pager.snapshot().failureUnderRows)
+        assertNull(pager.snapshot().failureBelow)
         val hop = pager.land(retry, HighlightsPage(listOf(item(8, "spammer")), nextBefore = 8))
         assertNotNull(hop)
-        assertNull(pager.snapshot().failureUnderRows)
+        assertNull(pager.snapshot().failureBelow)
     }
 
     // A failure says so, and keeps the rows (lurker#1308)
@@ -371,11 +371,73 @@ class FeedPagerTest {
         assertNull(shown.placeholder)
         assertFalse("the pull's spinner ends, failed or not", shown.refreshing)
         // The server's words, as a sentence; the feed's own when it gave none.
-        assertEquals("Search took too long.", shown.failureUnderRows?.sentence(fallback = "Couldn't load activity."))
+        assertEquals("Search took too long.", shown.failureAbove?.sentence(fallback = "Couldn't load activity."))
+        // Above the rows, where the reader who pulled is looking — not below them.
+        assertNull(shown.failureBelow)
         pager.land(pager.reload(byPull = true)!!, FeedAnswer.Failed)
-        assertEquals("Couldn't load activity.", pager.snapshot().failureUnderRows?.sentence(fallback = "Couldn't load activity."))
-        // The cursor the rows had is still theirs: a failed pull asked the same question.
-        assertEquals(FeedCursor(beforeMessage = 2), pager.loadMore()?.cursor)
+        assertEquals("Couldn't load activity.", pager.snapshot().failureAbove?.sentence(fallback = "Couldn't load activity."))
+        // The cursor the rows had is still theirs: a failed pull asked the same question. And
+        // scrolling on — the page-in asked for, then landing — leaves the pull's notice up.
+        val more = pager.loadMore()!!
+        assertEquals(FeedCursor(beforeMessage = 2), more.cursor)
+        assertNotNull(pager.snapshot().failureAbove)
+        pager.land(more, page(1))
+        assertNotNull(pager.snapshot().failureAbove)
+        assertFalse(pager.snapshot().retrying)
+    }
+
+    @Test
+    fun aFailedPageInIsSaidBelowTheRows() {
+        val pager = FeedPager(supersedes = false)
+        pager.land(pager.reload()!!, page(3, 2, next = 2))
+        pager.land(pager.loadMore()!!, FeedAnswer.Unavailable(reason = "search took too long"))
+        val shown = pager.snapshot()
+        assertNull(shown.failureAbove)
+        assertEquals("Search took too long.", shown.failureBelow?.sentence(fallback = "Couldn't load activity."))
+    }
+
+    @Test
+    fun tryAgainKeepsTheNoticeUpBusyUntilTheAnswerLands() {
+        // A failed pull: the notice stays above the rows while the retry is out, and a second tap
+        // asks nothing.
+        val pulled = FeedPager(supersedes = false)
+        pulled.land(pulled.reload()!!, page(3, 2, next = 2))
+        pulled.land(pulled.reload(byPull = true)!!, FeedAnswer.Unavailable(reason = "search took too long"))
+        assertFalse(pulled.snapshot().retrying)
+        val again = pulled.retry()!!
+        assertTrue(pulled.snapshot().retrying)
+        assertEquals("Search took too long.", pulled.snapshot().failureAbove?.sentence(fallback = "x"))
+        assertNull(pulled.retry())
+        // It fails again: the notice is the new failure's, and no longer busy.
+        pulled.land(again, FeedAnswer.Unavailable(reason = "too many searches are waiting"))
+        assertFalse(pulled.snapshot().retrying)
+        assertEquals("Too many searches are waiting.", pulled.snapshot().failureAbove?.sentence(fallback = "x"))
+        // It answers: the notice goes.
+        pulled.land(pulled.retry()!!, page(5, 4))
+        assertNull(pulled.snapshot().failure)
+        assertFalse(pulled.snapshot().retrying)
+
+        // A failed page-in: the same, below the rows.
+        val paged = FeedPager(supersedes = false)
+        paged.land(paged.reload()!!, page(3, 2, next = 2))
+        paged.land(paged.loadMore()!!, FeedAnswer.Failed)
+        val older = paged.retry()!!
+        assertTrue(paged.snapshot().retrying)
+        assertNotNull(paged.snapshot().failureBelow)
+        paged.land(older, page(1))
+        assertNull(paged.snapshot().failure)
+
+        // A retry replaced by a new question is not left spinning: the list it was for is gone.
+        val asked = FeedPager(supersedes = true)
+        asked.land(asked.reload()!!, page(3, 2, next = 2))
+        asked.land(asked.reload(byPull = true)!!, FeedAnswer.Failed)
+        val stale = asked.retry()!!
+        val next = asked.reload(newQuestion = true)!!
+        assertNull(asked.snapshot().failureAbove)
+        assertNull(asked.land(stale, FeedAnswer.Failed))
+        asked.land(next, page(9))
+        assertNull(asked.snapshot().failure)
+        assertFalse(asked.snapshot().retrying)
     }
 
     @Test
@@ -386,8 +448,14 @@ class FeedPagerTest {
         val shown = pager.snapshot()
         assertEquals(FeedPaging.Placeholder.Error, shown.placeholder)
         // No rows, so nothing to put a retry row under: the placeholder says it.
-        assertNull(shown.failureUnderRows)
-        assertEquals(error.copy(subtitle = "Too many searches are waiting. Pull to try again."), shown.errorWords(error))
+        assertNull(shown.failureAbove)
+        assertNull(shown.failureBelow)
+        // The server's reason goes ahead of the feed's own advice, not in place of it.
+        assertEquals(
+            error.copy(subtitle = "Too many searches are waiting. Pull to try again, or edit your search."),
+            shown.errorWords(error),
+        )
+        assertEquals("Too many searches are waiting.", shown.errorWords(error.copy(subtitle = null)).subtitle)
         // With no reason given, the feed's own words stand.
         pager.land(pager.reload()!!, FeedAnswer.Failed)
         assertEquals(error, pager.snapshot().errorWords(error))
@@ -403,7 +471,7 @@ class FeedPagerTest {
         pulled.land(pulled.reload(byPull = true)!!, FeedAnswer.Unavailable(reason = "search took too long"))
         val again = pulled.retry()!!
         assertTrue(again.isFirstPage)
-        assertNull("asking again takes the row down", pulled.snapshot().failure)
+        assertTrue("the notice stays up, busy, while it asks", pulled.snapshot().retrying)
         assertEquals(listOf(3L, 2L), pulled.items.map { it.message.id })
         assertFalse(pulled.snapshot().refreshing)
         val before = pulled.snapshot().epoch

@@ -238,6 +238,24 @@ internal fun FeedListContent(
     ) {
         val currentOnShown by rememberUpdatedState(onShown)
         LazyColumn(state = listState, modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
+            // A failed PULL under rows already shown (lurker#1308), said above them: that is where the
+            // reader who pulled is looking, and the rows under it are not as fresh as they asked for.
+            // ⚠ There above any rows, failed or not (1dp of nothing until then): a lazy list holds its
+            // place by the first visible item's key, so an item ADDED above the rows on failure would
+            // arrive off screen, above a reader sitting at the top. This one grows in place instead —
+            // and is a change TalkBack reads out (`RetryRow`).
+            if (snapshot.items.isNotEmpty()) {
+                item(key = "failed-pull", contentType = "retry") {
+                    val failure = snapshot.failureAbove
+                    RetryRow(
+                        failed = failure != null,
+                        onRetry = onRetry,
+                        modifier = Modifier.padding(horizontal = CompactMetrics.side, vertical = if (failure != null) 8.dp else 0.dp),
+                        words = failure?.sentence(fallback = failureFallback) ?: failureFallback,
+                        busy = snapshot.retrying,
+                    )
+                }
+            }
             for (section in sections) {
                 // Floats, as a plain table's section header does on iOS: a long run keeps saying where it's from.
                 stickyHeader(key = "h${section.offset}", contentType = "header") { FeedSectionHeader(section) }
@@ -255,20 +273,20 @@ internal fun FeedListContent(
                     }
                 }
             }
-            // A failed pull or page-in under rows already shown (lurker#1308): the rows stay, which is
-            // right, and without this the refresh would simply stop having done nothing — and a page-in
-            // could never be asked again, since paging fires as rows come on screen and at the bottom none
-            // ever will. So what went wrong (the server's reason, when it gave one) and the way to ask
-            // again are said, and tapped, here. There under any rows, failed or not, so a failure is a
-            // change TalkBack reads out (`RetryRow`).
+            // A failed page-in under rows already shown (lurker#1308), said below them, where the reader
+            // scrolled to. Paging fires as rows come on screen, and at the bottom none ever will again — so
+            // what went wrong (the server's reason, when it gave one) and the way to ask again are said,
+            // and tapped, here. There under any rows, failed or not, so a failure is a change TalkBack
+            // reads out (`RetryRow`).
             if (snapshot.items.isNotEmpty()) {
                 item(key = "retry", contentType = "retry") {
-                    val failure = snapshot.failureUnderRows
+                    val failure = snapshot.failureBelow
                     RetryRow(
                         failed = failure != null,
                         onRetry = onRetry,
                         modifier = Modifier.padding(horizontal = CompactMetrics.side, vertical = if (failure != null) 8.dp else 0.dp),
                         words = failure?.sentence(fallback = failureFallback) ?: failureFallback,
+                        busy = snapshot.retrying,
                     )
                 }
             }
@@ -277,7 +295,8 @@ internal fun FeedListContent(
         // spinner, so the page's stays away while one is out.
         val placeholder = snapshot.placeholder
         if (placeholder != null && !(placeholder == FeedPaging.Placeholder.Loading && snapshot.refreshing)) {
-            // The server's own reason, when it gave one (a 503: "search took too long").
+            // The server's own reason, when it gave one (a 503: "search took too long"), ahead of the
+            // feed's own advice.
             val said = words(placeholder).let { if (placeholder == FeedPaging.Placeholder.Error) snapshot.errorWords(it) else it }
             StateView(
                 said,

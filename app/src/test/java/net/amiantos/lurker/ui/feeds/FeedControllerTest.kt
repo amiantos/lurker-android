@@ -148,11 +148,15 @@ class FeedControllerTest {
         runCurrent()
         server.pending[1].complete(null)
         runCurrent()
-        assertTrue(feed.snapshot.failureUnderRows != null)
+        assertTrue(feed.snapshot.failureBelow != null)
         feed.retry()
         runCurrent()
         assertEquals(FeedCursor(beforeMessage = 11), server.asked.last())
-        assertTrue(feed.snapshot.failureUnderRows == null)
+        // Still up, busy, until the answer lands.
+        assertTrue(feed.snapshot.failureBelow != null && feed.snapshot.retrying)
+        server.pending[2].complete(HighlightsPage(listOf(item(10)), nextBefore = null))
+        runCurrent()
+        assertNull(feed.snapshot.failure)
     }
 
     @Test
@@ -169,15 +173,22 @@ class FeedControllerTest {
         runCurrent()
         assertEquals(10, feed.snapshot.items.size)
         assertTrue(!feed.snapshot.refreshing)
-        assertEquals("Search took too long.", feed.snapshot.failureUnderRows?.sentence(fallback = "Couldn't load activity."))
+        assertEquals("Search took too long.", feed.snapshot.failureAbove?.sentence(fallback = "Couldn't load activity."))
         feed.retry()
         runCurrent()
         assertEquals(listOf(null, null, null), server.asked)
-        assertNull(feed.snapshot.failure)
+        // The notice stays above the rows, busy; a second tap asks nothing.
+        assertTrue(feed.snapshot.retrying)
+        assertTrue(feed.snapshot.failureAbove != null)
+        feed.retry()
+        runCurrent()
+        assertEquals(3, server.asked.size)
         assertEquals(10, feed.snapshot.items.size)
         server.pending[2].complete(HighlightsPage(listOf(item(21)), nextBefore = null))
         runCurrent()
         assertEquals(listOf(21L), feed.snapshot.items.map { it.message.id })
+        assertNull(feed.snapshot.failure)
+        assertTrue(!feed.snapshot.retrying)
         // Nothing failed now: the row is gone and a stray tap asks nothing.
         feed.retry()
         runCurrent()
