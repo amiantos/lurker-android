@@ -462,6 +462,19 @@ class FeedPagingTests {
         assertEquals(12, ids(paging).size)
     }
 
+    /**
+     * Otherwise the only notice left is the page-in's, and its retry fetches older rows: the
+     * refresh that failed could never be asked for again from the notice.
+     */
+    @Test
+    fun testAFailedPageInDoesNotReplaceAFailedPull() {
+        val paging = loaded(supersedes = false)
+        paging.land(FeedAnswer.Unavailable(reason = "search took too long"), paging.reload()!!, visible)
+        paging.land(FeedAnswer.Unavailable(reason = "too many searches are waiting"), paging.loadMore()!!, visible)
+        assertEquals(FeedPaging.Failure(reason = "search took too long", firstPage = true), paging.failure)
+        assertNull(paging.retry()?.cursor, "and its retry is still the newest page")
+    }
+
     @Test
     fun testAskingForThePageAgainTakesAFailedPageInDown() {
         val paging = loaded(supersedes = false)
