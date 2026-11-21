@@ -187,6 +187,7 @@ internal fun FeedList(
         onShown = state.feed::scrolledTo,
         onRetry = state.feed::retry,
         onReload = { state.feed.reload() },
+        failureFallback = state.failureFallback,
         announcesStates = announcesStates,
         onRemove = onRemove,
         listState = listState,
@@ -222,6 +223,8 @@ internal fun FeedListContent(
     onRetry: () -> Unit = {},
     /** The first page again, without a pull — the placeholder's "Try Again". */
     onReload: () -> Unit = {},
+    /** What the retry row says when the server gave no reason of its own. */
+    failureFallback: String = "Couldn't load.",
     /** Whether a settled placeholder is read out when it lands — not for Search (see `StateView`). */
     announcesStates: Boolean = true,
     /** What the rows were rendered with, so they're drawn with the same density (lurker#1224). */
@@ -252,16 +255,20 @@ internal fun FeedListContent(
                     }
                 }
             }
-            // A failed page-in under rows already shown. Paging fires as rows come on screen, and at the
-            // bottom none ever will again — so the way to ask again is said, and tapped, here. There under
-            // any rows, failed or not, so a failure is a change TalkBack reads out (`RetryRow`).
+            // A failed pull or page-in under rows already shown (lurker#1308): the rows stay, which is
+            // right, and without this the refresh would simply stop having done nothing — and a page-in
+            // could never be asked again, since paging fires as rows come on screen and at the bottom none
+            // ever will. So what went wrong (the server's reason, when it gave one) and the way to ask
+            // again are said, and tapped, here. There under any rows, failed or not, so a failure is a
+            // change TalkBack reads out (`RetryRow`).
             if (snapshot.items.isNotEmpty()) {
                 item(key = "retry", contentType = "retry") {
-                    val failed = snapshot.pageInFailed
+                    val failure = snapshot.failureUnderRows
                     RetryRow(
-                        failed = failed,
+                        failed = failure != null,
                         onRetry = onRetry,
-                        modifier = Modifier.padding(horizontal = CompactMetrics.side, vertical = if (failed) 8.dp else 0.dp),
+                        modifier = Modifier.padding(horizontal = CompactMetrics.side, vertical = if (failure != null) 8.dp else 0.dp),
+                        words = failure?.sentence(fallback = failureFallback) ?: failureFallback,
                     )
                 }
             }
@@ -270,7 +277,8 @@ internal fun FeedListContent(
         // spinner, so the page's stays away while one is out.
         val placeholder = snapshot.placeholder
         if (placeholder != null && !(placeholder == FeedPaging.Placeholder.Loading && snapshot.refreshing)) {
-            val said = words(placeholder)
+            // The server's own reason, when it gave one (a 503: "search took too long").
+            val said = words(placeholder).let { if (placeholder == FeedPaging.Placeholder.Error) snapshot.errorWords(it) else it }
             StateView(
                 said,
                 // "Pull to try again." — a pull TalkBack can't make, so offered as an action too, as an

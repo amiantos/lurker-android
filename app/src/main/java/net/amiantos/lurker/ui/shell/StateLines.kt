@@ -83,21 +83,22 @@ fun Announcer(words: String?, modifier: Modifier = Modifier, live: Boolean = wor
 /**
  * "Couldn't load more." and the button that asks again, at the foot of a paged list (the feeds,
  * Search, the uploads grid). Paging fires as rows come on screen, and at the bottom none ever will
- * again — so the way to ask again is said, and tapped, here.
+ * again — so the way to ask again is said, and tapped, here. [words] is for a list that can say more
+ * about what failed: the feeds quote the server's reason (lurker#1308).
  *
  * Composed whether or not a page has failed (see [AnnouncedSlot]): 1dp of nothing until one does,
  * so the failure is read out to a reader who has scrolled to the bottom and is waiting on it. The
  * button sits beside the announcement, as its own stop.
  */
 @Composable
-fun RetryRow(failed: Boolean, onRetry: () -> Unit, modifier: Modifier = Modifier) {
+fun RetryRow(failed: Boolean, onRetry: () -> Unit, modifier: Modifier = Modifier, words: String = RETRY_WORDS) {
     Row(
         modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        AnnouncedSlot(words = if (failed) RETRY_WORDS else null, modifier = Modifier.weight(1f)) {
-            Text(RETRY_WORDS, style = MaterialTheme.typography.bodyMedium, color = LurkerTheme.colors.fgMuted)
+        AnnouncedSlot(words = if (failed) words else null, modifier = Modifier.weight(1f)) {
+            Text(words, style = MaterialTheme.typography.bodyMedium, color = LurkerTheme.colors.fgMuted)
         }
         if (failed) TextButton(onClick = onRetry) { Text("Try Again", style = MaterialTheme.typography.bodyMedium) }
     }

@@ -53,6 +53,7 @@ import net.amiantos.lurker.ui.feeds.FeedSnapshot
 import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
+import net.amiantos.lurkerkit.model.FeedAnswer
 import net.amiantos.lurkerkit.model.FeedCursor
 import net.amiantos.lurkerkit.model.FeedPaging
 import net.amiantos.lurkerkit.model.HighlightItem
@@ -102,6 +103,8 @@ class SearchState(private val model: ChatViewModel, seed: String, private val sc
 
     override var closedNotice by mutableStateOf<String?>(null)
 
+    override val failureFallback: String get() = SearchWords.failureFallback(showing)
+
     /** The keystroke waiting to become a query; replaced by the next, so a burst costs one search. */
     private var debounce: Job? = null
 
@@ -114,14 +117,14 @@ class SearchState(private val model: ChatViewModel, seed: String, private val sc
      * `HighlightsPage` with a real `nextBefore` cursor, which is why the list never knows which it's
      * showing. `TooShort` never reaches the wire — that's the point of the state — and is answered by
      * [localFirstPage] before this is asked. The case here is only for completeness: it has no cursor, so
-     * nothing pages it. Answering it with an empty page (rather than null) matters: null means "we
-     * couldn't ask", which would put an error in front of someone mid-word.
+     * nothing pages it. Answering it with an empty page (rather than a failure) matters: a failure
+     * means "we couldn't ask", which would put an error in front of someone mid-word.
      */
-    private suspend fun fetch(cursor: FeedCursor?): HighlightsPage? {
+    private suspend fun fetch(cursor: FeedCursor?): FeedAnswer {
         val before = cursor?.beforeMessage
         return when (ledger.showing) {
             SearchShowing.Landing -> model.fetchHighlights(before)
-            SearchShowing.TooShort -> HighlightsPage(items = emptyList(), nextBefore = null)
+            SearchShowing.TooShort -> FeedAnswer.Page(HighlightsPage(items = emptyList(), nextBefore = null))
             SearchShowing.Results -> model.searchMessages(ledger.query, before)
         }
     }

@@ -78,6 +78,12 @@ object SearchRequest {
         /** The session is gone. */
         Unauthorized,
 
+        /**
+         * `503`: the search took too long, too many are waiting, or a newer one displaced it
+         * (lurker#1308). The body says which; the caller offers a retry and keeps its rows.
+         */
+        Unavailable,
+
         /** We could not ask, or could not read the answer. NEVER rendered as "no matches". */
         Failed,
     }
@@ -102,6 +108,7 @@ object SearchRequest {
             in 200..<300 -> Outcome.Page
             401 -> Outcome.Unauthorized
             404 -> if (scoped) Outcome.EmptyPage else Outcome.Failed
+            503 -> Outcome.Unavailable
             else -> Outcome.Failed
         }
 }

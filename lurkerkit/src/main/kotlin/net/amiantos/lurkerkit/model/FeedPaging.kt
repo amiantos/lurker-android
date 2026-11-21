@@ -3,6 +3,8 @@
 
 package net.amiantos.lurkerkit.model
 
+import net.amiantos.lurkerkit.support.graphemeBoundaries
+
 /**
  * The paging rules of a cross-buffer feed (Activity, Bookmarks, Search): which page to ask for
  * next, which answer may land, and which placeholder stands in for the rows.
@@ -64,8 +66,46 @@ class FeedPaging(
         val next: Fetch?,
     )
 
+    /** A page that didn't arrive, for as long as that is the latest thing to have happened. */
+    @ConsistentCopyVisibility
+    data class Failure internal constructor(
+        /** The server's own words for it, when it gave any — a 503's `error` (lurker#1308). */
+        val reason: String?,
+        /**
+         * Whether it was a first page (an open, a pull, a new question) or a page-in. Says
+         * which fetch a retry repeats.
+         */
+        val firstPage: Boolean,
+    ) {
+        /**
+         * One sentence for the screen: the server's reason, or `fallback` when it gave none.
+         * The server writes its reasons lowercase and unpunctuated ("search took too long").
+         *
+         * Port note: the first and last `Character` are grapheme clusters, found with
+         * `support.graphemeBoundaries` (PORTING.md, Strings).
+         */
+        fun sentence(fallback: String): String {
+            if (reason == null) return fallback
+            val ends = graphemeBoundaries(reason)
+            val firstEnd = ends.firstOrNull() ?: return fallback
+            val text = reason.substring(0, firstEnd).uppercase() + reason.substring(firstEnd)
+            val marks = graphemeBoundaries(text)
+            val last = text.substring(if (marks.size >= 2) marks[marks.size - 2] else 0)
+            return if (last == "." || last == "!" || last == "?") text else "$text."
+        }
+    }
+
     /** All rows, newest-first as the server returns them, after the ignore filter. */
     var items: List<HighlightItem> = emptyList()
+        private set
+
+    /**
+     * The last fetch failed and nothing has been asked since. Set whether or not rows are up:
+     * with none, `placeholder` is `Error` and this says why; with rows, this is the only sign
+     * that the pull or the page-in under them came back with nothing, and the screen says so
+     * beneath them rather than leaving a refresh that silently did nothing.
+     */
+    var failure: Failure? = null
         private set
 
     /** Null while there are rows to show. */
@@ -147,6 +187,7 @@ class FeedPaging(
         isLoading = true
         firstInFlight = true
         loadFailed = false
+        failure = null
         fruitlessHops = 0
         if (newQuestion) {
             items = emptyList()
@@ -164,6 +205,7 @@ class FeedPaging(
         val cursor = nextCursor ?: return null
         isLoading = true
         firstInFlight = false
+        failure = null
         return Fetch(generation = generation, cursor = cursor)
     }
 
@@ -192,10 +234,31 @@ class FeedPaging(
         page: HighlightsPage?,
         fetch: Fetch,
         visible: (List<HighlightItem>) -> List<HighlightItem>,
+    ): Landing? = land(FeedAnswer(page), fetch, visible)
+
+    /**
+     * `land`, told why when there is no page: a 503's reason is kept in `failure` for the screen
+     * to show. A failure of any kind keeps the rows already up (lurker#1308).
+     */
+    fun land(
+        answer: FeedAnswer,
+        fetch: Fetch,
+        visible: (List<HighlightItem>) -> List<HighlightItem>,
     ): Landing? {
         if (!isCurrent(fetch)) return null
         isLoading = false
+        val page = answer.page
+        failure = if (page == null) Failure(reason = answer.reason, firstPage = fetch.isFirstPage) else null
         return if (fetch.isFirstPage) landFirst(page, visible) else landMore(page, visible)
+    }
+
+    /**
+     * The fetch that repeats the one that failed: the newest page again, or the page-in again.
+     * Null when nothing failed, or when a page-in has no cursor left to repeat.
+     */
+    fun retry(): Fetch? {
+        val failure = failure ?: return null
+        return if (failure.firstPage) reload() else loadMore()
     }
 
     private fun landFirst(
@@ -262,7 +325,10 @@ class FeedPaging(
         val index = items.indexOfFirst { it.message.id == messageId }
         if (index < 0) return null
         items = items.filterIndexed { i, _ -> i != index }
-        if (items.isEmpty()) loadFailed = false
+        if (items.isEmpty()) {
+            loadFailed = false
+            failure = null
+        }
         if (items.size <= prefetchWindow) {
             val next = pageIn()
             if (next != null) return Landing(rowsChanged = true, next = next)

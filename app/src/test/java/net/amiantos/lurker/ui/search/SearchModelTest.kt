@@ -75,6 +75,8 @@ class SearchModelTest {
         assertEquals("Searching…", SearchWords.loading(SearchShowing.Results).title)
         assertEquals("Couldn't load highlights", SearchWords.error(SearchShowing.Landing).title)
         assertEquals("Pull to try again, or edit your search.", SearchWords.error(SearchShowing.Results).subtitle)
+        assertEquals("Couldn't load highlights.", SearchWords.failureFallback(SearchShowing.Landing))
+        assertEquals("Couldn't search.", SearchWords.failureFallback(SearchShowing.Results))
     }
 
     /** iOS's symbols: the magnifier for both "search" empties, the ellipsis for keep typing, the warning for a failure. */

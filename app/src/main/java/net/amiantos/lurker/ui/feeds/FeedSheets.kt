@@ -21,10 +21,10 @@ import net.amiantos.lurker.ui.networks.rememberPagedFlow
 import net.amiantos.lurker.ui.search.SearchPage
 import net.amiantos.lurker.ui.search.SearchState
 import net.amiantos.lurkerkit.model.BufferKey
+import net.amiantos.lurkerkit.model.FeedAnswer
 import net.amiantos.lurkerkit.model.FeedCursor
 import net.amiantos.lurkerkit.model.FeedPaging
 import net.amiantos.lurkerkit.model.HighlightItem
-import net.amiantos.lurkerkit.model.HighlightsPage
 import net.amiantos.lurkerkit.session.ChatViewModel
 import java.util.UUID
 
@@ -98,13 +98,26 @@ interface FeedPageState {
      * lets them pick another row.
      */
     var closedNotice: String?
+
+    /**
+     * What the row under the list says when a pull or a page-in failed with rows still up and the
+     * server gave no reason of its own (lurker#1308) — iOS's `failureFallback`.
+     */
+    val failureFallback: String
 }
 
 /**
  * Activity or Bookmarks: one page source and its words. The two are the same screen — the server builds
  * both from one query, so the row shape, the cursor contract and the grouping are identical.
  */
-enum class HistoryFeed(val title: String, val loading: StateModel, val empty: StateModel, val error: StateModel) {
+enum class HistoryFeed(
+    val title: String,
+    val loading: StateModel,
+    val empty: StateModel,
+    val error: StateModel,
+    /** Under the rows, when a pull or page-in failed and the server didn't say why. */
+    val failureFallback: String,
+) {
     /**
      * Every line a highlight rule matched — a reply to one of your lines counts — and everyone's
      * reactions to your lines, newest first, across every buffer (lurker-ios#183). A read surface, not
@@ -119,6 +132,7 @@ enum class HistoryFeed(val title: String, val loading: StateModel, val empty: St
             "Mentions, replies to you and reactions to your messages show up here.",
         ),
         error = StateModel("Couldn't load activity", StateSymbol.Warning, "Pull to try again."),
+        failureFallback = "Couldn't load activity.",
     ),
 
     /**
@@ -134,6 +148,7 @@ enum class HistoryFeed(val title: String, val loading: StateModel, val empty: St
         // and find.
         empty = StateModel("No bookmarks", StateSymbol.Bookmark, "Press and hold a message, then Save Message, to keep it here."),
         error = StateModel("Couldn't load bookmarks", StateSymbol.Warning, "Pull to try again."),
+        failureFallback = "Couldn't load bookmarks.",
     ),
     ;
 
@@ -159,6 +174,8 @@ class HistoryFeedState(private val model: ChatViewModel, val kind: HistoryFeed, 
 
     override var closedNotice by mutableStateOf<String?>(null)
 
+    override val failureFallback: String get() = kind.failureFallback
+
     /** The swipe couldn't be delivered, so the row stayed — the Not Connected alert is up. */
     var removeFailed by mutableStateOf(false)
 
@@ -166,13 +183,14 @@ class HistoryFeedState(private val model: ChatViewModel, val kind: HistoryFeed, 
         feed.reload()
     }
 
-    private suspend fun fetch(cursor: FeedCursor?): HighlightsPage? =
+    private suspend fun fetch(cursor: FeedCursor?): FeedAnswer =
         when (kind) {
             // ⚠⚠ The activity feed merges two sources and pages each on its own cursor (lurker#990):
             // the whole `FeedCursor`, passed back exactly as it came.
             HistoryFeed.Activity -> model.fetchActivity(cursor)
-            // Single-source: the message id half.
-            HistoryFeed.Bookmarks -> model.fetchBookmarks(cursor?.beforeMessage)
+            // Single-source: the message id half. Not one of the search process's reads, so still a
+            // page or nothing — wrapped.
+            HistoryFeed.Bookmarks -> FeedAnswer(model.fetchBookmarks(cursor?.beforeMessage))
         }
 
     /**

@@ -5,11 +5,17 @@ package net.amiantos.lurker.ui.feeds
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import net.amiantos.lurkerkit.model.EventType
+import net.amiantos.lurkerkit.model.FeedAnswer
 import net.amiantos.lurkerkit.model.FeedCursor
 import net.amiantos.lurkerkit.model.FeedPaging
 import net.amiantos.lurkerkit.model.HighlightItem
@@ -30,12 +36,12 @@ class FeedControllerTest {
     /** A fetch that waits to be answered, recording what it was asked and whether it was cancelled. */
     private class Server {
         val asked = mutableListOf<FeedCursor?>()
-        val pending = mutableListOf<CompletableDeferred<HighlightsPage?>>()
+        val pending = mutableListOf<CompletableDeferred<FeedAnswer>>()
         var cancelled = 0
 
-        suspend fun fetch(cursor: FeedCursor?): HighlightsPage? {
+        suspend fun fetch(cursor: FeedCursor?): FeedAnswer {
             asked += cursor
-            val answer = CompletableDeferred<HighlightsPage?>()
+            val answer = CompletableDeferred<FeedAnswer>()
             pending += answer
             try {
                 return answer.await()
@@ -45,6 +51,9 @@ class FeedControllerTest {
             }
         }
     }
+
+    /** A page, or null for a fetch that failed with nothing said about why. */
+    private fun CompletableDeferred<FeedAnswer>.complete(page: HighlightsPage?) = complete(FeedAnswer(page))
 
     private fun TestScope.controller(server: Server, supersedes: Boolean, visible: (List<HighlightItem>) -> List<HighlightItem> = { it }) =
         FeedController(this.backgroundScope, supersedes, visible, server::fetch)
@@ -139,11 +148,96 @@ class FeedControllerTest {
         runCurrent()
         server.pending[1].complete(null)
         runCurrent()
-        assertTrue(feed.snapshot.pageInFailed)
+        assertTrue(feed.snapshot.failureUnderRows != null)
         feed.retry()
         runCurrent()
         assertEquals(FeedCursor(beforeMessage = 11), server.asked.last())
-        assertTrue(!feed.snapshot.pageInFailed)
+        assertTrue(feed.snapshot.failureUnderRows == null)
+    }
+
+    @Test
+    fun aFailedPullKeepsTheRowsAndTryAgainAsksForTheNewestPage() = runTest {
+        val server = Server()
+        val feed = controller(server, supersedes = false)
+        feed.reload()
+        runCurrent()
+        server.pending[0].complete(HighlightsPage((20L downTo 11L).map { item(it) }, nextBefore = 11))
+        runCurrent()
+        feed.reload(byPull = true)
+        runCurrent()
+        server.pending[1].complete(FeedAnswer.Unavailable(reason = "search took too long"))
+        runCurrent()
+        assertEquals(10, feed.snapshot.items.size)
+        assertTrue(!feed.snapshot.refreshing)
+        assertEquals("Search took too long.", feed.snapshot.failureUnderRows?.sentence(fallback = "Couldn't load activity."))
+        feed.retry()
+        runCurrent()
+        assertEquals(listOf(null, null, null), server.asked)
+        assertNull(feed.snapshot.failure)
+        assertEquals(10, feed.snapshot.items.size)
+        server.pending[2].complete(HighlightsPage(listOf(item(21)), nextBefore = null))
+        runCurrent()
+        assertEquals(listOf(21L), feed.snapshot.items.map { it.message.id })
+        // Nothing failed now: the row is gone and a stray tap asks nothing.
+        feed.retry()
+        runCurrent()
+        assertEquals(3, server.asked.size)
+    }
+
+    /**
+     * lurker#1308: typing on cancels the search in flight, and the server answers the displaced one with
+     * 503 "search superseded". Neither the cancellation nor that answer is the new question's failure.
+     */
+    @Test
+    fun aSupersededSearchNeverSurfacesAsAFailure() = runTest {
+        val server = Server()
+        val feed = controller(server, supersedes = true)
+        feed.reload()
+        runCurrent()
+        feed.reload(newQuestion = true)
+        runCurrent()
+        assertEquals(1, server.cancelled)
+        assertNull(feed.snapshot.failure)
+        assertEquals(FeedPaging.Placeholder.Loading, feed.snapshot.placeholder)
+
+        // ⚠ Cancellation is cooperative: an answer already on its way back can't be recalled. A fetch
+        // that returns the 503 anyway still lands nowhere.
+        val asked = mutableListOf<CompletableDeferred<FeedAnswer>>()
+        val stubborn = FeedController(
+            backgroundScope,
+            supersedes = true,
+            visible = { it },
+            fetch = {
+                val answer = CompletableDeferred<FeedAnswer>().also { asked += it }
+                withContext(NonCancellable) { answer.await() }
+            },
+        )
+        stubborn.reload()
+        runCurrent()
+        stubborn.reload(newQuestion = true)
+        runCurrent()
+        asked[0].complete(FeedAnswer.Unavailable(reason = "search superseded"))
+        runCurrent()
+        assertNull(stubborn.snapshot.failure)
+        assertEquals(FeedPaging.Placeholder.Loading, stubborn.snapshot.placeholder)
+        asked[1].complete(FeedAnswer.Page(HighlightsPage(listOf(item(1)), nextBefore = null)))
+        runCurrent()
+        assertEquals(listOf(1L), stubborn.snapshot.items.map { it.message.id })
+    }
+
+    /** Leaving the screen cancels the request, and a cancelled request says nothing. */
+    @Test
+    fun leavingCancelsTheRequestInFlight() = runTest {
+        val server = Server()
+        val scope = CoroutineScope(coroutineContext + Job())
+        val feed = FeedController(scope, supersedes = true, visible = { it }, fetch = server::fetch)
+        feed.reload()
+        runCurrent()
+        scope.cancel()
+        runCurrent()
+        assertEquals(1, server.cancelled)
+        assertNull(feed.snapshot.failure)
+        assertEquals(FeedPaging.Placeholder.Loading, feed.snapshot.placeholder)
     }
 
     /** Search's too-short state: answered on the spot, so typing into it never flashes "Searching…". */

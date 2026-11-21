@@ -137,4 +137,11 @@ object SearchWords {
         } else {
             StateModel("Couldn't search", StateSymbol.Warning, "Pull to try again, or edit your search.")
         }
+
+    /**
+     * Under the rows, when a pull or a page-in failed and the server gave no reason of its own
+     * (lurker#1308) — iOS's `failureFallback`. `TooShort` never fails: it never asks.
+     */
+    fun failureFallback(showing: SearchShowing): String =
+        if (showing == SearchShowing.Landing) "Couldn't load highlights." else "Couldn't search."
 }

@@ -131,6 +131,10 @@ class SearchRequestTests {
         // the truth is that nobody looked.
         assertEquals(SearchRequest.Outcome.Failed, SearchRequest.outcome(status = 400, scoped = true))
         assertEquals(SearchRequest.Outcome.Failed, SearchRequest.outcome(status = 500, scoped = true))
+        // lurker#1308: a 503 is the search process saying "not this time", scoped or not. It is
+        // its own outcome so the caller can quote the reason and keep its rows.
+        assertEquals(SearchRequest.Outcome.Unavailable, SearchRequest.outcome(status = 503, scoped = true))
+        assertEquals(SearchRequest.Outcome.Unavailable, SearchRequest.outcome(status = 503, scoped = false))
     }
 
     // Port-only:

@@ -55,6 +55,7 @@ import net.amiantos.lurkerkit.model.DccChat
 import net.amiantos.lurkerkit.model.DraftSync
 import net.amiantos.lurkerkit.model.Drafts
 import net.amiantos.lurkerkit.model.FavoriteEntry
+import net.amiantos.lurkerkit.model.FeedAnswer
 import net.amiantos.lurkerkit.model.FeedCursor
 import net.amiantos.lurkerkit.model.HighlightsPage
 import net.amiantos.lurkerkit.model.HistoryCountBy
@@ -988,24 +989,26 @@ class ChatViewModel(
      * never a mirror of what the account owns. One mutation, not one per row, because each
      * `store.apply` publishes a whole `ChatState`.
      */
-    suspend fun fetchHighlights(before: Long? = null): HighlightsPage? {
-        val page = client.fetchHighlights(before = before)
-        store.noteBookmarked(ids = page?.items.orEmpty().filter { it.message.bookmarked }.map { it.message.id })
-        store.noteRedactions(rows = page?.items.orEmpty().map { it.message })
-        return page
+    suspend fun fetchHighlights(before: Long? = null): FeedAnswer {
+        val answer = client.fetchHighlights(before = before)
+        val items = answer.page?.items.orEmpty()
+        store.noteBookmarked(ids = items.filter { it.message.bookmarked }.map { it.message.id })
+        store.noteRedactions(rows = items.map { it.message })
+        return answer
     }
 
     /**
      * A page of the activity feed — highlights and reactions to your lines (lurker-ios#183).
      * Bookmark flags noted the way `fetchHighlights` notes them; a reaction row carries none.
      */
-    suspend fun fetchActivity(cursor: FeedCursor? = null): HighlightsPage? {
-        val page = client.fetchActivity(cursor = cursor)
+    suspend fun fetchActivity(cursor: FeedCursor? = null): FeedAnswer {
+        val answer = client.fetchActivity(cursor = cursor)
+        val items = answer.page?.items.orEmpty()
         store.noteBookmarked(
-            ids = page?.items.orEmpty().filter { it.reaction == null && it.message.bookmarked }.map { it.message.id },
+            ids = items.filter { it.reaction == null && it.message.bookmarked }.map { it.message.id },
         )
-        store.noteRedactions(rows = page?.items.orEmpty().filter { it.reaction == null }.map { it.message })
-        return page
+        store.noteRedactions(rows = items.filter { it.reaction == null }.map { it.message })
+        return answer
     }
 
     // MARK: - Link previews
@@ -1215,7 +1218,7 @@ class ChatViewModel(
      * all (`from:nick in:#channel on:network words`); `before` is the previous page's
      * `nextBefore` cursor, null for the first page.
      *
-     * Returns null for "couldn't ask or wasn't answered" and an empty page for "no matches" —
+     * Returns a failure for "couldn't ask or wasn't answered" and an empty page for "no matches" —
      * the caller renders those differently, and collapsing them would let an offline search
      * claim the user has never said the word they're looking for. A query with nothing to
      * search on is neither: there is no question to ask, so it's an empty page.
@@ -1225,9 +1228,9 @@ class ChatViewModel(
      * search: `on:` is being typed a character at a time, and every prefix of a real network
      * name would otherwise be a search that returns nothing.
      */
-    suspend fun searchMessages(raw: String, before: Long? = null): HighlightsPage? {
+    suspend fun searchMessages(raw: String, before: Long? = null): FeedAnswer {
         val query = SearchQuery.parse(raw)
-        if (query.isEmpty) return HighlightsPage(items = emptyList(), nextBefore = null)
+        if (query.isEmpty) return FeedAnswer.Page(HighlightsPage(items = emptyList(), nextBefore = null))
         // Lowest id wins, rather than whichever the dictionary happens to yield first. Two
         // networks can legitimately share a name — two connections to the same server, or two
         // user-named entries that collide — and `networks` is a dictionary, whose iteration
@@ -1247,13 +1250,14 @@ class ChatViewModel(
                 .filter { it.name?.equals(query.network, ignoreCase = true) == true }
                 .minByOrNull { it.id }?.id
         }
-        val page = client.search(query, networkId = networkId, before = before)
+        val answer = client.search(query, networkId = networkId, before = before)
         // Search rows carry the same `bookmarked` flag as any other message row, and this is
         // the only place a saved line the user has never opened can become known — same
         // reasoning as `fetchBookmarks`, and the same single mutation rather than one per row.
-        store.noteBookmarked(ids = page?.items.orEmpty().filter { it.message.bookmarked }.map { it.message.id })
-        store.noteRedactions(rows = page?.items.orEmpty().map { it.message })
-        return page
+        val items = answer.page?.items.orEmpty()
+        store.noteBookmarked(ids = items.filter { it.message.bookmarked }.map { it.message.id })
+        store.noteRedactions(rows = items.map { it.message })
+        return answer
     }
 
     /**
