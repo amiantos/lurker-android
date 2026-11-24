@@ -475,6 +475,8 @@ fun ConversationScreen(
             // Exact in one pass: the reverse layout puts item 0 at the bottom edge by construction.
             ConversationScroll.Landing.AtTail -> {
                 traceGlue(traceSource) { "land at tail" }
+                // The same one-shot request as a follow, with the same hazard: checked the same way.
+                jobs.follow(current)
                 listState.requestScrollToItem(0)
             }
             is ConversationScroll.Landing.Converge -> {
@@ -537,7 +539,7 @@ fun ConversationScreen(
         val firstIndex = listState.firstVisibleItemIndex
         val firstOffset = listState.firstVisibleItemScrollOffset
         val wasNearBottom = ConversationScroll.nearBottomBefore(
-            visible, drawn, firstIndex, firstOffset, followSlop, lastKnown = jobs.nearBottom,
+            visible, drawn, followSlop, lastKnown = jobs.nearBottom,
         )
         scroll.tracing = ScrollTrace.isEnabled
         val step = scroll.onRows(built, wasNearBottom)
@@ -561,7 +563,12 @@ fun ConversationScreen(
         // ⚠ A reverse layout does NOT follow the tail by itself: a lazy list keeps its first visible
         // item by KEY, and the newest row is inserted in front of it, so a reader at the bottom
         // would watch new lines arrive below the viewport. So the list is asked to stay at item 0
-        // for its next measure — the measure that lays these rows out.
+        // for its next measure — meant to be the measure that lays these rows out.
+        // ⚠⚠ Not guaranteed to be (lurker#1387): the request holds for the NEXT remeasure only, and a
+        // measure of the previous rows spends it; the one that lays these out then anchors by key
+        // and the new line lands under the composer. So the follow is remembered against this build
+        // and checked on the layout that actually draws it — see the layout stream.
+        jobs.follow(if (step.follow) built else null)
         if (step.follow) {
             listState.requestScrollToItem(0)
         } else if (hold != null) {
@@ -596,6 +603,8 @@ fun ConversationScreen(
         listState.interactionSource.interactions.collect { interaction ->
             if (interaction !is DragInteraction.Start) return@collect
             userDrags[0]++
+            // The reader's own scroll outranks a follow still waiting to be checked.
+            jobs.follow(null)
             if (scroll.onUserDrag()) jobs.converging?.cancel()
         }
     }
@@ -624,6 +633,26 @@ fun ConversationScreen(
                     dividerGapBelow = with(density) { metrics.markerGapBelow.roundToPx() },
                 ) ?: return@collect
                 jobs.nearBottom = facts.nearBottom
+                // A follow asked of THESE rows (see `accept`), checked on the layout that drew them: the
+                // newest row should sit at the bottom edge, offset 0, not under the composer. If a
+                // measure of the previous rows spent the request, ask again — bounded, so a layout
+                // that can't satisfy it never loops.
+                if (jobs.followFor === rows) {
+                    val newest = info.visibleItemsInfo.firstOrNull { it.index == 0 }
+                    if (newest != null && newest.offset >= 0) {
+                        jobs.follow(null)
+                    } else if (jobs.followRetries < FOLLOW_RETRIES) {
+                        jobs.followRetries++
+                        traceGlue(traceSource) {
+                            "follow missed seq=${rows.seq} first=${listState.firstVisibleItemIndex}/" +
+                                "${listState.firstVisibleItemScrollOffset} newest=${newest?.offset} retry=${jobs.followRetries}"
+                        }
+                        listState.requestScrollToItem(0)
+                    } else {
+                        traceGlue(traceSource) { "follow gave up seq=${rows.seq} newest=${newest?.offset}" }
+                        jobs.follow(null)
+                    }
+                }
                 // Read live, as iOS's `isDetached` is: whether a page is worth asking for is a question
                 // about the server's latest word, not the frame that happened to trigger this pass.
                 val detached = model.state.buffers[key.id]?.hasMoreNewer == true
@@ -1032,6 +1061,21 @@ private class Jobs(
 
     /** The last layout line the trace wrote, so a scroll's hundred unchanged ticks write nothing. */
     var lastTraceBody: String = ""
+
+    /**
+     * The build a follow (or a landing at the tail) was asked for, until a layout of it shows the
+     * newest row at the bottom edge — or another build, or the reader's drag, supersedes it.
+     */
+    var followFor: BuiltRows? = null
+        private set
+
+    /** Re-asks spent on [followFor]. */
+    var followRetries = 0
+
+    fun follow(rows: BuiltRows?) {
+        followFor = rows
+        followRetries = 0
+    }
 }
 
 /** What the layout stream reads, in one value, so a change to any of it re-decides. */
@@ -1119,6 +1163,9 @@ private suspend fun reveal(listState: LazyListState, rows: BuiltRows, row: Int) 
 
 /** iOS's `isNearBottom`: within 80pt of the newest row still counts as following the conversation. */
 private val FOLLOW_SLOP = 80.dp
+
+/** How many times a follow the list didn't honour is asked again before it's let go. */
+private const val FOLLOW_RETRIES = 2
 
 /** iOS's paging distance: within 300pt of either end of what's loaded, ask for the next page. */
 private val PAGING_DISTANCE = 300.dp
