@@ -1202,13 +1202,24 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
          * 1 at what looks like the bottom: every later line was "not near the bottom" and didn't
          * follow, while the pills, reading distance, said it was and showed nothing. The buffer
          * stopped following for good, with the newest lines hidden under the composer.
+         *
+         * ⚠ And never from a layout that is still carrying out a follow ([followPending]: one asked
+         * for and not yet seen to land, nor cancelled by the reader's drag). That layout shows the
+         * list part-way through our own move, not where the reader is: the reader was at the bottom
+         * when the follow was asked for. A device trace caught it: a 434px line's follow was spent by
+         * a measure of the previous rows, and 60ms later a rebuild of the same rows read the line
+         * sitting past the slop as "reading history". It didn't follow, which cancelled the follow
+         * still waiting to be retried, held the list where it was, and every line after counted as
+         * history.
          */
         fun nearBottomBefore(
             visible: List<VisibleItem>,
             drawn: BuiltRows,
             slopPx: Int,
             lastKnown: Boolean,
+            followPending: Boolean = false,
         ): Boolean {
+            if (followPending) return true
             if (!LayoutFacts.describes(visible, drawn)) return lastKnown
             return LayoutFacts.fromBottom(visible) < slopPx
         }

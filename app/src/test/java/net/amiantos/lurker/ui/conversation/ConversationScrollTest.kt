@@ -1354,6 +1354,23 @@ class ConversationScrollTest {
     }
 
     @Test
+    fun `a rebuild before a missed follow is retried still follows (lurker#1387)`() {
+        val scroll = machine()
+        build(scroll, state(messages = msgs(1L..49L))).also { scroll.onRows(it, wasNearBottom = true) }
+        val drawn = build(scroll, state(messages = msgs(1L..50L)))
+        assertTrue(scroll.onRows(drawn, wasNearBottom = true).follow)
+        // The follow was spent: the new 120px line sits wholly below the edge, past the 80px slop.
+        val missed = underTheComposer(drawn, heights = 120, viewport = 600)
+        // Without the pending follow, that reads as history (the device trace's 08:53:21 rebuild)...
+        assertFalse(ConversationScroll.nearBottomBefore(missed, drawn, 80, lastKnown = true))
+        // ...but the reader never left: the move is ours, part-way done, and the rebuild follows.
+        val wasNearBottom = ConversationScroll.nearBottomBefore(missed, drawn, 80, lastKnown = true, followPending = true)
+        assertTrue(wasNearBottom)
+        val rebuilt = build(scroll, state(messages = msgs(1L..50L)))
+        assertTrue(scroll.onRows(rebuilt, wasNearBottom).follow)
+    }
+
+    @Test
     fun `rows hidden under the composer past the slop are history, not the bottom`() {
         val scroll = machine()
         val drawn = build(scroll, state(messages = msgs(1L..50L)))

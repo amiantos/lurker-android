@@ -482,6 +482,9 @@ fun ConversationScreen(
             is ConversationScroll.Landing.Converge -> {
                 // A superseded chain would stop on its own at its next pass; it needn't scroll first.
                 jobs.converging?.cancel()
+                // A jump away from the tail outranks a follow still waiting to be checked: its retry
+                // would pull the list back to item 0 under the jump.
+                jobs.follow(null)
                 jobs.converging = scope.launch { converge(landing.token) }
             }
         }
@@ -538,14 +541,18 @@ fun ConversationScreen(
         val visible = visibleItems(listState)
         val firstIndex = listState.firstVisibleItemIndex
         val firstOffset = listState.firstVisibleItemScrollOffset
+        // A follow not yet seen to land (`jobs.followFor`, cleared by the layout that lands it or by
+        // the reader's drag) means this layout is our own move part-way done, not the reader's
+        // place: they're still at the bottom, and this build follows too (lurker#1387).
+        val followPending = jobs.followFor != null
         val wasNearBottom = ConversationScroll.nearBottomBefore(
-            visible, drawn, followSlop, lastKnown = jobs.nearBottom,
+            visible, drawn, followSlop, lastKnown = jobs.nearBottom, followPending = followPending,
         )
         scroll.tracing = ScrollTrace.isEnabled
         val step = scroll.onRows(built, wasNearBottom)
         traceGlue(traceSource) {
             "accept seq=${built.seq} rows=${built.rows.size} describes=${LayoutFacts.describes(visible, drawn)} first=$firstIndex/$firstOffset " +
-                "wasNearBottom=$wasNearBottom lastKnown=${jobs.nearBottom} follow=${step.follow}"
+                "wasNearBottom=$wasNearBottom lastKnown=${jobs.nearBottom} pending=$followPending follow=${step.follow}"
         }
         if (step.optionsChanged) publishOptions()
         val hold = if (step.follow || scroll.landingPending) {
