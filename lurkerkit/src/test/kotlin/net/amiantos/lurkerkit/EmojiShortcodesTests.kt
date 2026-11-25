@@ -31,7 +31,7 @@ class EmojiShortcodesTests {
     }
 
     @Test
-    fun testLookupIsCaseInsensitiveAndUnknownIsNull() {
+    fun testLookupIsCaseInsensitiveAndUnknownIsNil() {
         assertEquals("🦴", EmojiShortcodes.glyph("Bone"))
         assertEquals("🎉", EmojiShortcodes.glyph("TADA"))
         assertNull(EmojiShortcodes.glyph("nope"))
@@ -109,15 +109,6 @@ class EmojiShortcodesTests {
         assertEquals(emptyList(), EmojiShortcodes.matches(""))
     }
 
-    // MARK: - Replacing (the composer's edit; the renderer's marks follow `TextRange.moved`)
-
-    @Test
-    fun testReplacedSwapsTheMatchForItsGlyph() {
-        val text = "hi :tada: all"
-        val match = EmojiShortcodes.matches(text).single()
-        assertEquals("hi 🎉 all", EmojiShortcodes.replaced(text, match))
-    }
-
     // MARK: - The composer (`findCompletedShortcode`)
 
     @Test
@@ -133,7 +124,7 @@ class EmojiShortcodesTests {
     }
 
     @Test
-    fun testCompletedIsNullWithoutAClosingColonAtTheCaret() {
+    fun testCompletedIsNilWithoutAClosingColonAtTheCaret() {
         assertNull(EmojiShortcodes.completed(":tada", 5))
         // The caret inside the token, or after a space, is not the closing moment.
         assertNull(EmojiShortcodes.completed(":tada: ", 7))
@@ -142,14 +133,14 @@ class EmojiShortcodesTests {
     }
 
     @Test
-    fun testCompletedIsNullForAClockAMidWordColonRunOrAnUnknownName() {
+    fun testCompletedIsNilForAClockAMidWordColonRunOrAnUnknownName() {
         assertNull(EmojiShortcodes.completed("12:00:", 6))
         assertNull(EmojiShortcodes.completed("word:smile:", 11))
         assertNull(EmojiShortcodes.completed(":nope:", 6))
     }
 
     @Test
-    fun testCompletedIsNullWhenANewlineFollowsTheShortcode() {
+    fun testCompletedIsNilWhenANewlineFollowsTheShortcode() {
         // java.util.regex's `$` matches before a final line terminator; the pattern uses `\z` so a
         // newline typed after a literal `:tada:` (a restored line, a synced draft) doesn't swap the
         // line above.
@@ -193,5 +184,15 @@ class EmojiShortcodesTests {
         assertEquals("👍", EmojiShortcodes.reaction("👍"))
         assertEquals(":tada: :tada:", EmojiShortcodes.reaction(":tada: :tada:"))
         assertEquals("", EmojiShortcodes.reaction("  "))
+    }
+
+    // Port-only:
+
+    /** Replacing: the composer's edit. The renderer's marks follow `TextRange.moved`. */
+    @Test
+    fun testReplacedSwapsTheMatchForItsGlyph() {
+        val text = "hi :tada: all"
+        val match = EmojiShortcodes.matches(text).single()
+        assertEquals("hi 🎉 all", EmojiShortcodes.replaced(text, match))
     }
 }

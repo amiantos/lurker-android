@@ -26,14 +26,14 @@ class MessageOrderTests {
 
     /** A buffer with nothing replayed is left as it is: the same list. */
     @Test
-    fun leavesOrderedRowsTheSameList() {
+    fun leavesOrderedRows() {
         val rows = listOf(msg(1, 1), msg(2, 2), msg(3, 2))
         assertSame(rows, MessageOrder.byTime(rows))
     }
 
     /** A replayed line goes by its time, above the join it was stored after. */
     @Test
-    fun placesReplayedLinesByTime() {
+    fun placesReplayedLines() {
         val rows = listOf(
             msg(10, 18, "before"),
             msg(20, 22, "join"),
@@ -72,16 +72,18 @@ class MessageOrderTests {
         assertEquals(listOf(10L, 21L, 22L, 20L, 0L, 23L), ids(MessageOrder.byTime(after + msg(23, 23))))
     }
 
+    /** Rows with no time at the head of the list stay there. */
+    @Test
+    fun leadingUndatedStaysFirst() {
+        assertEquals(listOf(0L, 21L, 20L), ids(MessageOrder.byTime(listOf(msg(0, null, "local"), msg(20, 22), msg(21, 19)))))
+    }
+
+    // Port-only:
+
     /** Rows with no time among ordered rows leave the list as it is. */
     @Test
     fun undatedAmongOrderedRowsLeavesTheList() {
         val rows = listOf(msg(0, null, "local"), msg(1, 1), msg(0, null, "local"), msg(2, 2))
         assertSame(rows, MessageOrder.byTime(rows))
-    }
-
-    /** Rows with no time at the head of the list stay there. */
-    @Test
-    fun leadingUndatedStaysFirst() {
-        assertEquals(listOf(0L, 21L, 20L), ids(MessageOrder.byTime(listOf(msg(0, null, "local"), msg(20, 22), msg(21, 19)))))
     }
 }
