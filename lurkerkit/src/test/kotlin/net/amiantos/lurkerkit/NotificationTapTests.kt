@@ -34,6 +34,39 @@ class NotificationTapTests {
             "kind" to "dm",
         )
 
+    /**
+     * A test push as `POST /api/push/test` sends it (lurker#1273): real-looking routing keys
+     * that name nothing. Read as a destination they open an empty `test` buffer on network 0.
+     */
+    @Test
+    fun testATestPushNamesNoBuffer() {
+        val payload = mapOf<String, Any?>(
+            "aps" to mapOf(
+                "alert" to mapOf("title" to "Test notification", "body" to "Push is working."),
+                "sound" to "default",
+            ),
+            "networkId" to 0,
+            "target" to "test",
+            "kind" to "test",
+        )
+        assertNull(NotificationTap.parse(payload))
+    }
+
+    // Not ported: testARelayedTestPushNamesNoBuffer. It reads the tap off
+    // `RelayNotification.parse(...).userInfo`, and `RelayNotification` isn't ported: a relayed
+    // push reaches this platform as FCM's string map (`RelayPush.flatten`, lurker-android#80).
+    // That road is pinned in `:app`'s `PushMessageTest`, and the map's shape by the port-only
+    // test at the bottom of this class.
+
+    /** Only the test kind is refused: every other kind still routes. */
+    @Test
+    fun testOtherKindsStillRoute() {
+        assertNotNull(NotificationTap.parse(dmPayload()))
+        val payload = dmPayload()
+        payload["kind"] = "highlight"
+        assertNotNull(NotificationTap.parse(payload))
+    }
+
     @Test
     fun testParsesADMPush() {
         val tap = NotificationTap.parse(dmPayload())
@@ -197,6 +230,25 @@ class NotificationTapTests {
         data["kind"] = "friend_online"
         data.remove("messageId")
         assertEquals(NotificationTap(networkId = 7, target = "bob"), NotificationTap.parse(data))
+    }
+
+    /**
+     * A test push as the server's `buildFcmMessage` sends it (lurker#1273): `kind` is the string
+     * `"test"` like every other value, beside placeholder routing keys.
+     */
+    @Test
+    fun testAnFCMTestPushNamesNoBuffer() {
+        val data = mapOf<String, Any?>(
+            "kind" to "test",
+            "networkId" to "0",
+            "target" to "test",
+            "title" to "Test notification",
+            "body" to "Push is working.",
+            "tag" to "test",
+        )
+        assertNull(NotificationTap.parse(data))
+        // The keys alone would have routed: it is the kind that refuses it.
+        assertEquals(NotificationTap(networkId = 0, target = "test"), NotificationTap.parse(data - "kind"))
     }
 
     @Test

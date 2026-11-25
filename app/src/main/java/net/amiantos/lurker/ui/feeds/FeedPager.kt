@@ -3,6 +3,8 @@
 
 package net.amiantos.lurker.ui.feeds
 
+import net.amiantos.lurker.ui.shell.StateModel
+import net.amiantos.lurkerkit.model.FeedAnswer
 import net.amiantos.lurkerkit.model.FeedPaging
 import net.amiantos.lurkerkit.model.HighlightItem
 import net.amiantos.lurkerkit.model.HighlightsPage
@@ -14,17 +16,44 @@ data class FeedSnapshot(
     /** A pull's own spinner is up — the page keeps its spinner away while it is. */
     val refreshing: Boolean = false,
     /**
-     * The last page-in failed under rows already shown: the list ends in a retry row. Paging is driven
-     * by rows coming on screen, and at the bottom of a list nothing new ever does — so without an
-     * explicit retry, a failed page-in there could never be asked again short of a pull.
+     * The last fetch failed — [FeedPaging.failure] (lurker#1308) — or is the failure being retried
+     * ([retrying]). With no rows the Error placeholder is up and this says why ([errorWords]). With
+     * rows — a failed pull or page-in, which keeps them — a notice beside them says so, with a Try
+     * Again: above them for a failed pull ([failureAbove]), below for a failed page-in
+     * ([failureBelow]). A pull that silently did nothing reads as nothing new, and paging is driven by
+     * rows coming on screen, which at the bottom of a list none ever will again.
      */
-    val pageInFailed: Boolean = false,
+    val failure: FeedPaging.Failure? = null,
+    /**
+     * Try Again was tapped and its answer hasn't landed: the notice stays up, busy, until it does — a
+     * notice that vanished on the tap and came back a few seconds later read as a glitch.
+     */
+    val retrying: Boolean = false,
     /**
      * Counts the first pages that have landed. A new first page is a fresh read of every row (a rule
      * made since, a relay bot marked since), so what was rendered for the last one is thrown away.
      */
     val epoch: Int = 0,
-)
+) {
+    /**
+     * A failed pull, said ABOVE the rows: that is where the reader who pulled is looking. Only with
+     * rows up — with none, the placeholder says it.
+     */
+    val failureAbove: FeedPaging.Failure? get() = failure?.takeIf { it.firstPage && placeholder == null }
+
+    /** A failed page-in, said BELOW the rows: that is where the reader scrolled to. */
+    val failureBelow: FeedPaging.Failure? get() = failure?.takeIf { !it.firstPage && placeholder == null }
+
+    /**
+     * The Error placeholder's words: the feed's own ([said]), with the server's reason ahead of its
+     * advice when it gave one, not in place of it — "Search took too long. Pull to try again, or edit
+     * your search." (iOS's `renderPlaceholder`).
+     */
+    fun errorWords(said: StateModel): StateModel {
+        val failure = failure?.takeIf { it.reason != null } ?: return said
+        return said.copy(subtitle = listOfNotNull(failure.sentence(fallback = ""), said.subtitle).joinToString(" "))
+    }
+}
 
 /**
  * A cross-buffer feed's paging, as this app draws it: LurkerKit's [FeedPaging] — the cursor, the
@@ -34,7 +63,8 @@ data class FeedSnapshot(
  *
  * What is only here, and why:
  * - [FeedSnapshot.refreshing], the pull's own spinner (iOS's refresh control, which ends itself).
- * - [FeedSnapshot.pageInFailed], the retry row under a failed page-in.
+ * - Where a [FeedSnapshot.failure] is said — above the rows, below them, or in the placeholder's
+ *   words — and that it stays up, busy, while it is retried ([FeedSnapshot.retrying]).
  * - [FeedSnapshot.epoch], which throws away what was rendered for the last first page.
  * - [wantsMore], the prefetch window (iOS's `willDisplay` check).
  * - A removed row stays removed across a reload already in flight ([remove]). LurkerKit lacks this.
@@ -62,8 +92,10 @@ class FeedPager(
     var refreshing: Boolean = false
         private set
 
-    private var pageInFailed = false
     private var epoch = 0
+
+    /** The failure being retried, kept so its notice stays up until the answer lands ([retry]). */
+    private var retrying: FeedPaging.Failure? = null
 
     /** The generation of the latest reload — what a removal is stamped with (see [removed]). */
     private var reloadGeneration = 0
@@ -76,7 +108,17 @@ class FeedPager(
      */
     private val removed = HashMap<Long, Int>()
 
-    fun snapshot(): FeedSnapshot = FeedSnapshot(items, placeholder, refreshing, pageInFailed, epoch)
+    fun snapshot(): FeedSnapshot {
+        val standing = paging.failure
+        return FeedSnapshot(
+            items = items,
+            placeholder = placeholder,
+            refreshing = refreshing,
+            failure = standing ?: retrying,
+            retrying = standing == null && retrying != null,
+            epoch = epoch,
+        )
+    }
 
     /** Whether [fetch] still answers the list on screen — re-checked when its request actually starts. */
     fun isCurrent(fetch: FeedPaging.Fetch): Boolean = paging.isCurrent(fetch)
@@ -94,12 +136,31 @@ class FeedPager(
         }
         reloadGeneration = fetch.generation
         refreshing = byPull
-        pageInFailed = false
+        // A pull or a new question replaces a retry that was out: its notice is no longer busy
+        // with anything.
+        retrying = null
         return fetch
     }
 
     /** The next older page, if there is one and nothing is already loading — [FeedPaging.loadMore]. */
-    fun loadMore(): FeedPaging.Fetch? = issued(paging.loadMore())
+    fun loadMore(): FeedPaging.Fetch? = paging.loadMore()
+
+    /**
+     * The fetch that failed, again — [FeedPaging.retry]: the newest page for a failed open or pull, the
+     * same older page for a failed page-in. Null when nothing failed — or when the retry is already
+     * out. The rows stay up while it asks and so does the notice, busy ([FeedSnapshot.retrying]); no
+     * pull spinner goes up — the reader tapped a button, they didn't pull.
+     */
+    fun retry(): FeedPaging.Fetch? {
+        val failed = paging.failure
+        val fetch = paging.retry() ?: return null
+        retrying = failed
+        if (fetch.isFirstPage) {
+            reloadGeneration = fetch.generation
+            refreshing = false
+        }
+        return fetch
+    }
 
     /**
      * Whether a scroll that has drawn row [index] should ask for more: within [PREFETCH] rows of the
@@ -108,26 +169,32 @@ class FeedPager(
      */
     fun wantsMore(index: Int): Boolean = index >= items.size - PREFETCH
 
+    /** [land] for a page-or-null: null is a failure with nothing said about why. */
+    fun land(fetch: FeedPaging.Fetch, page: HighlightsPage?): FeedPaging.Fetch? = land(fetch, FeedAnswer(page))
+
     /**
-     * A page landed (null: the fetch failed) — [FeedPaging.land]. Returns the follow-up fetch when the
-     * page filtered to nothing and a cursor is still live.
+     * An answer landed — [FeedPaging.land]. Returns the follow-up fetch when the page filtered to
+     * nothing and a cursor is still live. Null, having touched nothing, for an answer to a question
+     * since replaced — ⚠ which is what keeps the server's 503 for a search this client displaced
+     * ("search superseded") from ever being shown as the new question's failure (lurker#1308).
      *
-     * A failed page-in under rows ends the list in a retry row ([FeedSnapshot.pageInFailed]). A first
-     * page ends a pull's spinner, failed or not, and one that answers is a new [FeedSnapshot.epoch].
+     * A failure of either kind keeps the rows already up and is said under them, or in the placeholder
+     * when there are none ([FeedSnapshot.failure]). A first page ends a pull's spinner, failed or not,
+     * and one that answers is a new [FeedSnapshot.epoch].
      */
-    fun land(fetch: FeedPaging.Fetch, page: HighlightsPage?): FeedPaging.Fetch? {
-        val landing = paging.land(page, fetch) { rows -> shown(rows, fetch) } ?: return null
+    fun land(fetch: FeedPaging.Fetch, answer: FeedAnswer): FeedPaging.Fetch? {
+        val landing = paging.land(answer, fetch) { rows -> shown(rows, fetch) } ?: return null
+        // Whatever was being retried has its answer, or was replaced by the fetch that just landed.
+        retrying = null
         if (fetch.isFirstPage) {
             refreshing = false
-            if (page != null) {
+            if (answer.page != null) {
                 // This answer was asked for after these removals, so it is the server's word on them.
                 removed.values.removeAll { it < fetch.generation }
                 epoch += 1
             }
-        } else if (page == null && items.isNotEmpty()) {
-            pageInFailed = true
         }
-        return issued(landing.next)
+        return landing.next
     }
 
     /**
@@ -152,13 +219,7 @@ class FeedPager(
     fun remove(messageId: Long): FeedPaging.Fetch? {
         removed[messageId] = reloadGeneration
         val landing = paging.remove(messageId) ?: return null
-        return issued(landing.next)
-    }
-
-    /** Every fetch handed out takes a failed page-in's retry row down: the page is being asked again. */
-    private fun issued(fetch: FeedPaging.Fetch?): FeedPaging.Fetch? {
-        if (fetch != null) pageInFailed = false
-        return fetch
+        return landing.next
     }
 
     companion object {

@@ -96,16 +96,22 @@ fun rememberUploadsSheets(): UploadsSheets {
     return remember(open) { UploadsSheets(open) }
 }
 
-/** A sentence to say over the browser — a refused star, a failed delete, a tombstone tapped. */
-data class UploadsAlert(val title: String, val message: String)
+/**
+ * A sentence to say over the browser — a refused star, a failed delete, a tombstone tapped.
+ *
+ * [forgetInstead] is the row a failed delete was for: its bytes weren't destroyed, the row still says
+ * it can be deleted, so its menu keeps offering only Delete — and the way off the list for it is
+ * offered on the alert itself (lurker#1295).
+ */
+data class UploadsAlert(val title: String, val message: String, val forgetInstead: UploadItem? = null)
 
 /**
  * The browser, held for the life of its dialog: the list ([grid]), the search field, the debounce, and
  * the row actions. lurker-ios's `UploadsViewController`, minus the views; the decisions are
  * [UploadsGrid]'s.
  *
- * ⚠ Every fetch is a READ (`GET /api/uploads`); a star and a delete are the writes, and they run
- * `NonCancellable` — closing the dialog mid-request must not leave the reader unsure whether it took.
+ * ⚠ Every fetch is a READ (`GET /api/uploads`); a star, a delete and a remove-from-list are the
+ * writes, and they run `NonCancellable` — closing the dialog mid-request must not leave the reader unsure whether it took.
  */
 class UploadsBrowserState(private val model: ChatViewModel, private val scope: CoroutineScope) {
     var grid by mutableStateOf(UploadsGrid())
@@ -126,6 +132,9 @@ class UploadsBrowserState(private val model: ChatViewModel, private val scope: C
 
     /** The row whose delete is being confirmed. */
     var confirmingDelete by mutableStateOf<UploadItem?>(null)
+
+    /** The row whose removal from the list is being confirmed. */
+    var confirmingForget by mutableStateOf<UploadItem?>(null)
 
     val thumbnails = UploadThumbnails(model, scope)
 
@@ -221,14 +230,41 @@ class UploadsBrowserState(private val model: ChatViewModel, private val scope: C
 
     /**
      * ⚠ A WRITE that destroys the stored bytes. Only ever offered where `canDelete` says it can. A
-     * refusal leaves the row and says why.
+     * refusal leaves the row and says why — and offers to take the row off the list instead, which
+     * is the only way out for a row the server wrongly says it can delete.
      */
     fun delete(item: UploadItem) {
         confirmingDelete = null
+        grid = grid.removalStarted(item.id) ?: return
         scope.launch {
             val refusal = withContext(NonCancellable) { model.deleteUpload(id = item.id) }
             if (refusal != null) {
-                alert = UploadsAlert("Couldn't Delete", refusal)
+                grid = grid.removalRefused(item.id)
+                alert = UploadsAlert("Couldn't Delete", refusal, forgetInstead = item)
+            } else {
+                grid = grid.deleted(item.id)
+            }
+        }
+    }
+
+    /**
+     * Take the row off the list and leave the file wherever it is (lurker#1295), after asking. What a
+     * row offers when its file can't be destroyed from here, and what a failed delete offers.
+     */
+    fun askToForget(item: UploadItem) {
+        alert = null
+        confirmingForget = item
+    }
+
+    /** ⚠ A WRITE: the row goes from the account's list on every device. The file is not touched. */
+    fun forget(item: UploadItem) {
+        confirmingForget = null
+        grid = grid.removalStarted(item.id) ?: return
+        scope.launch {
+            val refusal = withContext(NonCancellable) { model.forgetUpload(id = item.id) }
+            if (refusal != null) {
+                grid = grid.removalRefused(item.id)
+                alert = UploadsAlert("Couldn't Remove", refusal)
             } else {
                 grid = grid.deleted(item.id)
             }

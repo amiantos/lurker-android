@@ -174,6 +174,7 @@ internal fun UploadsPage(
             UploadAction.CopyLink -> if (item.removed) state.reportTombstone() else copyLink(context, item.url, events)
             UploadAction.Share -> share(context, item.url)
             UploadAction.Delete -> state.askToDelete(item)
+            UploadAction.RemoveFromList -> state.askToForget(item)
         }
     }
     DialogPage(
@@ -252,6 +253,21 @@ internal fun UploadsPage(
             title = { Text(alert.title) },
             text = { Text(alert.message) },
             confirmButton = { TextButton(onClick = { state.alert = null }) { Text("OK") } },
+            // A failed delete: the way off the list for a row whose file wouldn't go.
+            dismissButton = alert.forgetInstead?.let { item ->
+                { TextButton(onClick = { state.askToForget(item) }) { Text("Remove from List Instead") } }
+            },
+        )
+    }
+    state.confirmingForget?.let { item ->
+        AlertDialog(
+            onDismissRequest = { state.confirmingForget = null },
+            title = { Text("Remove ${item.displayName} from your uploads?") },
+            // A tombstone's file is already gone, so there is no second line (`forgetMessage`).
+            text = item.forgetMessage?.let { message -> { Text(message) } },
+            dismissButton = { TextButton(onClick = { state.confirmingForget = null }) { Text("Cancel") } },
+            // Not the error colour: nothing is destroyed, and it has to read differently from Delete.
+            confirmButton = { TextButton(onClick = { state.forget(item) }) { Text("Remove") } },
         )
     }
     state.confirmingDelete?.let { item ->
@@ -492,7 +508,7 @@ internal fun UploadTileContent(
             for (action in actions) {
                 DropdownMenuItem(
                     text = {
-                        Text(action.title, color = if (action == UploadAction.Delete) MaterialTheme.colorScheme.error else Color.Unspecified)
+                        Text(action.title, color = if (action.destructive) MaterialTheme.colorScheme.error else Color.Unspecified)
                     },
                     leadingIcon = { Icon(actionIcon(action), contentDescription = null) },
                     onClick = {
@@ -528,6 +544,7 @@ private fun actionIcon(action: UploadAction): ImageVector =
         UploadAction.CopyLink -> LurkerIcons.Link
         UploadAction.Share -> LurkerIcons.Share
         UploadAction.Delete -> LurkerIcons.Delete
+        UploadAction.RemoveFromList -> LurkerIcons.Remove
     }
 
 /**

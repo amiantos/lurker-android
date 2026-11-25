@@ -9,6 +9,7 @@ import net.amiantos.lurkerkit.model.LinkPreview
 import net.amiantos.lurkerkit.model.PreviewKind
 import net.amiantos.lurkerkit.model.UploadItem
 import net.amiantos.lurkerkit.model.UploadKind
+import net.amiantos.lurkerkit.model.UploadRemoval
 import net.amiantos.lurkerkit.model.UploadsFilter
 import net.amiantos.lurkerkit.model.UploadsPage
 import net.amiantos.lurkerkit.model.UploadsRequest
@@ -61,6 +62,11 @@ data class UploadsGrid(
     val starTokens: Long = 0,
     /** Uploads deleted from under this browser — a late refusal must never bring one back. */
     val deletedIds: Set<Int> = emptySet(),
+    /**
+     * Rows with a delete or a remove-from-list out. A second ask for the same row, from a menu reopened
+     * while the first is still in flight, is dropped rather than answered twice ([removalStarted]).
+     */
+    val removingIds: Set<Int> = emptySet(),
 ) {
     /** One request to make: its generation, its question, its cursor. */
     data class Request(val generation: Int, val filter: UploadsFilter, val before: Int?, val limit: Int)
@@ -120,7 +126,9 @@ data class UploadsGrid(
             }
         }
         return settled.copy(
-            items = page.items,
+            // A list read before a removal landed can arrive after it, and would put the row back. The
+            // cursor is still the page's own last row: it is where the server's next page starts.
+            items = page.items.filter { it.id !in deletedIds },
             cursor = page.items.lastOrNull()?.id,
             hasMore = UploadsRequest.hasMore(request.filter, received = page.items.size, limit = request.limit),
             isTruncated = UploadsRequest.isTruncated(request.filter, received = page.items.size),
@@ -136,10 +144,9 @@ data class UploadsGrid(
         if (request.generation != generation) return this
         val settled = copy(isLoading = false)
         if (page == null) return settled.copy(pageInFailed = true)
-        val all = items + page.items
         return settled.copy(
-            items = all,
-            cursor = all.lastOrNull()?.id,
+            items = items + page.items.filter { it.id !in deletedIds },
+            cursor = page.items.lastOrNull()?.id ?: cursor,
             hasMore = UploadsRequest.hasMore(request.filter, received = page.items.size, limit = request.limit),
         )
     }
@@ -188,12 +195,21 @@ data class UploadsGrid(
         return if (pendingStars[id] == revert.token) copy(pendingStars = pendingStars - id) else this
     }
 
-    /** A delete went through: the row goes, and any star change still out for it is void. */
+    /**
+     * The row is gone from the server, by either road — a delete, or taken off the list with its file
+     * left alone (lurker#1295): the row goes, and any star change still out for it is void.
+     */
     fun deleted(id: Int): UploadsGrid {
-        val gone = copy(deletedIds = deletedIds + id, pendingStars = pendingStars - id)
+        val gone = copy(deletedIds = deletedIds + id, pendingStars = pendingStars - id, removingIds = removingIds - id)
         val index = items.indexOfFirst { it.id == id }
         return if (index < 0) gone else gone.removing(index)
     }
+
+    /** A delete or a remove-from-list is going out for [id]. Null when one already is: ask nothing. */
+    fun removalStarted(id: Int): UploadsGrid? = if (id in removingIds) null else copy(removingIds = removingIds + id)
+
+    /** The removal for [id] was refused: the row stays, and may be asked about again. */
+    fun removalRefused(id: Int): UploadsGrid = copy(removingIds = removingIds - id)
 
     private fun removing(index: Int): UploadsGrid {
         val all = items.toMutableList().also { it.removeAt(index) }
@@ -274,6 +290,20 @@ enum class UploadAction(val title: String) {
     CopyLink("Copy Link"),
     Share("Share…"),
     Delete("Delete"),
+
+    /**
+     * Take the row off the list and leave the file wherever it is (lurker#1295). What a row offers
+     * when its file can't be destroyed from here: another uploader's, one whose config is gone, a
+     * moderation tombstone.
+     */
+    RemoveFromList("Remove from List"),
+    ;
+
+    /**
+     * Drawn in the error colour: the file is destroyed. Not Remove from List — nothing is destroyed,
+     * and it has to read differently from Delete, which does destroy the file.
+     */
+    val destructive: Boolean get() = this == Delete
 }
 
 /** The tile's words and menu, pure — lurker-ios's `UploadTileCell` and `actions(for:)`. */
@@ -287,7 +317,9 @@ object UploadTiles {
      * it, so it survives a restore), so a tombstone can arrive starred — and hiding the control on every
      * removed row would strand that star with no way to clear it.
      *
-     * ⚠ Delete only where [UploadItem.canDelete] says the bytes really can be destroyed.
+     * ⚠ Delete only where [UploadItem.canDelete] says the bytes really can be destroyed. Every other
+     * row — a tombstone included — offers Remove from List in its place ([UploadItem.removal]), so no
+     * row is stuck on the list (lurker#1295).
      */
     fun actions(item: UploadItem, canInsert: Boolean, viewable: Boolean = preview(item) != null): List<UploadAction> =
         buildList {
@@ -298,7 +330,12 @@ object UploadTiles {
                 add(UploadAction.CopyLink)
                 add(UploadAction.Share)
             }
-            if (item.canDelete) add(UploadAction.Delete)
+            add(
+                when (item.removal) {
+                    UploadRemoval.Destroy -> UploadAction.Delete
+                    UploadRemoval.Forget -> UploadAction.RemoveFromList
+                },
+            )
         }
 
     /**

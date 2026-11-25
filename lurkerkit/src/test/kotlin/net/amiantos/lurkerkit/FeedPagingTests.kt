@@ -4,11 +4,13 @@
 package net.amiantos.lurkerkit
 
 import net.amiantos.lurkerkit.model.EventType
+import net.amiantos.lurkerkit.model.FeedAnswer
 import net.amiantos.lurkerkit.model.FeedCursor
 import net.amiantos.lurkerkit.model.FeedPaging
 import net.amiantos.lurkerkit.model.HighlightItem
 import net.amiantos.lurkerkit.model.HighlightsPage
 import net.amiantos.lurkerkit.model.Message
+import okio.ByteString.Companion.encodeUtf8
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -384,5 +386,193 @@ class FeedPagingTests {
         assertNotNull(paged.loadMore())
         assertFalse(paged.abandon())
         assertFalse(paged.items.isEmpty())
+    }
+
+    // MARK: - A failure says so, and keeps the rows (lurker#1308)
+
+    @Test
+    fun testAFailedPullKeepsTheRowsAndSaysWhy() {
+        val paging = loaded(supersedes = false)
+        val pull = paging.reload()!!
+        val landing = paging.land(FeedAnswer.Unavailable(reason = "search took too long"), pull, visible)
+        assertEquals(false, landing?.rowsChanged)
+        assertEquals((30L downTo 21L).toList(), ids(paging), "the page already on screen stays")
+        assertNull(paging.placeholder, "rows are up, so no placeholder covers them")
+        assertEquals(FeedPaging.Failure(reason = "search took too long", firstPage = true), paging.failure)
+    }
+
+    @Test
+    fun testAFailedFirstPageWithNoRowsIsTheErrorPlaceholderWithTheReason() {
+        val paging = FeedPaging(supersedes = true)
+        val first = paging.reload()!!
+        paging.land(FeedAnswer.Unavailable(reason = "too many searches are waiting"), first, visible)
+        assertEquals(FeedPaging.Placeholder.Error, paging.placeholder)
+        assertEquals("too many searches are waiting", paging.failure?.reason)
+    }
+
+    @Test
+    fun testAPlainFailureCarriesNoReason() {
+        val paging = loaded(supersedes = false)
+        val pull = paging.reload()!!
+        paging.land(null, pull, visible)
+        assertEquals(FeedPaging.Failure(reason = null, firstPage = true), paging.failure)
+    }
+
+    @Test
+    fun testAFailedPageInIsRememberedAsAPageIn() {
+        val paging = loaded(supersedes = false)
+        val more = paging.loadMore()!!
+        paging.land(FeedAnswer.Unavailable(reason = "search took too long"), more, visible)
+        assertEquals(10, ids(paging).size)
+        assertEquals(false, paging.failure?.firstPage)
+    }
+
+    @Test
+    fun testRetryRepeatsTheFetchThatFailed() {
+        // A pull: the newest page again.
+        val pulled = loaded(supersedes = false)
+        pulled.land(FeedAnswer.Failed, pulled.reload()!!, visible)
+        val again = pulled.retry()
+        assertNull(again?.cursor)
+        assertNull(pulled.failure, "asking again takes the failure down")
+        assertEquals(10, ids(pulled).size, "and still keeps the rows while it asks")
+
+        // A page-in: the same older page again, from the cursor the list still holds.
+        val paged = loaded(supersedes = false)
+        paged.land(FeedAnswer.Failed, paged.loadMore()!!, visible)
+        assertEquals(FeedCursor(beforeMessage = 21), paged.retry()?.cursor)
+
+        // Nothing failed: nothing to retry.
+        val fine = loaded(supersedes = false)
+        assertNull(fine.retry())
+    }
+
+    /**
+     * A failed pull's notice sits above the rows. Scrolling on pages in beneath them, and that
+     * must not take the notice down: the newest page is still the one that didn't arrive.
+     */
+    @Test
+    fun testScrollingOnDoesNotEraseAFailedPull() {
+        val paging = loaded(supersedes = false)
+        paging.land(FeedAnswer.Unavailable(reason = "search took too long"), paging.reload()!!, visible)
+        val more = paging.loadMore()!!
+        assertEquals(true, paging.failure?.firstPage, "asking for an older page says nothing about the pull")
+        paging.land(page(listOf(20L, 19L), nextBefore = null), more, visible)
+        assertEquals(true, paging.failure?.firstPage, "nor does that page arriving")
+        assertEquals(12, ids(paging).size)
+    }
+
+    /**
+     * Otherwise the only notice left is the page-in's, and its retry fetches older rows: the
+     * refresh that failed could never be asked for again from the notice.
+     */
+    @Test
+    fun testAFailedPageInDoesNotReplaceAFailedPull() {
+        val paging = loaded(supersedes = false)
+        paging.land(FeedAnswer.Unavailable(reason = "search took too long"), paging.reload()!!, visible)
+        paging.land(FeedAnswer.Unavailable(reason = "too many searches are waiting"), paging.loadMore()!!, visible)
+        assertEquals(FeedPaging.Failure(reason = "search took too long", firstPage = true), paging.failure)
+        assertNull(paging.retry()?.cursor, "and its retry is still the newest page")
+    }
+
+    @Test
+    fun testAskingForThePageAgainTakesAFailedPageInDown() {
+        val paging = loaded(supersedes = false)
+        paging.land(FeedAnswer.Failed, paging.loadMore()!!, visible)
+        assertNotNull(paging.failure)
+        // The next scroll re-arms the page-in, and the notice goes while it is asked.
+        assertNotNull(paging.loadMore())
+        assertNull(paging.failure)
+    }
+
+    @Test
+    fun testTheNextAnswerClearsTheFailure() {
+        val paging = loaded(supersedes = false)
+        paging.land(FeedAnswer.Unavailable(reason = "search took too long"), paging.reload()!!, visible)
+        paging.land(page(listOf(40L, 39L), nextBefore = null), paging.reload()!!, visible)
+        assertNull(paging.failure)
+        assertEquals(listOf(40L, 39L), ids(paging))
+    }
+
+    @Test
+    fun testASupersededFailureTouchesNothing() {
+        val paging = loaded(supersedes = true)
+        val stale = paging.reload()!!
+        paging.reload(newQuestion = true)
+        assertNull(paging.land(FeedAnswer.Unavailable(reason = "search superseded"), stale, visible))
+        assertNull(paging.failure, "the displaced search's 503 is not the new question's failure")
+        assertEquals(FeedPaging.Placeholder.Loading, paging.placeholder)
+    }
+
+    @Test
+    fun testEmptyingTheListByHandClearsTheFailure() {
+        val paging = FeedPaging(supersedes = false)
+        paging.land(page(listOf(5L), nextBefore = null), paging.reload()!!, visible)
+        paging.land(FeedAnswer.Failed, paging.reload()!!, visible)
+        assertNotNull(paging.failure)
+        paging.remove(messageId = 5)
+        assertNull(paging.failure)
+        assertEquals(FeedPaging.Placeholder.Empty, paging.placeholder)
+    }
+
+    @Test
+    fun testTheReasonReadsAsASentence() {
+        val said = FeedPaging.Failure(reason = "search took too long", firstPage = true)
+        assertEquals("Search took too long.", said.sentence(fallback = "Couldn't search."))
+        val punctuated = FeedPaging.Failure(reason = "Try again later!", firstPage = true)
+        assertEquals("Try again later!", punctuated.sentence(fallback = "Couldn't search."))
+        val silent = FeedPaging.Failure(reason = null, firstPage = false)
+        assertEquals("Couldn't search.", silent.sentence(fallback = "Couldn't search."))
+    }
+
+    // MARK: - Reading a 503 (lurker#1308)
+
+    @Test
+    fun testA503BodyGivesItsReason() {
+        val body = """{"error":"search took too long"}""".encodeUtf8()
+        assertEquals(FeedAnswer.Unavailable(reason = "search took too long"), FeedAnswer.unavailable(body = body))
+    }
+
+    @Test
+    fun testA503WithNoUsableBodyIsStillUnavailable() {
+        // A proxy's own 503 page, an empty body, an `error` that isn't text: still "try again".
+        for (body in listOf("", "<html>503</html>", """{"error":42}""", """{"error":"  "}""", "[]")) {
+            assertEquals(FeedAnswer.Unavailable(reason = null), FeedAnswer.unavailable(body = body.encodeUtf8()), body)
+        }
+        val long = "x".repeat(FeedAnswer.maxReasonLength + 1)
+        assertEquals(
+            FeedAnswer.Unavailable(reason = null),
+            FeedAnswer.unavailable(body = """{"error":"$long"}""".encodeUtf8()),
+        )
+    }
+
+    @Test
+    fun testAnAnswerWrapsAPageOrItsAbsence() {
+        val some = page(listOf(1L), nextBefore = null)
+        assertEquals(FeedAnswer.Page(some), FeedAnswer(some))
+        assertEquals(FeedAnswer.Failed, FeedAnswer(null))
+        assertNull(FeedAnswer.Unavailable(reason = "x").page)
+        assertNull(FeedAnswer.Failed.reason)
+    }
+
+    // Port-only:
+
+    /** The bound is the reason's length exactly, and the sentence's edges are whole characters. */
+    @Test
+    fun testTheReasonBoundAndTheSentenceEdges() {
+        val most = "x".repeat(FeedAnswer.maxReasonLength)
+        assertEquals(
+            FeedAnswer.Unavailable(reason = most),
+            FeedAnswer.unavailable(body = """{"error":"$most"}""".encodeUtf8()),
+        )
+        // Trimmed before it is measured or shown.
+        assertEquals(
+            FeedAnswer.Unavailable(reason = "busy"),
+            FeedAnswer.unavailable(body = """{"error":"  busy\n"}""".encodeUtf8()),
+        )
+        // An empty reason is no reason; one character is a sentence.
+        assertEquals("Couldn't search.", FeedPaging.Failure(reason = "", firstPage = true).sentence(fallback = "Couldn't search."))
+        assertEquals("X.", FeedPaging.Failure(reason = "x", firstPage = true).sentence(fallback = "Couldn't search."))
+        assertEquals("?", FeedPaging.Failure(reason = "?", firstPage = true).sentence(fallback = "Couldn't search."))
     }
 }

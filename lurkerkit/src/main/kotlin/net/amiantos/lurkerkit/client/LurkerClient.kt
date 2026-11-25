@@ -46,6 +46,7 @@ import net.amiantos.lurkerkit.model.ClientCertificate
 import net.amiantos.lurkerkit.model.ClientCertificatePEM
 import net.amiantos.lurkerkit.model.ComposerDraft
 import net.amiantos.lurkerkit.model.DccChat
+import net.amiantos.lurkerkit.model.FeedAnswer
 import net.amiantos.lurkerkit.model.FeedCursor
 import net.amiantos.lurkerkit.model.HighlightsPage
 import net.amiantos.lurkerkit.model.HistoryCountBy
@@ -689,8 +690,21 @@ internal class LurkerClient(
             is RestResult.Failure -> CertificateExport.Failure(message = result.message)
         }
 
-    private suspend fun act(method: String, path: String, body: JsonObject? = null): String? =
-        when (val result = rest(method, path, body = body)) {
+    /**
+     * `goneIsDone` is for a removal: a 404 says the thing is already gone, which is what was
+     * asked for, so it is success rather than a refusal to show the user.
+     *
+     * ⚠ Only the server's own 404, the one with a JSON `{error}` body. A 404 without one came
+     * from somewhere else — a reverse proxy while the server restarts, or a server too old to
+     * have the route (Express answers those in HTML) — and says nothing about the row.
+     */
+    private suspend fun act(
+        method: String,
+        path: String,
+        body: JsonObject? = null,
+        goneIsDone: Boolean = false,
+    ): String? =
+        when (val result = rest(method, path, body = body, goneIsDone = goneIsDone)) {
             is RestResult.Ok -> null
             is RestResult.Failure -> result.message
         }
@@ -720,7 +734,12 @@ internal class LurkerClient(
      * request." has nothing to answer here. A POST, PUT or PATCH with no body sends an empty
      * one, as `URLSession` does; OkHttp refuses those methods without a body.
      */
-    private suspend fun rest(method: String, path: String, body: JsonObject? = null): RestResult {
+    private suspend fun rest(
+        method: String,
+        path: String,
+        body: JsonObject? = null,
+        goneIsDone: Boolean = false,
+    ): RestResult {
         val token = token ?: return RestResult.Failure("Not signed in.")
         val url = (baseURL + path).toHttpUrlOrNull() ?: return RestResult.Failure("Not signed in.")
         val builder = Request.Builder().url(url).header("Authorization", "Bearer $token")
@@ -740,7 +759,8 @@ internal class LurkerClient(
                 reportUnauthorized(sentWith = token)
                 return RestResult.Failure("Signed out.")
             }
-            if (code in 200..<300) return RestResult.Ok(text)
+            val gone = goneIsDone && code == 404 && FrameParser.errorMessage(text) != null
+            if (code in 200..<300 || gone) return RestResult.Ok(text)
             // The server explains its own refusals — a host the admin's allowlist excludes, a
             // missing field, a paused account — and its wording is better than anything this
             // layer could infer from a status code.
@@ -1458,20 +1478,20 @@ internal class LurkerClient(
      * `networkId` is the caller's resolution of the query's `on:` *name*, which only the roster
      * can turn into an id; the query itself carries the rest.
      *
-     * Null means no answer, never "no matches" (that's an empty page): unauthenticated, offline,
-     * or a response we couldn't read. All three leave the caller free to show an error rather
-     * than an empty list — a search that silently reads as "nothing matched" is the one wrong
-     * answer here.
+     * `Failed` means no answer, never "no matches" (that's an empty page): unauthenticated,
+     * offline, or a response we couldn't read. All three leave the caller free to show an error
+     * rather than an empty list — a search that silently reads as "nothing matched" is the one
+     * wrong answer here. `Unavailable` is the server's 503, with its reason (lurker#1308).
      */
     suspend fun search(
         query: SearchQuery,
         networkId: Int?,
         before: Long? = null,
         limit: Int = 50,
-    ): HighlightsPage? {
-        val token = token ?: return null
+    ): FeedAnswer {
+        val token = token ?: return FeedAnswer.Failed
         val url = SearchRequest.url(base = baseURL, query = query, networkId = networkId, before = before, limit = limit)
-            ?: return null
+            ?: return FeedAnswer.Failed
         val request = Request.Builder().url(url).header("Authorization", "Bearer $token").build()
         try {
             val (code, data) = session.await(request)
@@ -1480,20 +1500,22 @@ internal class LurkerClient(
             when (SearchRequest.outcome(status = code, scoped = networkId != null)) {
                 SearchRequest.Outcome.Unauthorized -> {
                     reportUnauthorized(sentWith = token)
-                    return null
+                    return FeedAnswer.Failed
                 }
-                SearchRequest.Outcome.EmptyPage -> return HighlightsPage(items = emptyList(), nextBefore = null)
-                SearchRequest.Outcome.Failed -> return null
+                SearchRequest.Outcome.EmptyPage ->
+                    return FeedAnswer.Page(HighlightsPage(items = emptyList(), nextBefore = null))
+                SearchRequest.Outcome.Unavailable -> return FeedAnswer.unavailable(body = data)
+                SearchRequest.Outcome.Failed -> return FeedAnswer.Failed
                 SearchRequest.Outcome.Page -> {}
             }
-            val text = data.utf8OrNull() ?: return null
+            val text = data.utf8OrNull() ?: return FeedAnswer.Failed
             // Same `{items, nextBefore}` envelope as highlights and bookmarks, and the same
             // decorated rows — the route and the WS verb call the same `search_messages`. The
             // cursor is now the server's rather than one synthesized from `hasMore` plus the last
             // row's id, which is the other half of the deletion.
-            return FrameParser.parseHighlights(text)
+            return FeedAnswer(FrameParser.parseHighlights(text))
         } catch (_: IOException) {
-            return null
+            return FeedAnswer.Failed
         }
     }
 
@@ -1548,11 +1570,25 @@ internal class LurkerClient(
     /**
      * Destroy an upload's bytes and drop its row. Null on success, else the server's own reason.
      *
-     * ⚠⚠ Only ever called for a row whose `canDelete` is set. There is deliberately no
-     * remove-the-record-but-leave-the-file path — the route answers 409 for a row whose bytes
-     * can't be destroyed, so asking for one is a bug on this side, not a case to handle.
+     * ⚠⚠ Only ever called for a row whose `canDelete` is set: the route answers 409 for a row
+     * whose bytes can't be destroyed. That row leaves the list through `forgetUpload`.
+     *
+     * A 404 is success: the row was removed somewhere else while this list was up, and saying
+     * "not found" about a file the user is trying to be rid of leaves it stuck on screen.
      */
-    suspend fun deleteUpload(id: Int): String? = act("DELETE", "/api/uploads/$id")
+    suspend fun deleteUpload(id: Int): String? = act("DELETE", "/api/uploads/$id", goneIsDone = true)
+
+    /**
+     * Drop an upload's row and leave its file wherever it is (lurker#1289). Null on success,
+     * else the server's own reason. For a row that can't be deleted, and the way out for one
+     * whose delete failed: the server's `can_delete` is a judgment, and a row it gets wrong
+     * must not be stuck on the list.
+     */
+    suspend fun forgetUpload(id: Int): String? {
+        // This route is new in lurker 2.7.0. An older server answers 404 for the route itself,
+        // in HTML, which `goneIsDone` does not take for "already gone".
+        return act("DELETE", forgetUploadPath(id = id), goneIsDone = true)
+    }
 
     /**
      * Tell the network we're composing. Fire-and-forget: the server turns it into a
@@ -1890,12 +1926,13 @@ internal class LurkerClient(
     /**
      * Fetch a page of recent highlights (`GET /api/highlights`). `before` is the cursor
      * from a prior page's `nextBefore` (null for the first, newest page); the server pages
-     * backward by message id. Returns null on any failure so the caller can show an error
-     * state — a 401 additionally bounces the session, matching `fetchNetworks`.
+     * backward by message id. `Failed` on any failure so the caller can show an error
+     * state — a 401 additionally bounces the session, matching `fetchNetworks` — and
+     * `Unavailable` for the 503 this read shares with search (lurker#1308).
      */
-    suspend fun fetchHighlights(before: Long? = null, limit: Int = 50): HighlightsPage? {
-        val token = token ?: return null
-        val components = (baseURL + "/api/highlights").toHttpUrlOrNull()?.newBuilder() ?: return null
+    suspend fun fetchHighlights(before: Long? = null, limit: Int = 50): FeedAnswer {
+        val token = token ?: return FeedAnswer.Failed
+        val components = (baseURL + "/api/highlights").toHttpUrlOrNull()?.newBuilder() ?: return FeedAnswer.Failed
         val query = mutableListOf("limit" to limit.toString())
         if (before != null) query.add("before" to before.toString())
         components.encodedQuery(percentEncodedQuery(query))
@@ -1904,13 +1941,14 @@ internal class LurkerClient(
             val (code, data) = session.await(request)
             if (code == 401) {
                 reportUnauthorized(sentWith = token)
-                return null
+                return FeedAnswer.Failed
             }
+            if (code == 503) return FeedAnswer.unavailable(body = data)
             val text = data.utf8OrNull()
-            if (code !in 200..<300 || text == null) return null
-            return FrameParser.parseHighlights(text)
+            if (code !in 200..<300 || text == null) return FeedAnswer.Failed
+            return FeedAnswer(FrameParser.parseHighlights(text))
         } catch (_: IOException) {
-            return null
+            return FeedAnswer.Failed
         }
     }
 
@@ -1922,9 +1960,9 @@ internal class LurkerClient(
      * ⚠ A self-hosted server older than the feed answers 404; that falls back to the plain
      * highlights read, which is everything such a server has to give.
      */
-    suspend fun fetchActivity(cursor: FeedCursor? = null, limit: Int = 50): HighlightsPage? {
-        val token = token ?: return null
-        val components = (baseURL + "/api/activity").toHttpUrlOrNull()?.newBuilder() ?: return null
+    suspend fun fetchActivity(cursor: FeedCursor? = null, limit: Int = 50): FeedAnswer {
+        val token = token ?: return FeedAnswer.Failed
+        val components = (baseURL + "/api/activity").toHttpUrlOrNull()?.newBuilder() ?: return FeedAnswer.Failed
         val query = mutableListOf("limit" to limit.toString())
         cursor?.beforeMessage?.let { before -> query.add("beforeMessage" to before.toString()) }
         cursor?.beforeReaction?.let { before -> query.add("beforeReaction" to before.toString()) }
@@ -1934,14 +1972,15 @@ internal class LurkerClient(
             val (code, data) = session.await(request)
             if (code == 401) {
                 reportUnauthorized(sentWith = token)
-                return null
+                return FeedAnswer.Failed
             }
             if (code == 404) return fetchHighlights(before = cursor?.beforeMessage, limit = limit)
+            if (code == 503) return FeedAnswer.unavailable(body = data)
             val text = data.utf8OrNull()
-            if (code !in 200..<300 || text == null) return null
-            return FrameParser.parseActivity(text)
+            if (code !in 200..<300 || text == null) return FeedAnswer.Failed
+            return FeedAnswer(FrameParser.parseActivity(text))
         } catch (_: IOException) {
-            return null
+            return FeedAnswer.Failed
         }
     }
 
@@ -2626,6 +2665,8 @@ internal class LurkerClient(
     }
 
     internal companion object {
+        fun forgetUploadPath(id: Int): String = "/api/uploads/$id/record"
+
         /** OkHttp's close code for "going away" — LurkerKit's `.goingAway`. */
         private const val GOING_AWAY = 1001
 

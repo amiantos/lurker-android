@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import net.amiantos.lurkerkit.model.FeedAnswer
 import net.amiantos.lurkerkit.model.FeedCursor
 import net.amiantos.lurkerkit.model.FeedPaging
 import net.amiantos.lurkerkit.model.HighlightItem
@@ -23,8 +24,9 @@ import net.amiantos.lurkerkit.model.HighlightsPage
  * "user left" case, at least as common as "user typed another character", and for search the one worth
  * not running: the FTS query runs on the event loop that services every IRC connection on the cell.
  *
- * @param fetch one page, newest first: `cursor` is the previous page's `next`, null for the first. Null
- *   means the fetch failed (a 401 has already bounced the session).
+ * @param fetch one page, newest first: `cursor` is the previous page's `next`, null for the first.
+ *   `Failed` means the fetch failed (a 401 has already bounced the session); `Unavailable` is the
+ *   server's 503, with its reason (lurker#1308).
  * @param localFirstPage the first page, when this feed can answer it without asking anyone — null (the
  *   default) when it has to ask. Landed inside the [reload] that asked, before anything is drawn, so a
  *   page that never leaves the device never puts the loading placeholder up first: it would flash on
@@ -34,7 +36,7 @@ class FeedController(
     private val scope: CoroutineScope,
     supersedes: Boolean,
     visible: (List<HighlightItem>) -> List<HighlightItem>,
-    private val fetch: suspend (FeedCursor?) -> HighlightsPage?,
+    private val fetch: suspend (FeedCursor?) -> FeedAnswer,
     private val localFirstPage: () -> HighlightsPage? = { null },
 ) {
     private val pager = FeedPager(supersedes, visible)
@@ -84,11 +86,17 @@ class FeedController(
         run(more)
     }
 
-    /** The retry row under a failed page-in: ask for that page again. */
+    /**
+     * The failure notice's Try Again: ask again for the page that failed — the newest one after a
+     * failed pull, the same older one after a failed page-in ([FeedPager.retry]). A second tap while
+     * that is out asks nothing.
+     */
     fun retry() {
-        val more = pager.loadMore() ?: return
+        val again = pager.retry() ?: return
+        // Nothing should be in flight under a failure; if something is, it answers an older fetch.
+        job?.cancel()
         publish()
-        run(more)
+        run(again)
     }
 
     /** Drop a row the reader removed (a bookmark) — see [FeedPager.remove]. */
@@ -104,11 +112,12 @@ class FeedController(
             // question can change has maybe moved on by now, and a superseded page would still cost a
             // full search on the server.
             if (!pager.isCurrent(next)) return@launch
-            val page = fetch(next.cursor)
-            // A cancelled fetch reports null, which would otherwise read as a failure and put an error
-            // in front of someone who simply typed on.
+            val answer = fetch(next.cursor)
+            // A cancelled fetch reports a failure, which would otherwise read as a real one and put an
+            // error in front of someone who simply typed on. The generation check inside `land` catches
+            // it too — as it does the server's own 503 for the search this one displaced.
             ensureActive()
-            val more = pager.land(next, page)
+            val more = pager.land(next, answer)
             publish()
             more?.let(::run)
         }

@@ -54,6 +54,9 @@ class FeedSheetsTest {
         assertEquals("No recent activity", HistoryFeed.Activity.words(FeedPaging.Placeholder.Empty).title)
         assertEquals("Press and hold a message, then Save Message, to keep it here.", HistoryFeed.Bookmarks.words(FeedPaging.Placeholder.Empty).subtitle)
         assertEquals("Couldn't load bookmarks", HistoryFeed.Bookmarks.words(FeedPaging.Placeholder.Error).title)
+        // Under the rows, when a pull or page-in fails and the server doesn't say why (lurker#1308).
+        assertEquals("Couldn't load activity.", HistoryFeed.Activity.failureFallback)
+        assertEquals("Couldn't load bookmarks.", HistoryFeed.Bookmarks.failureFallback)
     }
 
     /** iOS's symbols: `at` for Activity's empty, `bookmark` for Bookmarks', the warning for a failure, none while loading. */

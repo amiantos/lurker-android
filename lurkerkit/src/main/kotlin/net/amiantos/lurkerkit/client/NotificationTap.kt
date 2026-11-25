@@ -38,10 +38,17 @@ data class NotificationTap(
          * app on whatever screen it would have shown anyway — never crash, and never guess at
          * a destination the user didn't ask for.
          *
+         * `null` for a test push too (`kind: "test"`, Settings → Notifications → "send a test
+         * push"). Its routing keys are placeholders — `networkId: 0`, `target: "test"` — there
+         * because parsers refuse a payload without them, and read as a destination they would
+         * open an empty buffer called `test` (lurker#1273). A tap on one only brings the app
+         * forward, which the system has already done by the time this is asked.
+         *
          * Port note: `[AnyHashable: Any]` in LurkerKit. A key that isn't a string can't match
          * one of these names there either, so nothing is lost by the narrower key type.
          */
         fun parse(userInfo: Map<String, Any?>): NotificationTap? {
+            if (userInfo["kind"] as? String == testKind) return null
             val networkId = intField(userInfo["networkId"]) ?: return null
             val target = userInfo["target"] as? String ?: return null
             if (target.isEmpty()) return null
@@ -49,6 +56,9 @@ data class NotificationTap(
             // opens the buffer at its bottom rather than jumping.
             return NotificationTap(networkId = networkId, target = target, messageId = longField(userInfo["messageId"]))
         }
+
+        /** The `kind` of a push sent by the server's "send a test push". */
+        internal const val testKind = "test"
 
         /**
          * An id field off a push payload, coping with either shape it can arrive in: APNs sends a
