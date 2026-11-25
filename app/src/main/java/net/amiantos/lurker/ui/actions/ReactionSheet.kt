@@ -303,7 +303,8 @@ private fun StandingRow(group: ReactionGroup, works: Boolean, onClick: () -> Uni
             .clip(shape)
             .background(if (group.mine) colors.accent.copy(alpha = 0.12f) else colors.bgSoft, shape)
             .then(if (works) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier)
-            .padding(horizontal = 10.dp, vertical = 8.dp),
+            // 12 above and below a 24sp line: a 48dp row (lurker#1401). At 8 it was 40.
+            .padding(horizontal = 10.dp, vertical = 12.dp),
         style = MaterialTheme.typography.bodyLarge,
     )
 }

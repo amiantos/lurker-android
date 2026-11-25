@@ -3,6 +3,8 @@
 
 package net.amiantos.lurker.ui.list
 
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -82,6 +84,15 @@ internal fun NotificationToast(toast: StatusToast?, onTap: () -> Unit, modifier:
 private fun ToastCapsule(toast: StatusToast, onTap: () -> Unit) {
     val style = rememberMessageTextStyle()
     val text = toastText(toast, style)
+    // Drawn 40dp tall over a list that takes any touch not squarely on something else: the 48dp
+    // a finger needs is the box around it (lurker#1401), silent to TalkBack, which has the capsule.
+    Box(
+        Modifier
+            .heightIn(min = 48.dp)
+            .clickable(interactionSource = null, indication = null, onClick = onTap)
+            .clearAndSetSemantics {},
+        contentAlignment = Alignment.Center,
+    ) {
     Box(
         Modifier
             .shadow(3.dp, CircleShape)
@@ -97,6 +108,7 @@ private fun ToastCapsule(toast: StatusToast, onTap: () -> Unit) {
             },
     ) {
         Text(text, style = monoTextStyle(), maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
     }
 }
 

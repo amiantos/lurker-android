@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.feeds
 
+import androidx.compose.foundation.layout.heightIn
 import net.amiantos.lurker.ui.shell.RetryRow
 import net.amiantos.lurker.ui.shell.StateModel
 import net.amiantos.lurker.ui.theme.LurkerIcons
@@ -384,7 +385,11 @@ internal fun FeedRowView(row: FeedRow, style: MessageTextStyle, onClick: () -> U
                     )
                 }
             }
-            .padding(bottom = metrics.blockGap - metrics.wash * 2),
+            .padding(bottom = metrics.blockGap - metrics.wash * 2)
+            // A row with no header — a `/me`, an activity line — is one line of text, about 33dp,
+            // hard against the rows around it: a finger's height at least (lurker#1401).
+            .heightIn(min = 48.dp),
+        verticalArrangement = Arrangement.Center,
     ) {
         Column(
             Modifier

@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.conversation
 
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -116,6 +117,21 @@ internal fun UnreadBanner(visible: Boolean, onClick: () -> Unit, modifier: Modif
 
 @Composable
 private fun UnreadCapsule(enabled: Boolean, onClick: () -> Unit) {
+    // The capsule is drawn 36dp tall. It floats over the list, which takes any touch that isn't
+    // squarely on something else, so the 48dp a finger needs is this box around it (lurker#1401):
+    // it takes the taps that land just over or under the capsule, silently, and says nothing to
+    // TalkBack, which has the capsule itself.
+    Box(
+        Modifier
+            .heightIn(min = 48.dp)
+            .clickable(enabled = enabled, interactionSource = null, indication = null, onClick = onClick)
+            .clearAndSetSemantics {},
+        contentAlignment = Alignment.Center,
+    ) { UnreadCapsuleFace(enabled, onClick) }
+}
+
+@Composable
+private fun UnreadCapsuleFace(enabled: Boolean, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .floatingCapsule(MaterialTheme.colorScheme.surfaceContainerHigh)
@@ -185,8 +201,8 @@ private fun LatestPill(newCount: Int, enabled: Boolean, onClick: () -> Unit) {
         Box(
             Modifier
                 .padding(top = 6.dp, end = 6.dp)
-                // The composer's send button's diameter, which it floats just above: two circles a
-                // few points apart at different sizes read as a mistake.
+                // The composer's row height, 48dp at the default scale since lurker#1401: a finger's
+                // width, and one measure with the slab it floats above.
                 .size(collapsedHeight())
                 .floatingCapsule(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .clickable(enabled = enabled, onClick = onClick),

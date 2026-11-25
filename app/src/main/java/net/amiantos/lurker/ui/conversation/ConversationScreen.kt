@@ -1361,10 +1361,11 @@ internal fun ConversationContent(
                         strokeWidth = 2.dp,
                     )
                 }
+                // 2dp under the bar, not 8: the banner carries 6dp of clear touch space above its capsule.
                 UnreadBanner(
                     visible = pills.showsUnread,
                     onClick = onJumpToUnread,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(top = top + 8.dp, start = 16.dp, end = 16.dp),
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = top + 2.dp, start = 16.dp, end = 16.dp),
                 )
                 JumpToLatestButton(
                     visible = pills.showsLatest,

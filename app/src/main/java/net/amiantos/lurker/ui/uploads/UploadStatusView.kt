@@ -95,9 +95,10 @@ private fun ReadoutCapsule(readout: UploadReadout, onCancel: () -> Unit) {
                     .clearAndSetSemantics { contentDescription = readout.accessibility },
             )
             if (readout.showsCancel) {
+                // 48dp, which makes the capsule 48 too — the composer's row height below it (lurker#1401).
                 Box(
                     Modifier
-                        .size(40.dp)
+                        .size(48.dp)
                         .clickable(role = Role.Button, onClick = onCancel)
                         .clearAndSetSemantics {
                             contentDescription = "Cancel upload"
