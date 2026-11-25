@@ -85,20 +85,14 @@ private fun ToastCapsule(toast: StatusToast, onTap: () -> Unit) {
     val style = rememberMessageTextStyle()
     val text = toastText(toast, style)
     // Drawn 40dp tall over a list that takes any touch not squarely on something else: the 48dp
-    // a finger needs is the box around it (lurker#1401), silent to TalkBack, which has the capsule.
+    // a finger needs is the box around it (lurker#1401).
+    //
+    // ⚠ What TalkBack reads is this box: `clearAndSetSemantics` replaces everything under it, so
+    // the toast's words, its announcement and its action are said here, not on the capsule.
     Box(
         Modifier
             .heightIn(min = 48.dp)
             .clickable(interactionSource = null, indication = null, onClick = onTap)
-            .clearAndSetSemantics {},
-        contentAlignment = Alignment.Center,
-    ) {
-    Box(
-        Modifier
-            .shadow(3.dp, CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape)
-            .clickable(role = Role.Button, onClick = onTap)
-            .padding(horizontal = 16.dp, vertical = 10.dp)
             // The capsule appearing isn't announced on its own.
             .clearAndSetSemantics {
                 contentDescription = text.text
@@ -106,6 +100,14 @@ private fun ToastCapsule(toast: StatusToast, onTap: () -> Unit) {
                 role = Role.Button
                 onClick(label = "Open the conversation") { onTap(); true }
             },
+        contentAlignment = Alignment.Center,
+    ) {
+    Box(
+        Modifier
+            .shadow(3.dp, CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape)
+            .clickable(role = Role.Button, onClick = onTap)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         Text(text, style = monoTextStyle(), maxLines = 1, overflow = TextOverflow.Ellipsis)
     }

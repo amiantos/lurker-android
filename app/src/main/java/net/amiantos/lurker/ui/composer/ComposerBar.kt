@@ -363,9 +363,10 @@ internal fun ComposerBarContent(
                 .fillMaxWidth()
                 .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
                 .padding(horizontal = SLAB_MARGIN, vertical = SLAB_GAP)
-                // Clipped, so a chip scrolled to either end goes behind the corner's curve.
-                .clip(slab)
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                // Drawn to the shape, not clipped to it: a clip also takes the corners out of the
+                // hit area, and the send button and the status row's end sit in them. Only the
+                // chips are clipped (`StatusRow`), which are the one thing that reaches a corner.
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, slab)
                 .border(Dp.Hairline, colors.border, slab),
         ) {
             StatusRow(
@@ -395,10 +396,12 @@ internal fun ComposerBarContent(
                 // Derived, so the bar recomposes when the answer flips rather than on every keystroke.
                 val canSend by remember(field) { derivedStateOf { ComposerModel.sendable(field.text.toString()) != null } }
                 // Sized to sit inside the one-line field with an even margin.
-                // The circle is drawn that size; the box around it is the row's height each way,
-                // 48dp, and is what takes the touch (`SendButton`, `SendMenuButton`).
-                val send = collapsed - SEND_INSET * 2
-                Box(Modifier.size(collapsed), contentAlignment = Alignment.Center) {
+                // A 36dp circle in a box the status row's end box wide and a row tall. Neither
+                // follows the font scale sideways: the ✕ and the count above are centred in a
+                // box of this width, and a circle that grew with the text would slide out from
+                // under them and take the field's room. The touch is `SendButton`'s own 48dp box.
+                val send = STATUS_END_BOX - SEND_INSET * 2
+                Box(Modifier.width(STATUS_END_BOX).height(collapsed), contentAlignment = Alignment.Center) {
                     if (sendButton != null) sendButton(canSend, send) else SendButton(enabled = canSend, size = send, onClick = onSend)
                 }
             }
@@ -471,7 +474,11 @@ private fun StatusRow(
 ) {
     Box(modifier) {
         if (suggestions.isNotEmpty()) {
-            SuggestionsView(suggestions, onPick, Modifier.fillMaxWidth().fillMaxHeight())
+            // Clipped to the slab's top corners, so a chip scrolled to either end goes behind the curve.
+            SuggestionsView(
+                suggestions, onPick,
+                Modifier.fillMaxWidth().fillMaxHeight().clip(RoundedCornerShape(topStart = SLAB_RADIUS, topEnd = SLAB_RADIUS)),
+            )
             return@Box
         }
         if (lead is StatusLead.Reply) {

@@ -27,6 +27,9 @@ import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListItemInfo
@@ -1373,7 +1376,12 @@ internal fun ConversationContent(
                     onClick = onJumpToLatest,
                     // 14 here and 6 of the pill's own: its edge is the slab's, 20dp in, which centres
                     // it over the send button.
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = bottom + 12.dp),
+                    // …and inside the same side insets the slab keeps, so a cutout or a side
+                    // navigation bar in landscape moves both together.
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
+                        .padding(end = 14.dp, bottom = bottom + 12.dp),
                 )
                 overlay(bottom)
                 sheets()
