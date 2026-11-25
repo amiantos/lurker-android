@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.uploads
 
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -70,6 +71,9 @@ private fun ReadoutCapsule(readout: UploadReadout, onCancel: () -> Unit) {
         Row(
             Modifier
                 .wrapContentWidth()
+                // One height with or without the ✕: it goes while an upload is stopping, and a
+                // capsule that shrank with it moved the conversation under the reader.
+                .heightIn(min = 48.dp)
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(50))
                 .padding(start = 16.dp, end = if (readout.showsCancel) 4.dp else 16.dp),
             verticalAlignment = Alignment.CenterVertically,

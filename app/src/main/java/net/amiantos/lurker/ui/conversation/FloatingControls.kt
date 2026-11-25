@@ -3,7 +3,6 @@
 
 package net.amiantos.lurker.ui.conversation
 
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -118,7 +117,8 @@ internal fun UnreadBanner(visible: Boolean, onClick: () -> Unit, modifier: Modif
 private fun UnreadCapsule(enabled: Boolean, onClick: () -> Unit) {
     // The capsule is drawn 36dp tall. It floats over the list, which takes any touch that isn't
     // squarely on something else, so the 48dp a finger needs is this box around it (lurker#1401):
-    // it takes the taps that land just over or under the capsule, silently.
+    // 6dp over and under the capsule, whatever the font scale has made of it, taking the taps
+    // that land there, silently. The screen places this 6dp nearer the bar to make up for it.
     //
     // ⚠ The button TalkBack reads is this box, with the capsule's words: `clearAndSetSemantics`
     // replaces everything under it, so an empty one here would have left no button at all.
@@ -126,7 +126,6 @@ private fun UnreadCapsule(enabled: Boolean, onClick: () -> Unit) {
     // point and "Unread messages" alone doesn't say a tap does anything.
     Box(
         Modifier
-            .heightIn(min = 48.dp)
             .clickable(enabled = enabled, interactionSource = null, indication = null, onClick = onClick)
             .clearAndSetSemantics {
                 contentDescription = "Jump to first unread"
@@ -134,7 +133,7 @@ private fun UnreadCapsule(enabled: Boolean, onClick: () -> Unit) {
                 if (enabled) onClick { onClick(); true }
             },
         contentAlignment = Alignment.Center,
-    ) { UnreadCapsuleFace(enabled, onClick) }
+    ) { Box(Modifier.padding(vertical = 6.dp)) { UnreadCapsuleFace(enabled, onClick) } }
 }
 
 @Composable

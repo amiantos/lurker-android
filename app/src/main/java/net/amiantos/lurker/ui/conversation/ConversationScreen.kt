@@ -1376,12 +1376,9 @@ internal fun ConversationContent(
                     onClick = onJumpToLatest,
                     // 14 here and 6 of the pill's own: its edge is the slab's, 20dp in, which centres
                     // it over the send button.
-                    // …and inside the same side insets the slab keeps, so a cutout or a side
-                    // navigation bar in landscape moves both together.
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
-                        .padding(end = 14.dp, bottom = bottom + 12.dp),
+                    // Both are inside this box's side insets already, so a cutout or a side
+                    // navigation bar in landscape moves them together.
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = bottom + 12.dp),
                 )
                 overlay(bottom)
                 sheets()

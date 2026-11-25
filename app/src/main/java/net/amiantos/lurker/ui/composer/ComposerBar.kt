@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.composer
 
+import androidx.compose.ui.input.pointer.pointerInput
 import android.icu.text.SimpleDateFormat
 import android.text.format.DateFormat
 import androidx.compose.foundation.background
@@ -125,9 +126,9 @@ import java.util.Locale
 /**
  * The message composer — lurker-ios's `ComposerBar`, in Material's terms: one block with a status row
  * on top and the field beside a round send button below, after the web client's status bar and input
- * as one piece. iOS draws it as a floating glass slab; here it's an edge-to-edge, square block —
- * Android's motif — laid over the list rather than beside it, translucent so the rows scroll on under
- * it (`FloatingChrome`), which is the glass arrangement without a material Android doesn't have.
+ * as one piece. iOS draws it as a floating glass slab; here it's the same slab without the glass
+ * (lurker#1401) — a rounded rectangle at the app's side margin, opaque, with a hairline for an edge
+ * — laid over the list rather than beside it, so the rows scroll on behind it.
  *
  * **The status row** is exactly the one-line field's height and uses the message list's fixed-width
  * face, as the field now does. Nothing moves when its content changes. Left side, one thing at a time:
@@ -341,7 +342,6 @@ internal fun ComposerBarContent(
         Column(
             Modifier
                 .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
                 .padding(horizontal = SLAB_MARGIN),
             verticalArrangement = Arrangement.spacedBy(SLAB_GAP),
         ) {
@@ -361,13 +361,22 @@ internal fun ComposerBarContent(
         Column(
             Modifier
                 .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom))
+                // ⚠ The bottom inset only. The screen has already moved everything in it — the
+                // list, this bar — inside the side insets (`ConversationScreen`'s scaffold padding),
+                // and taking them again here set the slab a cutout's width further in than the
+                // rows above it: in landscape, a gap beside it nearly as wide as the avatar column.
+                // The old edge-to-edge block hid that; its fill ran to the edge either way.
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
                 .padding(horizontal = SLAB_MARGIN, vertical = SLAB_GAP)
                 // Drawn to the shape, not clipped to it: a clip also takes the corners out of the
                 // hit area, and the send button and the status row's end sit in them. Only the
                 // chips are clipped (`StatusRow`), which are the one thing that reaches a corner.
                 .background(MaterialTheme.colorScheme.surfaceContainerHigh, slab)
-                .border(Dp.Hairline, colors.border, slab),
+                .border(Dp.Hairline, colors.border, slab)
+                // The slab is the top of what it covers. Without this a press on a part of it
+                // that does nothing itself — the location text, the rule — went through to the
+                // message row behind, which the reader can't see: its actions sheet, its swipe.
+                .pointerInput(Unit) {},
         ) {
             StatusRow(
                 lead = lead,
@@ -411,9 +420,9 @@ internal fun ComposerBarContent(
 
 /**
  * The height of the collapsed field: exactly one line of the fixed-width face plus its inset — the
- * field's floor, the status row's height, and what the send button is sized from, so the empty bar
- * and the one-line bar are the same height. Follows the font scale, as iOS's follows Dynamic Type.
- * The jump-to-latest pill matches it.
+ * field's floor and the status row's height, so the empty bar and the one-line bar are the same
+ * height. 48dp at the default scale, and follows the font scale as iOS's follows Dynamic Type. The
+ * send circle and the jump-to-latest pill do not: they keep their widths (see where they're sized).
  */
 @Composable
 internal fun collapsedHeight(): Dp {
@@ -498,7 +507,12 @@ private fun StatusRow(
                     .align(Alignment.CenterEnd)
                     .fillMaxHeight()
                     .width(STATUS_END_BOX)
-                    .clickable(role = Role.Button, onClick = onCancelReply)
+                    // Unbounded, and no wider than the slab's corner: a ripple filling this box
+                    // would show square past the rounded corner it sits in.
+                    .clickable(
+                        role = Role.Button, onClick = onCancelReply,
+                        interactionSource = null, indication = ripple(bounded = false, radius = SLAB_RADIUS),
+                    )
                     .clearAndSetSemantics {
                         contentDescription = "Cancel reply"
                         role = Role.Button
@@ -510,9 +524,13 @@ private fun StatusRow(
             }
             return@Box
         }
-        Row(Modifier.fillMaxWidth().fillMaxHeight().padding(start = FIELD_INSET_HORIZONTAL), verticalAlignment = Alignment.CenterVertically) {
+        val label = ComposerModel.highlightCountLabel(highlightCount)
+        Row(
+            // With no count at its end the text keeps the inset it has at its start, not the slab's edge.
+            Modifier.fillMaxWidth().fillMaxHeight().padding(start = FIELD_INSET_HORIZONTAL, end = if (label == null) FIELD_INSET_HORIZONTAL else 0.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             StatusLeadText(lead, onToastTap, Modifier.weight(1f))
-            val label = ComposerModel.highlightCountLabel(highlightCount)
             if (label != null) HighlightCount(highlightCount, label, onHighlightCountTap)
         }
     }
@@ -634,7 +652,11 @@ private fun HighlightCount(count: Int, label: String, onClick: () -> Unit) {
     Box(
         Modifier
             .fillMaxHeight()
-            .clickable(role = Role.Button, onClick = onClick)
+            // Unbounded, as the reply's ✕ is, for the same corner.
+            .clickable(
+                role = Role.Button, onClick = onClick,
+                interactionSource = null, indication = ripple(bounded = false, radius = SLAB_RADIUS),
+            )
             .clearAndSetSemantics {
                 contentDescription = "$count highlight" + (if (count == 1) "" else "s") + " in other buffers"
                 role = Role.Button
@@ -897,13 +919,12 @@ private fun SendMenuButton(
 
 /** The send button as drawn: the lit arrow with something to send, else the `+` that opens the menu. */
 @Composable
-private fun SendFace(canSend: Boolean, size: Dp, modifier: Modifier = Modifier) {
+private fun SendFace(canSend: Boolean, size: Dp) {
     val colors = LurkerTheme.colors
     Box(
         Modifier
             .size(size)
-            .background(if (canSend) colors.accent else MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape)
-            .then(modifier),
+            .background(if (canSend) colors.accent else MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         Icon(

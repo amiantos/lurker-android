@@ -4,7 +4,6 @@
 package net.amiantos.lurker.ui.list
 
 import androidx.compose.ui.Alignment
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -85,13 +84,13 @@ private fun ToastCapsule(toast: StatusToast, onTap: () -> Unit) {
     val style = rememberMessageTextStyle()
     val text = toastText(toast, style)
     // Drawn 40dp tall over a list that takes any touch not squarely on something else: the 48dp
-    // a finger needs is the box around it (lurker#1401).
+    // a finger needs is the box around it (lurker#1401) — 4dp over and under the capsule at any
+    // font scale, which the screen's own padding gives back.
     //
     // ⚠ What TalkBack reads is this box: `clearAndSetSemantics` replaces everything under it, so
     // the toast's words, its announcement and its action are said here, not on the capsule.
     Box(
         Modifier
-            .heightIn(min = 48.dp)
             .clickable(interactionSource = null, indication = null, onClick = onTap)
             // The capsule appearing isn't announced on its own.
             .clearAndSetSemantics {
@@ -104,6 +103,7 @@ private fun ToastCapsule(toast: StatusToast, onTap: () -> Unit) {
     ) {
     Box(
         Modifier
+            .padding(vertical = 4.dp)
             .shadow(3.dp, CircleShape)
             .background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape)
             .clickable(role = Role.Button, onClick = onTap)
