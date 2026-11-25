@@ -220,9 +220,9 @@
       ]
     },
     {
-      "id": "S9",
+      "id": "S10",
       "title": "Sync to lurker-ios aa1317c",
-      "about": "The catch-up from abd8a3f: each of these was ported with its own Android PR while the pin stood still. Redaction (lurker-ios#256, lurker#1277), emoji shortcodes (#260, lurker#1294), rows by time (#262, lurker#1290), the feeds' 503 answer (#267, lurker#1308) and the notification ladder (#268, lurker#1087). The same span's changes to files already listed (unread divider #255, members unheld #259, topic prose #261, avatar ink #263, replayed rows #264) were ported alongside; every Swift test at this pin has its twin by name or is accounted for below.",
+      "about": "The catch-up from abd8a3f: each of these was ported with its own Android PR while the pin stood still. Redaction (lurker-ios#256, lurker#1277), emoji shortcodes (#260, lurker#1294), rows by time (#262, lurker#1290), the feeds' 503 answer (#267, lurker#1308) and the notification ladder (#268, lurker#1087). The same span's changes to files already listed (jump waits for its row #248, swipe to reply #252, unread divider #255, the socket's message size #258, members unheld #259, topic prose #261, avatar ink and the `look.message.modern.*` rename #263, replayed rows #264) were ported alongside; every Swift test at this pin has its twin by name or is accounted for below.",
       "files": [
         "Model/Redaction.swift",
         "Rendering/EmojiShortcodes.swift",
@@ -259,7 +259,7 @@
     "Rendering/URLMatcher.swift": "A word boundary beside a combining mark is engine-dependent; verify on a device.",
     "Rendering/IRCFormatting.swift": "`rawIndex` is tested from `RelayEnvelopeTests` (T3); checked against the Swift meanwhile. `colorSlots` (lurker-ios#232) reads codes through the same `readColorCode` as `parse`.",
     "Client/NotificationTap.swift": "Input is a `Map<String, Any?>`; FCM's all-strings data map is the shape Android will hand it. LurkerKit's `intField` became internal and refuses a JSON boolean (lurker-ios#229); this one already refused it, and stays private — its other caller, `RelayNotification`, isn't ported (S4).",
-    "Model/Settings.swift": "`SettingValue.Int` is 32-bit; a wire number past that is skipped rather than wrapped.",
+    "Model/Settings.swift": "`SettingValue.Int` is 32-bit; a wire number past that is skipped rather than wrapped. `Settings.formerKeys` (the `look.message.compact.*` → `look.message.modern.*` rename, lurker-ios#263) is the separate `SettingsRenames` object.",
     "Model/ChannelModes.swift": "Complete with T5: `channelAccess` is an extension on `ChatState`. `topicSetterLine` takes the date formatter from the app. `ChannelRefusals` and `ChannelModeDrafts` compare all their state, not just what is on screen.",
     "Model/Replies.swift": "`shown` returns `Replies.Shown(quote, text)` for the named tuple.",
     "Model/Reactions.swift": "Grapheme counting through `BreakIterator`: matches Swift on JDK 21 for emoji sequences, not for Indic conjuncts; verify on a device.",
@@ -284,16 +284,16 @@
     "Model/RelayBotSet.swift": "Value equality, where LurkerKit's class has identity.",
     "Model/PreviewText.swift": "`stripHiddenUrls` takes an `AttributedBody` interface for `:app` to implement, where LurkerKit takes an `NSMutableAttributedString`.",
     "Model/Consolidation.swift": "Returns structure, not sentences: the wording is the app's renderer's.",
-    "Model/MessageRows.swift": "`AwayDivider`'s reason is `awayMessage`. Day boundaries depend on time-zone data; verify on a device.",
+    "Model/MessageRows.swift": "`AwayDivider`'s reason is `awayMessage`. Day boundaries depend on time-zone data; verify on a device. `span(over:)` is `spanOver`.",
     "Commands/CommandParser.swift": "`parse` takes the app's date formatter, for the `/ignore` listing. Lines are cut by UTF-16 unit; differs from Swift only where a combining mark follows a slash, a space or a sigil. `argLine` and `body()` trim newlines too (lurker-ios#197). `awayFlag` (lurker#994): a space wearing a combining mark leaves the mark behind here, where Swift drops it with the separator — Port note + port-only test. lurker-ios#210: `sendable` trims and tests by `Char` where the Swift walks scalars — every whitespace character is in the BMP, so the two agree.",
-    "Commands/Command.swift": "`CommandEffect` is a sealed interface of 23 cases in Swift order.",
+    "Commands/Command.swift": "`CommandEffect` is a sealed interface, cases in Swift order.",
     "Model/NickCompletion.swift": "`spokenPunctuation` and `isMarkScalar` read the JDK's Unicode tables; verify on a device.",
     "Model/Drafts.swift": "`DraftSync` is a mutable class (case 3).",
     "Model/PreviewSelection.swift": "`looksLikeMedia` reads the path by hand to Foundation's rules rather than through `HttpUrl`; pinned by a port-only test.",
     "Model/AwayStrip.swift": "Chooses how much of the date to show (`Since`, carrying the ICU skeleton); the app formats it. \"This year\" is the ISO year, where LurkerKit asks the user's calendar.",
-    "Client/ServerFrame.swift": "`ServerFrame` is a sealed interface of 51 cases, Swift order. Three cases share a name with a model type (`AwayState`, `WhoisResult`, `ModeSpec`); the model type is written fully qualified there. Every type is an immutable data class. S9: `History.anchorMissing`.",
+    "Client/ServerFrame.swift": "`ServerFrame` is a sealed interface, cases in Swift order. Three cases share a name with a model type (`AwayState`, `WhoisResult`, `ModeSpec`); the model type is written fully qualified there. Every type is an immutable data class. S9: `History.anchorMissing`.",
     "Client/FrameParser.swift": "Reads through kotlinx.serialization where LurkerKit reads through `JSONSerialization` (behind `JSONTextRepair`); kotlinx’s answer is kept and every difference is pinned port-only in `FrameParserTests` — see `object`’s Port note (PORTING.md, JSON). A lone-surrogate escape reads on both sides, as U+FFFD on iOS and the lone unit here; a leading U+FEFF is kept on both. `jsonObject(data:)` reads UTF-8 only. The parser never throws and bounds nesting at Foundation’s 512 containers (kotlinx would overflow the stack). `channelKeys` and `peerPresence` fold nicks with `lowercase()`, which applies final sigma. `WhoisResult.signedOn` beyond `Instant` is null. S9: reads `anchorMissing`.",
-    "Store/LurkerStore.swift": "`ChatState` is an immutable data class (case 2): its thirteen mutators return the updated copy, and it compares all its state. `LurkerStore` publishes through a replaying `SharedFlow` with an unbounded buffer, not a `StateFlow`: `CurrentValueSubject` republishes equal states and a subscriber sees every value in order, and `AppBadge` writes on the settled EDGE of a burst (lurker-ios#134), which a conflating flow would skip. One assignment per method. `clock: () -> Instant` is injected for the tests. Port-only mechanics: `dropBuffers` folds the bulk drops into one subtraction per map; `noteBookmarks` copies the set only on a change; `applyBufferRenamed` is lifted out of `reduce`, body unchanged. `visibleMembers` matches your nick with `IgnoreMatch.FoldedLiteral` in place of `caseInsensitiveCompare`; `typists` tie-breaks by UTF-16 unit, Swift by scalar. ⚠ `ChatState`’s internal fields are settable through the public `copy`; nothing outside the kit should. `ChatState.canWrite` is the one can-it-go-out rule; `tagSupport` is built on it, and `canReply`, `isOwnReaction` and `canToggleReaction` on that (lurker#1101). S9: `applyHistory` takes `anchorMissing` — an `around` whose anchor the server pruned moves only the reply count and leaves the list and paging flags alone.",
+    "Store/LurkerStore.swift": "`ChatState` is an immutable data class (case 2): its mutators return the updated copy, and it compares all its state. `LurkerStore` publishes through a replaying `SharedFlow` with an unbounded buffer, not a `StateFlow`: `CurrentValueSubject` republishes equal states and a subscriber sees every value in order, and `AppBadge` writes on the settled EDGE of a burst (lurker-ios#134), which a conflating flow would skip. One assignment per method. `clock: () -> Instant` is injected for the tests. Port-only mechanics: `dropBuffers` folds the bulk drops into one subtraction per map; `noteBookmarks` copies the set only on a change; `applyBufferRenamed` is lifted out of `reduce`, body unchanged. `visibleMembers` matches your nick with `IgnoreMatch.FoldedLiteral` in place of `caseInsensitiveCompare`; `typists` tie-breaks by UTF-16 unit, Swift by scalar. ⚠ `ChatState`’s internal fields are settable through the public `copy`; nothing outside the kit should. `ChatState.canWrite` is the one can-it-go-out rule; `tagSupport` is built on it, and `canReply`, `isOwnReaction` and `canToggleReaction` on that (lurker#1101). S9: `applyHistory` takes `anchorMissing` — an `around` whose anchor the server pruned moves only the reply count and leaves the list and paging flags alone.",
     "Session/AppBadge.swift": "The badge write is an injected `(Int) -> Unit`, as the Swift’s `write` closure. `follow(states: Flow<ChatState>, scope)` collects in the given scope; calling it again cancels the previous collection, as replacing the `AnyCancellable` does. No `[weak self]`.",
     "Model/NetworkRow.swift": "`NetworkRow` and `NetworkAction`.",
     "Model/StatusLight.swift": "A plain value.",
@@ -330,7 +330,8 @@
     "Model/LocalNetworking.swift": "S9: judges the PARSED IPv6 address with a BSD-grammar parser of its own (`InetAddress.getByName` falls through to DNS on a non-literal; OkHttp's decoder is internal); the numeric-host rule the port had from lurker-android#97 is the Swift's now.",
     "Model/PreviewImageBudget.swift": "S9 (the audit). The app's own decode budgets (`ui/media/DecodeSize`, `PreviewImageLoader`) predate it; the kit rule is here for parity and for the loader to adopt.",
     "Rendering/EmojiShortcodes.swift": "`replace(in:)` over an attributed string is not here: the renderer swaps glyphs while it builds its `AnnotatedString` (`:app`'s `MessageText`), and the kit keeps `matches` and `replaced` for it and the composer.",
-    "Model/MessageOrder.swift": "`byTime` only. What the Swift file's tests call the build (`ConversationBuild`) is `:app`'s `BuiltRows`, as with `ConversationScroll`."
+    "Model/MessageOrder.swift": "`byTime` only. What the Swift file's tests call the build (`ConversationBuild`) is `:app`'s `BuiltRows`, as with `ConversationScroll`. Restructured: a separate `isOrdered` pass, and the offset inside the sort key.",
+    "Model/Redaction.swift": "The `MessageRedacted` struct is `RedactionChange` (the frame case keeps the name `ServerFrame.MessageRedacted`); `Redactions.placeholder` is `PLACEHOLDER`."
   },
   "testNotes": {
     "NotificationTapTests.swift": {
@@ -394,7 +395,7 @@
       "note": "`testCompletionMatchesTheNameAndItsWordsAndInsertsTheNick`'s local helper names its table parameter `table` (Swift: `names`): a Kotlin default value can't reach the outer `names` through a same-named parameter."
     },
     "ConversationScrollTests.swift": {
-      "note": "The origin's tests are `app/src/test/.../ConversationScrollTest.kt` (75); the Swift ported 67 and added five for the table and the reply count. Not matched by name: the app's tests are backtick-named."
+      "note": "The origin's tests are `app/src/test/.../ConversationScrollTest.kt`, which also carries what the Swift added in lurker-ios#248 and #255 (tail-follow, the unread divider, the jump that waits for its row). Not matched by name: the app's tests are backtick-named."
     },
     "EmojiShortcodesTests.swift": {
       "dropped": [

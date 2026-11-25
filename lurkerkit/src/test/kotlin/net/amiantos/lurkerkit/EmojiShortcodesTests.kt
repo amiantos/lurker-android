@@ -109,15 +109,6 @@ class EmojiShortcodesTests {
         assertEquals(emptyList(), EmojiShortcodes.matches(""))
     }
 
-    // MARK: - Replacing (the composer's edit; the renderer's marks follow `TextRange.moved`)
-
-    @Test
-    fun testReplacedSwapsTheMatchForItsGlyph() {
-        val text = "hi :tada: all"
-        val match = EmojiShortcodes.matches(text).single()
-        assertEquals("hi 🎉 all", EmojiShortcodes.replaced(text, match))
-    }
-
     // MARK: - The composer (`findCompletedShortcode`)
 
     @Test
@@ -193,5 +184,15 @@ class EmojiShortcodesTests {
         assertEquals("👍", EmojiShortcodes.reaction("👍"))
         assertEquals(":tada: :tada:", EmojiShortcodes.reaction(":tada: :tada:"))
         assertEquals("", EmojiShortcodes.reaction("  "))
+    }
+
+    // Port-only:
+
+    /** Replacing: the composer's edit. The renderer's marks follow `TextRange.moved`. */
+    @Test
+    fun testReplacedSwapsTheMatchForItsGlyph() {
+        val text = "hi :tada: all"
+        val match = EmojiShortcodes.matches(text).single()
+        assertEquals("hi 🎉 all", EmojiShortcodes.replaced(text, match))
     }
 }
