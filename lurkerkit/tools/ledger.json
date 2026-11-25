@@ -1,5 +1,5 @@
 {
-  "pin": "abd8a3f735f0fc3d254d75121e916055a659eaaa",
+  "pin": "aa1317c5c83bca21abfa15f98f49919f46cf6dd6",
   "tranches": [
     {
       "id": "T1",
@@ -220,6 +220,18 @@
       ]
     },
     {
+      "id": "S9",
+      "title": "Sync to lurker-ios aa1317c",
+      "about": "The catch-up from abd8a3f: each of these was ported with its own Android PR while the pin stood still. Redaction (lurker-ios#256, lurker#1277), emoji shortcodes (#260, lurker#1294), rows by time (#262, lurker#1290), the feeds' 503 answer (#267, lurker#1308) and the notification ladder (#268, lurker#1087). The same span's changes to files already listed (unread divider #255, members unheld #259, topic prose #261, avatar ink #263, replayed rows #264) were ported alongside; every Swift test at this pin has its twin by name or is accounted for below.",
+      "files": [
+        "Model/Redaction.swift",
+        "Rendering/EmojiShortcodes.swift",
+        "Model/MessageOrder.swift",
+        "Model/FeedAnswer.swift",
+        "Model/NotifyLadder.swift"
+      ]
+    },
+    {
       "id": "T9",
       "title": "Screens",
       "about": "Model code the apps' screens share — written on Android first and ported TO LurkerKit (lurker-ios#246).",
@@ -316,14 +328,17 @@
     "Model/ConversationScroll.swift": "Not in the kit here: this is the ORIGIN. `app/ui/conversation/ConversationScroll.kt` (with `RowOptions`, `BuiltRows`, `ReplyWatch`, `LayoutFacts`) was ported to Swift as lurker-ios#246; the Swift adds `tailPending`/`landedAtTail` (a UITableView lands over passes) and reads `historyRevision` in `ReplyWatch`, which S9 brought back here.",
     "Model/ExternalLink.swift": "S9 (the audit, lurker-ios#245). `isOpenable(url: String)` reads the scheme per RFC 3986 up to the first `:`, since the kit carries a `String` where the Swift has a `URL`.",
     "Model/LocalNetworking.swift": "S9: judges the PARSED IPv6 address with a BSD-grammar parser of its own (`InetAddress.getByName` falls through to DNS on a non-literal; OkHttp's decoder is internal); the numeric-host rule the port had from lurker-android#97 is the Swift's now.",
-    "Model/PreviewImageBudget.swift": "S9 (the audit). The app's own decode budgets (`ui/media/DecodeSize`, `PreviewImageLoader`) predate it; the kit rule is here for parity and for the loader to adopt."
+    "Model/PreviewImageBudget.swift": "S9 (the audit). The app's own decode budgets (`ui/media/DecodeSize`, `PreviewImageLoader`) predate it; the kit rule is here for parity and for the loader to adopt.",
+    "Rendering/EmojiShortcodes.swift": "`replace(in:)` over an attributed string is not here: the renderer swaps glyphs while it builds its `AnnotatedString` (`:app`'s `MessageText`), and the kit keeps `matches` and `replaced` for it and the composer.",
+    "Model/MessageOrder.swift": "`byTime` only. What the Swift file's tests call the build (`ConversationBuild`) is `:app`'s `BuiltRows`, as with `ConversationScroll`."
   },
   "testNotes": {
     "NotificationTapTests.swift": {
       "dropped": [
-        "testParsesAPayloadDecodedFromRealJSON"
+        "testParsesAPayloadDecodedFromRealJSON",
+        "testARelayedTestPushNamesNoBuffer"
       ],
-      "note": "Pins what `JSONSerialization` makes of an APNs payload; a push reaches Android as FCM's string map, which the port-only tests cover."
+      "note": "Pins what `JSONSerialization` makes of an APNs payload; a push reaches Android as FCM's string map, which the port-only tests cover. The relayed test push goes through `RelayNotification`, which is not ported; `testAnFCMTestPushNamesNoBuffer` is its twin."
     },
     "UploadContentTypesTests.swift": {
       "dropped": [
@@ -380,6 +395,28 @@
     },
     "ConversationScrollTests.swift": {
       "note": "The origin's tests are `app/src/test/.../ConversationScrollTest.kt` (75); the Swift ported 67 and added five for the table and the reply count. Not matched by name: the app's tests are backtick-named."
+    },
+    "EmojiShortcodesTests.swift": {
+      "dropped": [
+        "testReplaceSwapsEveryMatchAndKeepsOffsetsStraight",
+        "testTheGlyphTakesTheRunsAttributes",
+        "testAProtectedRangeSurvivesReplacement"
+      ],
+      "note": "The three are about `replace(in:)` on an `NSMutableAttributedString`. The Android render pass is `:app`'s `MessageText`, and `MessageTextTest` covers the same ground (a shortcode renders as its glyph, a bold one is a bold glyph, one inside a link is text)."
+    },
+    "MessageOrderTests.swift": {
+      "dropped": [
+        "buildShowsGapInPlace",
+        "dividerAboveFirstUnreadShown",
+        "summaryRepresentsItsOwnEvents",
+        "hiddenIdLandsOnItsRun",
+        "hiddenIdTakesTheNarrowestRun",
+        "badgeCountsWhatLandedBelow"
+      ],
+      "note": "The six drive the conversation build and `ConversationScroll`, which live in `:app` here. `app/src/test/.../MessageOrderBuildTest.kt` has all six under their display names."
+    },
+    "SocketMessageSizeTests.swift": {
+      "note": "Pins `URLSessionWebSocketTask.maximumMessageSize` (lurker-ios#257), a Foundation default. OkHttp sets no cap on an inbound message, so there is nothing to pin."
     }
   },
   "partial": {}

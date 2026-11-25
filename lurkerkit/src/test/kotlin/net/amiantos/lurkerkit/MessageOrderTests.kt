@@ -26,14 +26,14 @@ class MessageOrderTests {
 
     /** A buffer with nothing replayed is left as it is: the same list. */
     @Test
-    fun leavesOrderedRowsTheSameList() {
+    fun leavesOrderedRows() {
         val rows = listOf(msg(1, 1), msg(2, 2), msg(3, 2))
         assertSame(rows, MessageOrder.byTime(rows))
     }
 
     /** A replayed line goes by its time, above the join it was stored after. */
     @Test
-    fun placesReplayedLinesByTime() {
+    fun placesReplayedLines() {
         val rows = listOf(
             msg(10, 18, "before"),
             msg(20, 22, "join"),
