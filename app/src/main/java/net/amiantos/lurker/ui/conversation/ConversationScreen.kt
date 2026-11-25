@@ -1371,7 +1371,9 @@ internal fun ConversationContent(
                     visible = pills.showsLatest,
                     newCount = pills.newCount,
                     onClick = onJumpToLatest,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = bottom + 12.dp),
+                    // 14 here and 6 of the pill's own: its edge is the slab's, 20dp in, which centres
+                    // it over the send button.
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = bottom + 12.dp),
                 )
                 overlay(bottom)
                 sheets()

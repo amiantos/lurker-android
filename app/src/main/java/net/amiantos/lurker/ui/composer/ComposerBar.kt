@@ -424,10 +424,7 @@ internal fun collapsedHeight(): Dp {
  */
 private val FIELD_INSET_VERTICAL = 14.dp
 
-/**
- * With [SLAB_MARGIN], 20dp from the screen's edge: where a message's text starts
- * (`CompactMetrics.side`), so what is typed sits under what was said.
- */
+/** The text's inset inside the slab — iOS's. */
 private val FIELD_INSET_HORIZONTAL = 12.dp
 
 /** How far the send circle sits in from the slab's edge: a 36dp circle in a 48dp row. */
@@ -436,8 +433,13 @@ private val SEND_INSET = 6.dp
 /** The slab's corner radius, and the away strip's above it — iOS's. */
 private val SLAB_RADIUS = 20.dp
 
-/** The slab's distance from the screen's edges, and the strips' above it. */
-private val SLAB_MARGIN = 8.dp
+/**
+ * The slab's distance from the screen's edges, and the strips' above it: the app's side margin
+ * (`CompactMetrics.side`, `RosterMetrics.inset`), so the slab's edges are the edges a message's
+ * text and avatar keep — as iOS's slab keeps its layout margin. It was tried at 8dp, to put the
+ * typed text on that line instead, and read as a bar that had come loose from the rest of the screen.
+ */
+private val SLAB_MARGIN = 20.dp
 
 /** The clear space over and under the slab, and between it and a strip above. */
 private val SLAB_GAP = 6.dp
