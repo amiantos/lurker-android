@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.list
 
+import androidx.compose.ui.Alignment
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
@@ -82,12 +83,15 @@ internal fun NotificationToast(toast: StatusToast?, onTap: () -> Unit, modifier:
 private fun ToastCapsule(toast: StatusToast, onTap: () -> Unit) {
     val style = rememberMessageTextStyle()
     val text = toastText(toast, style)
+    // Drawn 40dp tall over a list that takes any touch not squarely on something else: the 48dp
+    // a finger needs is the box around it (lurker#1401) — 4dp over and under the capsule at any
+    // font scale, which the screen's own padding gives back.
+    //
+    // ⚠ What TalkBack reads is this box: `clearAndSetSemantics` replaces everything under it, so
+    // the toast's words, its announcement and its action are said here, not on the capsule.
     Box(
         Modifier
-            .shadow(3.dp, CircleShape)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape)
-            .clickable(role = Role.Button, onClick = onTap)
-            .padding(horizontal = 16.dp, vertical = 10.dp)
+            .clickable(interactionSource = null, indication = null, onClick = onTap)
             // The capsule appearing isn't announced on its own.
             .clearAndSetSemantics {
                 contentDescription = text.text
@@ -95,8 +99,18 @@ private fun ToastCapsule(toast: StatusToast, onTap: () -> Unit) {
                 role = Role.Button
                 onClick(label = "Open the conversation") { onTap(); true }
             },
+        contentAlignment = Alignment.Center,
+    ) {
+    Box(
+        Modifier
+            .padding(vertical = 4.dp)
+            .shadow(3.dp, CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh, CircleShape)
+            .clickable(role = Role.Button, onClick = onTap)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
     ) {
         Text(text, style = monoTextStyle(), maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
     }
 }
 

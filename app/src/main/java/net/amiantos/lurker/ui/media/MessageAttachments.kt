@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.media
 
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -332,7 +333,10 @@ private fun Card(
             }
             // The rule's 3, then 12 of air; 6 above and below, so the first line doesn't sit hard
             // against the top of its own accent.
-            .padding(start = 15.dp, top = 6.dp, bottom = 6.dp),
+            .padding(start = 15.dp, top = 6.dp, bottom = 6.dp)
+            // A card with a heading and nothing else is one line, 32dp (lurker#1401).
+            .heightIn(min = 36.dp),
+        contentAlignment = Alignment.CenterStart,
     ) {
         if (AttachmentLayout.stacksVertically(preview)) {
             Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {

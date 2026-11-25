@@ -44,7 +44,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import net.amiantos.lurker.ui.composer.collapsedHeight
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
 
@@ -116,18 +115,34 @@ internal fun UnreadBanner(visible: Boolean, onClick: () -> Unit, modifier: Modif
 
 @Composable
 private fun UnreadCapsule(enabled: Boolean, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .floatingCapsule(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(start = 14.dp, end = 16.dp, top = 8.dp, bottom = 8.dp)
-            // The words are the label; TalkBack gets the action instead, since tapping is the whole
-            // point and "Unread messages" alone doesn't say a tap does anything.
+    // The capsule is drawn 36dp tall. It floats over the list, which takes any touch that isn't
+    // squarely on something else, so the 48dp a finger needs is this box around it (lurker#1401):
+    // 6dp over and under the capsule, whatever the font scale has made of it, taking the taps
+    // that land there, silently. The screen places this 6dp nearer the bar to make up for it.
+    //
+    // ⚠ The button TalkBack reads is this box, with the capsule's words: `clearAndSetSemantics`
+    // replaces everything under it, so an empty one here would have left no button at all.
+    // The words are the label's stand-in; TalkBack gets the action, since tapping is the whole
+    // point and "Unread messages" alone doesn't say a tap does anything.
+    Box(
+        Modifier
+            .clickable(enabled = enabled, interactionSource = null, indication = null, onClick = onClick)
             .clearAndSetSemantics {
                 contentDescription = "Jump to first unread"
                 role = Role.Button
                 if (enabled) onClick { onClick(); true }
             },
+        contentAlignment = Alignment.Center,
+    ) { Box(Modifier.padding(vertical = 6.dp)) { UnreadCapsuleFace(enabled, onClick) } }
+}
+
+@Composable
+private fun UnreadCapsuleFace(enabled: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .floatingCapsule(MaterialTheme.colorScheme.surfaceContainerHigh)
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(start = 14.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -185,9 +200,10 @@ private fun LatestPill(newCount: Int, enabled: Boolean, onClick: () -> Unit) {
         Box(
             Modifier
                 .padding(top = 6.dp, end = 6.dp)
-                // The composer's send button's diameter, which it floats just above: two circles a
-                // few points apart at different sizes read as a mistake.
-                .size(collapsedHeight())
+                // 48dp: a finger's width, and the width of the box the send button sits in below, so
+                // the two stay centred on each other. Not the composer's row height, which follows
+                // the font scale and would slide this off that centre (lurker#1401).
+                .size(48.dp)
                 .floatingCapsule(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .clickable(enabled = enabled, onClick = onClick),
             contentAlignment = Alignment.Center,

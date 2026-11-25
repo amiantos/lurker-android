@@ -483,7 +483,8 @@ internal fun BufferListContent(
                 onTap = onToastTap,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(start = 16.dp, end = 16.dp, bottom = padding.calculateBottomPadding() + 16.dp),
+                    // 12, not 16: the toast carries 4dp of clear touch space under its capsule.
+                    .padding(start = 16.dp, end = 16.dp, bottom = padding.calculateBottomPadding() + 12.dp),
             )
         }
     }

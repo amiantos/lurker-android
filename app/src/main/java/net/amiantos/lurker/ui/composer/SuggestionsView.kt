@@ -109,7 +109,7 @@ internal fun Suggestion.color(style: MessageTextStyle): Color = when (kind) {
 @Composable
 private fun SuggestionsPreview(dark: Boolean, suggestions: List<Suggestion>) {
     LurkerTheme(darkTheme = dark) {
-        Box(Modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh).height(40.dp)) {
+        Box(Modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh).height(48.dp)) {
             SuggestionsView(suggestions, onPick = {}, Modifier.fillMaxHeight())
         }
     }

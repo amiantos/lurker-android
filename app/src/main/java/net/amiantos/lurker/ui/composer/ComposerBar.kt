@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.composer
 
+import androidx.compose.ui.input.pointer.pointerInput
 import android.icu.text.SimpleDateFormat
 import android.text.format.DateFormat
 import androidx.compose.foundation.background
@@ -24,6 +25,10 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.material3.ripple
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -102,7 +107,6 @@ import net.amiantos.lurker.ui.message.rememberMessageTextStyle
 import net.amiantos.lurker.ui.message.typingGlyph
 import net.amiantos.lurker.ui.theme.LurkerIcons
 import net.amiantos.lurker.ui.theme.LurkerTheme
-import net.amiantos.lurker.ui.shell.CHROME_ALPHA
 import net.amiantos.lurker.ui.theme.monoTextStyle
 import net.amiantos.lurker.ui.uploads.Attachments
 import net.amiantos.lurker.ui.uploads.UploadBatchPosition
@@ -122,9 +126,9 @@ import java.util.Locale
 /**
  * The message composer — lurker-ios's `ComposerBar`, in Material's terms: one block with a status row
  * on top and the field beside a round send button below, after the web client's status bar and input
- * as one piece. iOS draws it as a floating glass slab; here it's an edge-to-edge, square block —
- * Android's motif — laid over the list rather than beside it, translucent so the rows scroll on under
- * it (`FloatingChrome`), which is the glass arrangement without a material Android doesn't have.
+ * as one piece. iOS draws it as a floating glass slab; here it's the same slab without the glass
+ * (lurker#1401) — a rounded rectangle at the app's side margin, opaque, with a hairline for an edge
+ * — laid over the list rather than beside it, so the rows scroll on behind it.
  *
  * **The status row** is exactly the one-line field's height and uses the message list's fixed-width
  * face, as the field now does. Nothing moves when its content changes. Left side, one thing at a time:
@@ -198,7 +202,11 @@ internal fun ComposerBar(
     SideEffect {
         state.noticeFits = { message ->
             val count = ComposerModel.highlightCountLabel(highlightCount)
-            val countWidth = if (count == null) 0 else measurer.measure(count, mono, softWrap = false).size.width + with(density) { 8.dp.roundToPx() }
+            // The count's box: at least 48dp wide (`HighlightCount`).
+            val countWidth = if (count == null) 0 else maxOf(
+                measurer.measure(count, mono, softWrap = false).size.width + with(density) { 8.dp.roundToPx() },
+                with(density) { 48.dp.roundToPx() },
+            )
             val room = rowWidthPx - with(density) { (FIELD_INSET_HORIZONTAL * 2 + NOTICE_GLYPH + 6.dp).roundToPx() } - countWidth
             // Not laid out yet (a notice racing the screen open): the row is almost always wide enough,
             // so it's taken rather than floated past a composer with room for it.
@@ -334,27 +342,42 @@ internal fun ComposerBarContent(
         Column(
             Modifier
                 .fillMaxWidth()
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+                .padding(horizontal = SLAB_MARGIN),
+            verticalArrangement = Arrangement.spacedBy(SLAB_GAP),
         ) {
             above()
             when (strip) {
                 Strip.None -> Unit
-                is Strip.Away -> Box(Modifier.padding(bottom = 6.dp)) { AwayStripRow(strip, onBack) }
+                is Strip.Away -> AwayStripRow(strip, onBack)
             }
         }
-        // The block: edge to edge and square, Android's motif rather than iOS's floating glass, holding
-        // the status row on top and the field + send below, with a hairline along its top. Translucent,
-        // so the rows scroll on under it (`FloatingChrome`); it pads itself for the keyboard and the
+        // The slab: a floating rounded rectangle, iOS's shape without its glass (lurker#1401), holding
+        // the status row on top and the field + send below. It was an edge-to-edge square block;
+        // floating, it is one family with the away strip above it and the pill beside it, and the
+        // two apps read as the same composer. Opaque, with a hairline for an edge: the rows scroll
+        // on behind it and show in the margin around it. It pads itself for the keyboard and the
         // navigation bar, which is why its height is what the list reserves.
+        val slab = RoundedCornerShape(SLAB_RADIUS)
         Column(
             Modifier
                 .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = CHROME_ALPHA))
-                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal + WindowInsetsSides.Bottom)),
+                // ⚠ The bottom inset only. The screen has already moved everything in it — the
+                // list, this bar — inside the side insets (`ConversationScreen`'s scaffold padding),
+                // and taking them again here set the slab a cutout's width further in than the
+                // rows above it: in landscape, a gap beside it nearly as wide as the avatar column.
+                // The old edge-to-edge block hid that; its fill ran to the edge either way.
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom))
+                .padding(horizontal = SLAB_MARGIN, vertical = SLAB_GAP)
+                // Drawn to the shape, not clipped to it: a clip also takes the corners out of the
+                // hit area, and the send button and the status row's end sit in them. Only the
+                // chips are clipped (`StatusRow`), which are the one thing that reaches a corner.
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, slab)
+                .border(Dp.Hairline, colors.border, slab)
+                // The slab is the top of what it covers. Without this a press on a part of it
+                // that does nothing itself — the location text, the rule — went through to the
+                // message row behind, which the reader can't see: its actions sheet, its swipe.
+                .pointerInput(Unit) {},
         ) {
-            HorizontalDivider(thickness = Dp.Hairline, color = colors.border)
             StatusRow(
                 lead = lead,
                 suggestions = suggestions,
@@ -382,8 +405,12 @@ internal fun ComposerBarContent(
                 // Derived, so the bar recomposes when the answer flips rather than on every keystroke.
                 val canSend by remember(field) { derivedStateOf { ComposerModel.sendable(field.text.toString()) != null } }
                 // Sized to sit inside the one-line field with an even margin.
-                val send = collapsed - SEND_INSET * 2
-                Box(Modifier.padding(SEND_INSET)) {
+                // A 36dp circle in a box the status row's end box wide and a row tall. Neither
+                // follows the font scale sideways: the ✕ and the count above are centred in a
+                // box of this width, and a circle that grew with the text would slide out from
+                // under them and take the field's room. The touch is `SendButton`'s own 48dp box.
+                val send = STATUS_END_BOX - SEND_INSET * 2
+                Box(Modifier.width(STATUS_END_BOX).height(collapsed), contentAlignment = Alignment.Center) {
                     if (sendButton != null) sendButton(canSend, send) else SendButton(enabled = canSend, size = send, onClick = onSend)
                 }
             }
@@ -393,9 +420,9 @@ internal fun ComposerBarContent(
 
 /**
  * The height of the collapsed field: exactly one line of the fixed-width face plus its inset — the
- * field's floor, the status row's height, and what the send button is sized from, so the empty bar
- * and the one-line bar are the same height. Follows the font scale, as iOS's follows Dynamic Type.
- * The jump-to-latest pill matches it.
+ * field's floor and the status row's height, so the empty bar and the one-line bar are the same
+ * height. 48dp at the default scale, and follows the font scale as iOS's follows Dynamic Type. The
+ * send circle and the jump-to-latest pill do not: they keep their widths (see where they're sized).
  */
 @Composable
 internal fun collapsedHeight(): Dp {
@@ -403,14 +430,35 @@ internal fun collapsedHeight(): Dp {
     return with(LocalDensity.current) { line.toDp() } + FIELD_INSET_VERTICAL * 2
 }
 
-private val FIELD_INSET_VERTICAL = 10.dp
-private val FIELD_INSET_HORIZONTAL = 14.dp
+/**
+ * 14 above and below one 20sp line: a 48dp row, the least a finger needs (lurker#1401). It was 10,
+ * a 40dp row, and the chips, the reply's ✕ and the highlight count are that row's height.
+ */
+private val FIELD_INSET_VERTICAL = 14.dp
 
-/** How far the send circle sits in from the slab's edge. */
-private val SEND_INSET = 5.dp
+/** The text's inset inside the slab — iOS's. */
+private val FIELD_INSET_HORIZONTAL = 12.dp
 
-/** The away strip's corner radius: a rounded rectangle, floating above the block. */
+/** How far the send circle sits in from the slab's edge: a 36dp circle in a 48dp row. */
+private val SEND_INSET = 6.dp
+
+/** The slab's corner radius, and the away strip's above it — iOS's. */
 private val SLAB_RADIUS = 20.dp
+
+/**
+ * The slab's distance from the screen's edges, and the strips' above it: the app's side margin
+ * (`CompactMetrics.side`, `RosterMetrics.inset`), so the slab's edges are the edges a message's
+ * text and avatar keep — as iOS's slab keeps its layout margin. It was tried at 8dp, to put the
+ * typed text on that line instead, and read as a bar that had come loose from the rest of the screen.
+ */
+private val SLAB_MARGIN = 20.dp
+
+/** The clear space over and under the slab, and between it and a strip above. */
+private val SLAB_GAP = 6.dp
+
+/** The box the reply's ✕ and the highlight count are centred in — over the send circle below. */
+private val STATUS_END_BOX = 48.dp
+private val CANCEL_GLYPH = 18.dp
 
 /** The notice glyph's size, a little under the text's. */
 private val NOTICE_GLYPH = 16.dp
@@ -435,30 +483,54 @@ private fun StatusRow(
 ) {
     Box(modifier) {
         if (suggestions.isNotEmpty()) {
-            SuggestionsView(suggestions, onPick, Modifier.fillMaxWidth().fillMaxHeight())
+            // Clipped to the slab's top corners, so a chip scrolled to either end goes behind the curve.
+            SuggestionsView(
+                suggestions, onPick,
+                Modifier.fillMaxWidth().fillMaxHeight().clip(RoundedCornerShape(topStart = SLAB_RADIUS, topEnd = SLAB_RADIUS)),
+            )
             return@Box
         }
-        Row(Modifier.fillMaxWidth().fillMaxHeight().padding(start = FIELD_INSET_HORIZONTAL), verticalAlignment = Alignment.CenterVertically) {
-            StatusLeadText(lead, onToastTap, Modifier.weight(1f))
-            if (lead is StatusLead.Reply) {
-                // Drawn at the text's size, but taking touches across the row's full height (and wider
-                // than it draws): a target that short is easy to miss.
-                Box(
-                    Modifier
-                        .fillMaxHeight()
-                        .defaultMinSize(minWidth = 40.dp)
-                        .clickable(role = Role.Button, onClick = onCancelReply)
-                        .clearAndSetSemantics {
-                            contentDescription = "Cancel reply"
-                            role = Role.Button
-                            onClick { onCancelReply(); true }
-                        },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(LurkerIcons.Cancel, contentDescription = null, tint = LurkerTheme.colors.fgMuted, modifier = Modifier.size(18.dp))
-                }
+        if (lead is StatusLead.Reply) {
+            // The ✕ is at the row's end, centred over the send circle, and has the highlight
+            // count's place while a reply is up. It takes touches across a 48dp box though it
+            // draws an 18dp glyph, and the excerpt runs under the empty part of that box, up to
+            // 6dp before the glyph — layered, since a row would stop it at the box's edge.
+            StatusLeadText(
+                lead, onToastTap,
+                Modifier
+                    .align(Alignment.CenterStart)
+                    .fillMaxWidth()
+                    .padding(start = FIELD_INSET_HORIZONTAL, end = (STATUS_END_BOX + CANCEL_GLYPH) / 2 + 6.dp),
+            )
+            Box(
+                Modifier
+                    .align(Alignment.CenterEnd)
+                    .fillMaxHeight()
+                    .width(STATUS_END_BOX)
+                    // Unbounded, and no wider than the slab's corner: a ripple filling this box
+                    // would show square past the rounded corner it sits in.
+                    .clickable(
+                        role = Role.Button, onClick = onCancelReply,
+                        interactionSource = null, indication = ripple(bounded = false, radius = SLAB_RADIUS),
+                    )
+                    .clearAndSetSemantics {
+                        contentDescription = "Cancel reply"
+                        role = Role.Button
+                        onClick { onCancelReply(); true }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(LurkerIcons.Cancel, contentDescription = null, tint = LurkerTheme.colors.fgMuted, modifier = Modifier.size(CANCEL_GLYPH))
             }
-            val label = ComposerModel.highlightCountLabel(highlightCount)
+            return@Box
+        }
+        val label = ComposerModel.highlightCountLabel(highlightCount)
+        Row(
+            // With no count at its end the text keeps the inset it has at its start, not the slab's edge.
+            Modifier.fillMaxWidth().fillMaxHeight().padding(start = FIELD_INSET_HORIZONTAL, end = if (label == null) FIELD_INSET_HORIZONTAL else 0.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            StatusLeadText(lead, onToastTap, Modifier.weight(1f))
             if (label != null) HighlightCount(highlightCount, label, onHighlightCountTap)
         }
     }
@@ -580,14 +652,20 @@ private fun HighlightCount(count: Int, label: String, onClick: () -> Unit) {
     Box(
         Modifier
             .fillMaxHeight()
-            .clickable(role = Role.Button, onClick = onClick)
+            // Unbounded, as the reply's ✕ is, for the same corner.
+            .clickable(
+                role = Role.Button, onClick = onClick,
+                interactionSource = null, indication = ripple(bounded = false, radius = SLAB_RADIUS),
+            )
             .clearAndSetSemantics {
                 contentDescription = "$count highlight" + (if (count == 1) "" else "s") + " in other buffers"
                 role = Role.Button
                 onClick(label = "Back to the buffer list") { onClick(); true }
             }
-            // A few points past the text inset: the slab's corner curves in at the right end.
-            .padding(start = 8.dp, end = FIELD_INSET_HORIZONTAL + 2.dp),
+            // Centred in the box at the row's end, so the number sits over the middle of the send
+            // circle; the padding only matters once a count outgrows the box.
+            .defaultMinSize(minWidth = STATUS_END_BOX)
+            .padding(horizontal = 4.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(label, style = monoTextStyle(), color = LurkerTheme.colors.warn, maxLines = 1)
@@ -737,11 +815,14 @@ private fun isHardwareKey(event: KeyEvent): Boolean = event.nativeKeyEvent.devic
 @Composable
 private fun SendButton(enabled: Boolean, size: Dp, onClick: () -> Unit) {
     val colors = LurkerTheme.colors
+    // The touch is the outer box's — the row's height each way — and the circle is only drawn.
     Box(
         Modifier
-            .size(size)
-            .background(if (enabled) colors.accent else MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .size(size + SEND_INSET * 2)
+            .clickable(
+                enabled = enabled, role = Role.Button, onClick = onClick,
+                interactionSource = null, indication = ripple(bounded = false, radius = size / 2),
+            )
             .clearAndSetSemantics {
                 contentDescription = "Send"
                 role = Role.Button
@@ -749,12 +830,19 @@ private fun SendButton(enabled: Boolean, size: Dp, onClick: () -> Unit) {
             },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            LurkerIcons.ArrowUpward,
-            contentDescription = null,
-            tint = if (enabled) Color.White else colors.fgMuted,
-            modifier = Modifier.size(18.dp),
-        )
+        Box(
+            Modifier
+                .size(size)
+                .background(if (enabled) colors.accent else MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                LurkerIcons.ArrowUpward,
+                contentDescription = null,
+                tint = if (enabled) Color.White else colors.fgMuted,
+                modifier = Modifier.size(18.dp),
+            )
+        }
     }
 }
 
@@ -781,23 +869,25 @@ private fun SendMenuButton(
         haptics.performHapticFeedback(HapticFeedbackType.LongPress)
         expanded = true
     }
-    Box {
-        SendFace(
-            canSend = canSend,
-            size = size,
-            modifier = Modifier
-                .combinedClickable(
-                    role = Role.Button,
-                    onClick = { if (canSend) onSend() else expanded = true },
-                    onLongClick = open,
-                )
-                .clearAndSetSemantics {
-                    contentDescription = if (canSend) "Send" else "Add"
-                    role = Role.Button
-                    onClick { if (canSend) onSend() else expanded = true; true }
-                    onLongClick(label = "Attachments and color") { expanded = true; true }
-                },
-        )
+    // The touch is the outer box's — the row's height each way — and the face is only drawn.
+    Box(
+        Modifier
+            .size(size + SEND_INSET * 2)
+            .combinedClickable(
+                role = Role.Button,
+                interactionSource = null, indication = ripple(bounded = false, radius = size / 2),
+                onClick = { if (canSend) onSend() else expanded = true },
+                onLongClick = open,
+            )
+            .clearAndSetSemantics {
+                contentDescription = if (canSend) "Send" else "Add"
+                role = Role.Button
+                onClick { if (canSend) onSend() else expanded = true; true }
+                onLongClick(label = "Attachments and color") { expanded = true; true }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        SendFace(canSend = canSend, size = size)
         // ⚠ Not focusable: a focusable popup takes the window's focus, and the IME goes down with it —
         // so opening the menu mid-sentence closed the keyboard. Outside taps still dismiss it; only the
         // back key no longer does, and a tap anywhere is the same gesture.
@@ -829,13 +919,12 @@ private fun SendMenuButton(
 
 /** The send button as drawn: the lit arrow with something to send, else the `+` that opens the menu. */
 @Composable
-private fun SendFace(canSend: Boolean, size: Dp, modifier: Modifier = Modifier) {
+private fun SendFace(canSend: Boolean, size: Dp) {
     val colors = LurkerTheme.colors
     Box(
         Modifier
             .size(size)
-            .background(if (canSend) colors.accent else MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape)
-            .then(modifier),
+            .background(if (canSend) colors.accent else MaterialTheme.colorScheme.surfaceContainerHighest, CircleShape),
         contentAlignment = Alignment.Center,
     ) {
         Icon(
@@ -860,6 +949,7 @@ private fun AwayStripRow(strip: Strip.Away, onBack: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(SLAB_RADIUS))
+            .border(Dp.Hairline, colors.border, RoundedCornerShape(SLAB_RADIUS))
             .padding(start = FIELD_INSET_HORIZONTAL),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -878,7 +968,7 @@ private fun AwayStripRow(strip: Strip.Away, onBack: () -> Unit) {
         )
         Box(
             Modifier
-                .defaultMinSize(minWidth = 48.dp, minHeight = 44.dp)
+                .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
                 // TalkBack: "Back, double-tap to clear your away status" — iOS's hint.
                 .clickable(role = Role.Button, onClickLabel = "clear your away status", onClick = onBack)
                 // Clear of the strip's rounded end, which a bare title would crowd.

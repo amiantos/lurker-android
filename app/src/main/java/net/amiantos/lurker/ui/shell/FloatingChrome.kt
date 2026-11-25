@@ -58,5 +58,3 @@ internal fun TopEdgeFade(barHeight: Dp, modifier: Modifier = Modifier) {
 /** How far below the bar the fade runs: a short tail, so the bar ends about where an opaque one did. */
 private val FADE = 8.dp
 
-/** How much of the ground a bar over the list lets through: enough to see the rows move under it. */
-internal const val CHROME_ALPHA = 0.9f

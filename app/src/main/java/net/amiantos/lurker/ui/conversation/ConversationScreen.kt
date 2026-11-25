@@ -27,6 +27,9 @@ import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListItemInfo
@@ -1361,16 +1364,21 @@ internal fun ConversationContent(
                         strokeWidth = 2.dp,
                     )
                 }
+                // 2dp under the bar, not 8: the banner carries 6dp of clear touch space above its capsule.
                 UnreadBanner(
                     visible = pills.showsUnread,
                     onClick = onJumpToUnread,
-                    modifier = Modifier.align(Alignment.TopCenter).padding(top = top + 8.dp, start = 16.dp, end = 16.dp),
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = top + 2.dp, start = 16.dp, end = 16.dp),
                 )
                 JumpToLatestButton(
                     visible = pills.showsLatest,
                     newCount = pills.newCount,
                     onClick = onJumpToLatest,
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = bottom + 12.dp),
+                    // 14 here and 6 of the pill's own: its edge is the slab's, 20dp in, which centres
+                    // it over the send button.
+                    // Both are inside this box's side insets already, so a cutout or a side
+                    // navigation bar in landscape moves them together.
+                    modifier = Modifier.align(Alignment.BottomEnd).padding(end = 14.dp, bottom = bottom + 12.dp),
                 )
                 overlay(bottom)
                 sheets()
