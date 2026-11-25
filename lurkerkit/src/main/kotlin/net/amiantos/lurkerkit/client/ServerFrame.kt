@@ -466,6 +466,24 @@ internal sealed interface ServerFrame {
     ) : ServerFrame
 
     /**
+     * WS `channel-notify-changed`: one channel's `notify_always` flag was set or cleared — the
+     * "All messages" rung of the notification ladder (lurker#359, Mobile lurker#1087).
+     *
+     * One channel per frame, fanned to every device including the one that asked, so nothing
+     * is applied optimistically: this frame is the change, whichever client made it.
+     *
+     * `bufferId` is the server's id for the channel's buffer, null when it has none. It rides
+     * along as the frame carries it; the store keys the flag by network and target, as the
+     * snapshot that seeds it does.
+     */
+    data class ChannelNotifyChanged(
+        val networkId: Int,
+        val target: String,
+        val bufferId: Int?,
+        val notifyAlways: Boolean,
+    ) : ServerFrame
+
+    /**
      * A `whois_result` ephemeral (rides `irc`, `type:"whois_result"`) — a WHOIS reply
      * (lurker-ios#12).
      *
@@ -696,6 +714,12 @@ internal data class NetworkSnapshot(
      * that live `nick-note-updated` frames then patch. Defaulted like its neighbours.
      */
     val nickNotes: List<NickNote> = emptyList(),
+    /**
+     * The channels on this network whose `notify_always` flag is on (lurker#359) — the
+     * connect-time seed that live `channel-notify-changed` frames then patch. Only the
+     * channels that have it; absent is off. Defaulted like its neighbours.
+     */
+    val notifyAlways: List<String> = emptyList(),
     /**
      * Your own away state on this network (lurker-ios#68) — the connect-time seed for what live
      * `away-state` events then replace. Null when the server reports none, which is the

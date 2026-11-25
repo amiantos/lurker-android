@@ -1177,6 +1177,24 @@ internal class LurkerClient(
         )
 
     /**
+     * Set or clear a channel's `notify_always` flag — "All messages" on the notification
+     * ladder (lurker#359, Mobile lurker#1087).
+     *
+     * Fire-and-ask, like the ignore verbs: the server stores it and fans a
+     * `channel-notify-changed` back to every device, and the flag exists here only once that
+     * lands. It refuses anything that isn't a channel without answering, so a caller picks the
+     * target with `NotifyLadder.Scope`, which only makes this step for one.
+     *
+     * **Returns false when it went nowhere**, and the caller must check, for the same reason
+     * `addIgnore` does: no echo is coming to move the rung, and nothing else would say so.
+     */
+    fun setChannelNotifyAlways(networkId: Int, target: String, notifyAlways: Boolean): Boolean =
+        send(
+            channelNotifyFrame(networkId = networkId, target = target, notifyAlways = notifyAlways),
+            surfacesFailure = true,
+        )
+
+    /**
      * Drop ignore rules (`/unignore`): by `id` — what a listed index resolves to — or by
      * `mask`, which clears every rule carrying it. `networkId` scopes it, null meaning the
      * global bucket; a by-mask removal on a network scope also clears matching globals, which
@@ -2766,6 +2784,18 @@ internal class LurkerClient(
          */
         fun closeEndsSession(status: Int?, closeCode: Int): Boolean =
             status == 401 || closeCode == 4001
+
+        /**
+         * `set-channel-notify-always` as it goes out. In the companion so a test can assert the
+         * payload without a socket, like `ruleJSON` below.
+         */
+        fun channelNotifyFrame(networkId: Int, target: String, notifyAlways: Boolean): JsonObject =
+            buildJsonObject {
+                put("type", "set-channel-notify-always")
+                put("networkId", networkId)
+                put("target", target)
+                put("notifyAlways", notifyAlways)
+            }
 
         /**
          * A rule as `add-ignore` carries it. Unset dimensions are *omitted* rather than sent as

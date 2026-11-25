@@ -394,6 +394,21 @@ data class ChatState(
      */
     val nickNotes: NickNoteSet = NickNoteSet.empty,
     /**
+     * The channels whose `notify_always` flag is on, as `BufferKey.id`s (lurker#359, Mobile
+     * lurker#1087) — "All messages" on the notification ladder. Seeded by the connect
+     * `snapshot`, one map per network blob, and patched a channel at a time by
+     * `channel-notify-changed`.
+     *
+     * Only the channels that have it: absent is off, which mirrors the server deleting the row
+     * when the flag is cleared. Keyed by buffer key so a target is compared the way every other
+     * per-buffer map here compares it, and so it rides the same lifecycle they do — dropped
+     * with its buffer, moved by a rename, gone with its network.
+     *
+     * Server-authoritative: picking a rung *asks*, and this changes when the echo lands.
+     * **Read through `notifiesAlways(networkId, target)`.**
+     */
+    val notifyAlways: Set<String> = emptySet(),
+    /**
      * Every nick's IRCv3 metadata the server holds (lurker#607, Mobile lurker#1203): display
      * names, avatars, pronouns, homepage, status. Seeded by the connect `snapshot` — one map per
      * network blob — and patched a nick at a time by `user-metadata`, like `relayBots` above.
@@ -604,6 +619,11 @@ data class ChatState(
             unsent = unsent - keySet,
             // The draft too: the server deletes its row on a close.
             drafts = drafts - keySet,
+            // ⚠ Not its "All messages" flag. The server keeps that row when a channel is closed
+            // and reads it again on a rejoin, so dropping it here would show "Highlights only"
+            // on a channel that still notifies on every message, with no step that could turn it
+            // off. A snapshot replaces the set whole, which is what retires a flag the server
+            // dropped.
         )
     }
 
@@ -639,6 +659,8 @@ data class ChatState(
             // Drafts are kept apart from `buffers`, so the loop above misses one whose row we
             // never held.
             drafts = next.drafts.filter { !it.key.startsWith("$id::") },
+            // Likewise the notify flags: the loop above only reaches a channel whose row we hold.
+            notifyAlways = next.notifyAlways.filter { !it.startsWith("$id::") }.toSet(),
         )
     }
 
@@ -682,6 +704,9 @@ data class ChatState(
             drafts = drafts.moving(from, to),
             // Moved with its lines, so a renamed DM's chips still redraw when a reaction lands.
             reactionsRevisions = reactionsRevisions.moving(from, to),
+            // The flag follows its buffer. A set, so landing on a destination that already has
+            // it is the web's "destination wins" with nothing to choose between.
+            notifyAlways = if (notifyAlways.contains(from)) notifyAlways - from + to else notifyAlways,
             burstSeen = burstSeen,
             keysById = keysById,
         )
@@ -1055,6 +1080,13 @@ data class ChatState(
      * future fold correction would have to chase individually.
      */
     fun isFavorite(key: BufferKey): Boolean = favorites.any { it.key.id == key.id }
+
+    /**
+     * Whether every message in this channel notifies — its `notify_always` flag, the "All
+     * messages" rung (lurker#359). Case-insensitive on the target, as buffer keys are.
+     */
+    fun notifiesAlways(networkId: Int, target: String): Boolean =
+        notifyAlways.contains(BufferKey(networkId = networkId, target = target).id)
 
     /**
      * Reconcile `bookmarkedIds` against a page of rows.
@@ -1850,6 +1882,14 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                         ),
                     )
                 }
+                is ServerFrame.ChannelNotifyChanged -> {
+                    // A patch, one channel at a time. Off removes the entry rather than storing
+                    // a false, mirroring the server's row delete.
+                    val key = BufferKey(networkId = frame.networkId, target = frame.target).id
+                    state.copy(
+                        notifyAlways = if (frame.notifyAlways) state.notifyAlways + key else state.notifyAlways - key,
+                    )
+                }
                 is ServerFrame.WhoisResult -> {
                     val whois = frame.whois
                     // Keyed by the server's spelling of the nick, folded. Not by what was asked
@@ -2242,6 +2282,11 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             for (snapshot in networks) {
                 if (snapshot.nickNotes.isNotEmpty()) nickNotesByNetwork[snapshot.id] = snapshot.nickNotes
             }
+            // The notify flags replace wholesale too: a channel taken off "All messages" on the
+            // web while this device was away has to read that way here, not keep a leftover yes.
+            val notifyAlways = networks.flatMap { snapshot ->
+                snapshot.notifyAlways.map { BufferKey(networkId = snapshot.id, target = it).id }
+            }.toSet()
             // Metadata (lurker#607) replaces wholesale for the same reason again: the snapshot is
             // what the connection holds now, so a nick forgotten while this device was away is gone
             // here rather than left showing a stale name.
@@ -2343,6 +2388,7 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
                 ignores = IgnoreSet(global = globalIgnores, byNetwork = ignoresByNetwork),
                 relayBots = RelayBotSet(byNetwork = relayBotsByNetwork),
                 nickNotes = NickNoteSet(byNetwork = nickNotesByNetwork),
+                notifyAlways = notifyAlways,
                 userMetadata = UserMetadataSet(byNetwork = metadataByNetwork),
                 dccChats = dccChats,
                 dccChatOffers = offers,
