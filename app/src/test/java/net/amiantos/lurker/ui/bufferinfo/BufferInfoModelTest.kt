@@ -14,6 +14,8 @@ import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.ModeSpec
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NetworkAction
+import net.amiantos.lurkerkit.model.NotifyLadder
+import net.amiantos.lurkerkit.model.NotifyRung
 import net.amiantos.lurkerkit.model.PrefixMode
 import net.amiantos.lurkerkit.model.StatusLight
 import net.amiantos.lurkerkit.store.ChatState
@@ -48,8 +50,13 @@ class BufferInfoModelTest {
             ignores = ignores,
         )
 
-    private fun sections(state: ChatState, opened: Buffer = channel, error: String? = null) =
-        BufferInfoModel.sections(BufferInfoInputs.of(state, opened), error, dateTime, longDate)
+    private fun sections(state: ChatState, opened: Buffer = channel, error: String? = null, notifyError: String? = null) =
+        BufferInfoModel.sections(BufferInfoInputs.of(state, opened), error, dateTime, longDate, notifyError)
+
+    private fun rungs(section: InfoSection) = section.rows.map { it as InfoRow.Notify }
+
+    private fun mute(target: String?, vararg levels: String) =
+        IgnoreSet(byNetwork = mapOf(1 to listOf(IgnoreRule(id = 5, channels = target?.let(::listOf), levels = levels.toList()))))
 
     @Test
     fun aJoinedChannelShowsTopicSettingsListsMembersAndNotifications() {
@@ -69,7 +76,16 @@ class BufferInfoModelTest {
         )
         assertEquals("Created D5", sections[1].footer)
         assertEquals(listOf(InfoRow.Members(3), InfoRow.Search("in:#lurker on:Libera ")), sections[2].rows)
-        assertEquals(BufferInfoModel.notifications, sections[3])
+        assertEquals(
+            listOf(
+                InfoRow.Notify(NotifyRung.All, selected = false),
+                InfoRow.Notify(NotifyRung.Highlights, selected = true),
+                InfoRow.Notify(NotifyRung.Nothing, selected = false),
+                InfoRow.Notify(NotifyRung.Muted, selected = false),
+            ),
+            sections[3].rows,
+        )
+        assertEquals("Only highlights notify you.", sections[3].footer)
     }
 
     @Test
@@ -109,9 +125,18 @@ class BufferInfoModelTest {
         val dm = Buffer(networkId = 1, target = "alice", kind = BufferKind.Dm)
         val sections = sections(state(), opened = dm)
         assertEquals(
-            listOf(listOf(InfoRow.Whois, InfoRow.Search("in:alice on:Libera ")), BufferInfoModel.notifications.rows),
+            listOf(
+                listOf(InfoRow.Whois, InfoRow.Search("in:alice on:Libera ")),
+                // No "Highlights only": every DM line is already the signal.
+                listOf(
+                    InfoRow.Notify(NotifyRung.All, selected = true),
+                    InfoRow.Notify(NotifyRung.Nothing, selected = false),
+                    InfoRow.Notify(NotifyRung.Muted, selected = false),
+                ),
+            ),
             sections.map { it.rows },
         )
+        assertEquals("Every message notifies you.", sections.last().footer)
     }
 
     @Test
@@ -144,7 +169,7 @@ class BufferInfoModelTest {
     @Test
     fun aServerLogManagesItsConnectionWithoutDelete() {
         val server = Buffer(networkId = 1, target = Buffer.serverTarget(1), kind = BufferKind.Server)
-        val section = sections(state(), opened = server).single()
+        val section = sections(state(), opened = server).first()
         assertEquals("Connection", section.header)
         assertEquals(
             listOf(InfoRow.Connection("Connected", StatusLight.Good), InfoRow.NetworkVerb(NetworkAction.Disconnect), InfoRow.NetworkVerb(NetworkAction.Reconnect)),
@@ -158,11 +183,11 @@ class BufferInfoModelTest {
     fun aBlockedServerSaysWhyAndARefusalOutranksThat() {
         val server = Buffer(networkId = 1, target = Buffer.serverTarget(1), kind = BufferKind.Server)
         val blocked = state().let { it.copy(networks = it.networks.mapValues { (_, n) -> n.copy(blocked = true) }) }
-        val section = sections(blocked, opened = server).single()
+        val section = sections(blocked, opened = server).first()
         // Disconnect survives a block; Reconnect doesn't.
         assertEquals(listOf(InfoRow.Connection("Connected", StatusLight.Good), InfoRow.NetworkVerb(NetworkAction.Disconnect)), section.rows)
         assertEquals(NetworksListModel.BLOCKED_EXPLANATION, section.footer)
-        assertEquals("Your account is paused.", sections(blocked, opened = server, error = "Your account is paused.").single().footer)
+        assertEquals("Your account is paused.", sections(blocked, opened = server, error = "Your account is paused.").first().footer)
     }
 
     /**
@@ -173,23 +198,100 @@ class BufferInfoModelTest {
     @Test
     fun onlyTheRefusalFootersAnnounce() {
         val server = Buffer(networkId = 1, target = Buffer.serverTarget(1), kind = BufferKind.Server)
-        val quiet = sections(state(), opened = server).single()
+        val quiet = sections(state(), opened = server).first()
         assertTrue(quiet.holdsRefusals)
         assertFalse(quiet.announcesFooter)
-        val refused = sections(state(), opened = server, error = "Your account is paused.").single()
+        val refused = sections(state(), opened = server, error = "Your account is paused.").first()
         assertTrue(refused.holdsRefusals && refused.announcesFooter)
         // A blocked network's explanation is a standing note in the same place: read on focus, not announced.
         val blocked = state().let { it.copy(networks = it.networks.mapValues { (_, n) -> n.copy(blocked = true) }) }
-        val note = sections(blocked, opened = server).single()
+        val note = sections(blocked, opened = server).first()
         assertEquals(NetworksListModel.BLOCKED_EXPLANATION, note.footer)
         assertTrue(note.holdsRefusals)
         assertFalse(note.announcesFooter)
-        assertTrue(sections(blocked, opened = server, error = "Your account is paused.").single().announcesFooter)
+        assertTrue(sections(blocked, opened = server, error = "Your account is paused.").first().announcesFooter)
         val chat = Buffer(networkId = 1, target = "=bob", kind = BufferKind.Dcc)
         assertFalse(sections(state(), opened = chat)[0].announcesFooter)
         assertTrue(sections(state(), opened = chat, error = "No such nick")[0].announcesFooter)
         // A channel's topic setter and created date are notes, not answers.
-        assertTrue(sections(state()).none { it.announcesFooter || it.holdsRefusals })
+        assertTrue(sections(state()).dropLast(1).none { it.announcesFooter || it.holdsRefusals })
+        // The ladder's footer says what the rung does until a pick is refused; a refusal on one
+        // section is not read out under the other.
+        val ladder = sections(state()).last()
+        assertTrue(ladder.holdsRefusals)
+        assertFalse(ladder.announcesFooter)
+        assertTrue(sections(state(), notifyError = "Not connected").last().announcesFooter)
+        assertFalse(sections(state(), opened = server, notifyError = "Not connected").first().announcesFooter)
+        assertFalse(sections(state(), opened = server, error = "Your account is paused.").last().announcesFooter)
+    }
+
+    // MARK: - The notification ladder (lurker#1087)
+
+    @Test
+    fun theLadderChecksTheRungTheStateIsOnAndSaysWhatItDoes() {
+        fun ladder(state: ChatState) = sections(state).last()
+        fun checked(state: ChatState) = rungs(ladder(state)).single { it.selected }.rung
+
+        val loud = state().copy(notifyAlways = setOf(channel.key.id))
+        assertEquals(NotifyRung.All, checked(loud))
+        assertEquals("Every message notifies you.", ladder(loud).footer)
+
+        val nothing = state(ignores = mute("#lurker", "NONOTIFY"))
+        assertEquals(NotifyRung.Nothing, checked(nothing))
+        assertEquals("No notifications. Unread still shows.", ladder(nothing).footer)
+
+        val muted = state(ignores = mute("#lurker", "NOUNREAD", "NONOTIFY"))
+        assertEquals(NotifyRung.Muted, checked(muted))
+        assertEquals("No notifications, and unread is hidden.", ladder(muted).footer)
+
+        // Another channel's rule, or its flag, is not this one's.
+        assertEquals(NotifyRung.Highlights, checked(state(ignores = mute("#other", "NONOTIFY"))))
+        assertEquals(NotifyRung.Highlights, checked(state().copy(notifyAlways = setOf("1::#other"))))
+    }
+
+    /** All four sigils: an `&local` channel gets the channel's ladder, "All messages" and all. */
+    @Test
+    fun everyChannelSigilGetsTheChannelLadder() {
+        for (target in listOf("#chan", "&local", "+modeless", "!safe")) {
+            val opened = Buffer(networkId = 1, target = target, kind = BufferKind.Channel)
+            assertEquals(
+                target,
+                listOf(NotifyRung.All, NotifyRung.Highlights, NotifyRung.Nothing, NotifyRung.Muted),
+                rungs(sections(state(), opened = opened).last()).map { it.rung },
+            )
+        }
+    }
+
+    @Test
+    fun aDccChatGetsTheDmLadderAndAServerLogItsNetworks() {
+        val chat = Buffer(networkId = 1, target = "=bob", kind = BufferKind.Dcc)
+        val dcc = sections(state(), opened = chat).last()
+        assertEquals("Notifications", dcc.header)
+        assertEquals(listOf(NotifyRung.All, NotifyRung.Nothing, NotifyRung.Muted), rungs(dcc).map { it.rung })
+
+        val server = Buffer(networkId = 1, target = Buffer.serverTarget(1), kind = BufferKind.Server)
+        val both = sections(state(ignores = mute(null, "NONOTIFY")), opened = server)
+        assertEquals(listOf("Connection", "Notifications"), both.map { it.header })
+        assertEquals(
+            listOf(
+                InfoRow.Notify(NotifyRung.Highlights, selected = false),
+                InfoRow.Notify(NotifyRung.Nothing, selected = true),
+                InfoRow.Notify(NotifyRung.Muted, selected = false),
+            ),
+            both[1].rows,
+        )
+    }
+
+    @Test
+    fun aRefusedPickTakesTheLaddersFooterAndOnlyThat() {
+        val server = Buffer(networkId = 1, target = Buffer.serverTarget(1), kind = BufferKind.Server)
+        val refused = sections(state(), opened = server, notifyError = "Not connected")
+        assertNull(refused[0].footer)
+        assertEquals("Not connected", refused[1].footer)
+        // …and a connection verb's refusal stays under the connection.
+        val verb = sections(state(), opened = server, error = "Your account is paused.")
+        assertEquals("Your account is paused.", verb[0].footer)
+        assertEquals("Only highlights notify you.", verb[1].footer)
     }
 
     @Test
@@ -212,12 +314,18 @@ class BufferInfoModelTest {
         assertFalse(BufferInfoSource.same(a, BufferInfoSource.of(base.copy(members = mapOf(channel.key.id to base.members.getValue(channel.key.id).toList())), channel.key)))
         assertFalse(BufferInfoSource.same(a, BufferInfoSource.of(base.copy(ignores = IgnoreSet(global = emptyList())), channel.key)))
         assertFalse(BufferInfoSource.same(a, BufferInfoSource.of(state(topic = "Changed"), channel.key)))
+        // This channel's notify-always flag moves the ladder; another channel's moves nothing here.
+        assertFalse(BufferInfoSource.same(a, BufferInfoSource.of(base.copy(notifyAlways = setOf(channel.key.id)), channel.key)))
+        assertTrue(BufferInfoSource.same(a, BufferInfoSource.of(base.copy(notifyAlways = setOf("1::#other")), channel.key)))
+        // Lurker's own socket coming back is what retires a "not connected" under the ladder.
+        assertFalse(BufferInfoSource.same(a, BufferInfoSource.of(base.copy(reachable = false), channel.key)))
+        assertFalse(BufferInfoSource.same(a, BufferInfoSource.of(base.copy(socketOpening = true), channel.key)))
     }
 
     @Test
     fun theSourcesInputsAreTheFullStatesForEveryKind() {
         val ignores = IgnoreSet(global = listOf(IgnoreRule(mask = "*!*@spam", levels = listOf("ALL"))))
-        val full = state(ignores = ignores).copy(dccChats = mapOf(1 to listOf("bob")))
+        val full = state(ignores = ignores).copy(dccChats = mapOf(1 to listOf("bob")), notifyAlways = setOf(channel.key.id, "1::#other"))
         val buffers = listOf(
             channel,
             Buffer(networkId = 1, target = "alice", kind = BufferKind.Dm),

@@ -298,6 +298,29 @@ internal object FrameParser {
                     updatedAt = ISOTime.parse(obj.stringOrNull("updatedAt")),
                 )
             }
+            "channel-notify-changed" -> {
+                // The flag is about one channel on one network; a frame missing either half
+                // addresses nothing, the posture the relay mark above takes.
+                //
+                // ⚠ `notifyAlways` must be PRESENT, not merely readable. `bool("notifyAlways")`
+                // folds a missing or mistyped field to false, and false here is a statement — it
+                // turns "All messages" off on this device while the server still holds it on. An
+                // absent field is not that statement (the rule `nick-note-updated` follows above).
+                //
+                // Port note: LurkerKit's `as? Bool` has no fallback; `bool` does, so a value is a
+                // boolean exactly when the read does not move with the fallback.
+                val notifyTarget = obj.string("target")
+                val networkId = obj.intOrNull("networkId") ?: return ServerFrame.Ignored
+                if (notifyTarget.isEmpty()) return ServerFrame.Ignored
+                val notifyAlways = obj.bool("notifyAlways", fallback = false)
+                if (notifyAlways != obj.bool("notifyAlways", fallback = true)) return ServerFrame.Ignored
+                return ServerFrame.ChannelNotifyChanged(
+                    networkId = networkId,
+                    target = notifyTarget,
+                    bufferId = obj.intOrNull("bufferId"),
+                    notifyAlways = notifyAlways,
+                )
+            }
             "buffer-renamed" -> {
                 // Same trust posture as buffer-closed below: empty names can't
                 // identify anything, so refuse rather than rename an arbitrary
@@ -686,6 +709,7 @@ internal object FrameParser {
                 ignoredMasks = network.objects("ignoredMasks").map(::parseIgnoreRule),
                 relayBots = network.objects("relayBots").mapNotNull(::parseRelayBot),
                 nickNotes = network.objects("nickNotes").mapNotNull(::parseNickNote),
+                notifyAlways = parseChannelNotify(network["channelNotify"]),
                 away = parseAwayState(network["away"]),
                 pinned = network.strings("pinned") ?: emptyList(),
                 dccChats = nonEmptyStrings(network["dccChats"]),
@@ -791,6 +815,23 @@ internal object FrameParser {
     private fun parseRelayBot(obj: JsonObject): RelayBot? {
         val nick = obj.string("nick")
         return if (nick.isEmpty()) null else RelayBot(nick = nick, pattern = obj.string("pattern"))
+    }
+
+    /**
+     * A snapshot network's `channelNotify` — `{target: {notifyAlways: bool}}` — as the targets
+     * whose flag is on (lurker#359). The server only lists channels that have it set, but the
+     * value is read rather than assumed, so a row that says `false` is not turned into a yes.
+     *
+     * Anything that isn't that shape is skipped an entry at a time: an absent or mistyped map
+     * is "no channels", and one unreadable entry doesn't take its neighbours with it. Sorted,
+     * because a JSON object has no order and `NetworkSnapshot` is compared.
+     */
+    private fun parseChannelNotify(raw: JsonElement?): List<String> {
+        val map = raw as? JsonObject ?: return emptyList()
+        return map.mapNotNull { (target, flags) ->
+            if (target.isEmpty() || flags !is JsonObject || !flags.bool("notifyAlways")) return@mapNotNull null
+            target
+        }.sorted()
     }
 
     /**

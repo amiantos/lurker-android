@@ -361,6 +361,7 @@ private fun BufferDialog(
                         onModeList = { letter, name -> flow.pushModeList(key, letter, name) },
                         onNetworkVerb = page.state::perform,
                         onDccVerb = page.state::perform,
+                        onNotifyRung = page.state::pick,
                         onSearch = onSearch,
                     ),
                 )

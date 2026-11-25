@@ -16,10 +16,13 @@ import net.amiantos.lurkerkit.model.FriendPresence
 import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NetworkAbbreviation
+import net.amiantos.lurkerkit.model.NotifyLadder
+import net.amiantos.lurkerkit.model.NotifyRung
 import net.amiantos.lurkerkit.model.PresenceState
 import net.amiantos.lurkerkit.model.Settings
 import net.amiantos.lurkerkit.model.UserMetadataSet
 import net.amiantos.lurkerkit.model.StatusLight
+import net.amiantos.lurkerkit.model.notifyRung
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
 
@@ -350,6 +353,12 @@ class BufferListInputs private constructor(
      */
     val ignores: IgnoreSet,
     /**
+     * The other half of a row's Notifications menu (lurker#1087): "All messages" is a flag, not a
+     * rule, and its frame moves nothing else — so without this an open menu keeps marking the rung it
+     * was on before (`RowWithMenu` re-reads the mark when these inputs change).
+     */
+    val notifyAlways: Set<String>,
+    /**
      * ⚠⚠ Pins order every network section, and a `pins-changed` frame moves NOTHING else in the
      * state — so without this the frame is dropped as a duplicate and a pin set on the web moves
      * nothing here until some unrelated message happens to let a rebuild through. Worse than a late
@@ -388,6 +397,7 @@ class BufferListInputs private constructor(
             peerPresence = peerPresence,
             pinned = pinned,
             ignores = ignores,
+            notifyAlways = notifyAlways,
             userMetadata = userMetadata,
             settings = settings,
         )
@@ -410,6 +420,7 @@ class BufferListInputs private constructor(
                 favorites = state.favorites,
                 peerPresence = state.peerPresence,
                 ignores = state.ignores,
+                notifyAlways = state.notifyAlways,
                 pinned = state.pinned,
                 draftedKeys = state.drafts.keys,
                 userMetadata = state.userMetadata,
@@ -429,6 +440,7 @@ class BufferListInputs private constructor(
                 a.favorites == b.favorites &&
                 a.peerPresence == b.peerPresence &&
                 a.ignores === b.ignores &&
+                a.notifyAlways == b.notifyAlways &&
                 a.pinned == b.pinned &&
                 a.draftedKeys == b.draftedKeys &&
                 a.userMetadata === b.userMetadata &&
@@ -554,6 +566,13 @@ data class RowMenu(
     val isFavorite: Boolean,
     /** "Leave" for a joined channel, "Close" for everything else. */
     val closeTitle: String,
+    /**
+     * The notification ladder (lurker#1087): the same rungs the buffer's info page lists, from the
+     * same `NotifyLadder`. Null where the buffer has none.
+     */
+    val notifyScope: NotifyLadder.Scope? = null,
+    /** The rung it is on, marked in the Notifications submenu. */
+    val notifyRung: NotifyRung? = null,
 )
 
 /** How a count says what's waiting: plain unread, or a mention. Null when nothing is. */
@@ -968,6 +987,9 @@ object BufferListModel {
         val isDm = buffer.kind == BufferKind.Dm
         val isFavorite = state.isFavorite(buffer.key)
         val parted = state.isParted(buffer.key)
+        // The mark is read as the menu opens, like the rest of it; the tap is planned against the
+        // state at the tap (see `ChatViewModel.setNotifyRung`).
+        val notifyScope = NotifyLadder.Scope.of(buffer.key)
         val favoriteTitle = when {
             buffer.kind == BufferKind.Dcc -> null
             isFavorite -> if (isDm) "Remove from Friends" else "Remove from Favorites"
@@ -988,6 +1010,8 @@ object BufferListModel {
             favoriteDestructive = isFavorite && isDm,
             isFavorite = isFavorite,
             closeTitle = if (buffer.kind == BufferKind.Channel && !parted) "Leave" else "Close",
+            notifyScope = notifyScope,
+            notifyRung = notifyScope?.let { state.notifyRung(it) },
         )
     }
 
