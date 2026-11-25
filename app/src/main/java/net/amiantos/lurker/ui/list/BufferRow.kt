@@ -81,12 +81,14 @@ internal object RosterMetrics {
     val arm: Dp = 9.dp
 
     /**
-     * A row's floor, and a header's: Material's 48dp (lurker#1401; iOS's are its 44pt). They were
-     * 32 and 30, a trade for a denser list that cost a mis-tap often enough to notice — rows abut,
-     * so a short one has no slack to borrow from its neighbours. It grows with the font scale.
+     * A row's floor, and a header's: 44dp, iOS's 44pt (lurker#1401). They were 32 and 30, a trade
+     * for a denser list that cost a mis-tap often enough to notice — rows abut, so a short one has
+     * no slack to borrow from its neighbours. Under Material's 48dp on purpose: tried at 48, the
+     * list read as far too sparse, and the whole width of a row is its target. It grows with the
+     * font scale.
      */
-    val row: Dp = 48.dp
-    val header: Dp = 48.dp
+    val row: Dp = 44.dp
+    val header: Dp = 44.dp
 
     /**
      * The space between a group's last row and the rule over the next group, and between that rule
@@ -109,7 +111,7 @@ internal object RosterMetrics {
 
     /**
      * The least breathing room above and below the text, for when the font scale has outgrown
-     * the floor: at the default scale the 48dp floor decides the height and the text is centred in it.
+     * the floor: at the default scale the 44dp floor decides the height and the text is centred in it.
      */
     val textPadding: Dp = 6.dp
 }
