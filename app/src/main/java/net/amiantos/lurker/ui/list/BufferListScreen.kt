@@ -56,6 +56,7 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.DpOffset
@@ -89,6 +90,8 @@ import net.amiantos.lurkerkit.model.ConnectionBannerState
 import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.FavoriteEntry
 import net.amiantos.lurkerkit.model.Network
+import net.amiantos.lurkerkit.model.NotifyLadder
+import net.amiantos.lurkerkit.model.NotifyRung
 import net.amiantos.lurkerkit.model.PresenceState
 import net.amiantos.lurkerkit.model.StatusToast
 import net.amiantos.lurkerkit.session.ChatViewModel
@@ -226,6 +229,12 @@ fun BufferListScreen(
         },
         onClose = onClose,
         menuFor = { buffer -> BufferListModel.rowMenu(model.state, buffer) },
+        menuEpoch = inputs,
+        onNotifyRung = { scope, rung ->
+            // Nothing moves here — the mark follows the server's echo — so a pick that went nowhere
+            // has to say so.
+            if (!model.setNotifyRung(rung, scope)) events?.send(AppEvent.Notice(BufferListModel.NOT_CONNECTED))
+        },
         onJoin = { buffer ->
             // No navigation — the row lighting up is the answer — and a refusal says why
             // (lurker-ios#57: `AppEvent.Notice`, the scaffold's snackbar).
@@ -341,6 +350,13 @@ internal class BufferListActions(
     val onOpen: (Row) -> Unit,
     val onClose: (Buffer) -> Unit,
     val menuFor: (Buffer) -> RowMenu?,
+    /**
+     * Changes whenever something a menu reads may have (the screen's inputs): an open menu's
+     * Notifications mark is read again then, so a rung moved from another device moves it here.
+     */
+    val menuEpoch: Any? = null,
+    /** Put a buffer on a rung of its notification ladder (lurker#1087). */
+    val onNotifyRung: (NotifyLadder.Scope, NotifyRung) -> Unit = { _, _ -> },
     val onJoin: (Buffer) -> Unit,
     val onToggleFavorite: (Buffer, isFavorite: Boolean) -> Unit,
     val onDragStarted: (SectionId, key: String) -> Unit,
@@ -800,16 +816,53 @@ private fun RowWithMenu(
     content: @Composable (openMenu: () -> Unit, closeMenu: () -> Unit) -> Unit,
 ) {
     var menu by remember { mutableStateOf<RowMenu?>(null) }
+    // Which page of the menu is up: its items, or the Notifications rungs (iOS's submenu).
+    var picksNotify by remember { mutableStateOf(false) }
     val buffer = row.buffer
     Box {
-        content({ menu = actions.menuFor(buffer) }, { menu = null })
+        content(
+            {
+                picksNotify = false
+                menu = actions.menuFor(buffer)
+            },
+            { menu = null },
+        )
         val shown = menu
         DropdownMenu(
             expanded = shown != null,
             onDismissRequest = { menu = null },
             offset = DpOffset(RosterMetrics.inset + RosterMetrics.name, 0.dp),
         ) {
-            if (shown != null) {
+            val notifyScope = shown?.notifyScope
+            if (shown != null && picksNotify && notifyScope != null) {
+                // ⚠ The mark follows the state while the menu sits open. On iOS the list's menu went on
+                // marking the rung a channel was on before another device moved it; here the rest of
+                // the menu is a snapshot from when it opened, and this one read is not.
+                val current = remember(actions.menuEpoch, shown) { actions.menuFor(buffer)?.notifyRung ?: shown.notifyRung }
+                DropdownMenuItem(
+                    text = { Text("Notifications") },
+                    leadingIcon = { Icon(LurkerIcons.ArrowBack, contentDescription = "Back") },
+                    onClick = { picksNotify = false },
+                )
+                HorizontalDivider()
+                notifyScope.rungs.forEach { rung ->
+                    val isCurrent = rung == current
+                    DropdownMenuItem(
+                        // A check is a picture; the semantics are what TalkBack reads as "selected".
+                        modifier = Modifier.semantics { selected = isCurrent },
+                        text = { Text(rung.label) },
+                        trailingIcon = if (isCurrent) {
+                            { Icon(LurkerIcons.Check, contentDescription = null) }
+                        } else {
+                            null
+                        },
+                        onClick = {
+                            menu = null
+                            actions.onNotifyRung(notifyScope, rung)
+                        },
+                    )
+                }
+            } else if (shown != null) {
                 val destructive = MenuDefaults.itemColors(textColor = MaterialTheme.colorScheme.error)
                 // A parted channel keeps its row and its history, and getting back in is the usual
                 // reason to long-press one, so Join leads. Disabled while the network is down: a
@@ -837,9 +890,18 @@ private fun RowWithMenu(
                         },
                     )
                 }
-                // Under its own divider, so a destructive action is set apart from the toggle above
-                // rather than a thumb-slip from it.
-                if (join != null || favoriteTitle != null) HorizontalDivider()
+                // The notification ladder (lurker#1087), the same rungs the buffer's info page lists.
+                if (notifyScope != null) {
+                    if (join != null && favoriteTitle == null) HorizontalDivider()
+                    DropdownMenuItem(
+                        text = { Text("Notifications") },
+                        trailingIcon = { Icon(LurkerIcons.ChevronRight, contentDescription = null) },
+                        onClick = { picksNotify = true },
+                    )
+                }
+                // Under its own divider, so a destructive action is set apart from the items above
+                // rather than a thumb-slip from them.
+                if (join != null || favoriteTitle != null || notifyScope != null) HorizontalDivider()
                 DropdownMenuItem(
                     text = { Text(shown.closeTitle) },
                     colors = destructive,

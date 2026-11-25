@@ -15,6 +15,8 @@ import net.amiantos.lurkerkit.model.FriendPresence
 import net.amiantos.lurkerkit.model.IgnoreRule
 import net.amiantos.lurkerkit.model.IgnoreSet
 import net.amiantos.lurkerkit.model.Network
+import net.amiantos.lurkerkit.model.NotifyLadder
+import net.amiantos.lurkerkit.model.NotifyRung
 import net.amiantos.lurkerkit.model.PresenceState
 import net.amiantos.lurkerkit.model.StatusLight
 import net.amiantos.lurkerkit.store.ChatState
@@ -598,6 +600,29 @@ class BufferListModelTest {
         assertEquals(false, BufferListModel.rowMenu(offline, offline.buffer(BufferKey(1, "#left")))!!.joinEnabled)
     }
 
+    /** The Notifications submenu: the buffer's own rungs, marked from the flag and the rules (lurker#1087). */
+    @Test
+    fun theMenuMarksTheRungTheStateIsOn() {
+        val base = state(buffers = listOf(buffer(1, "#a"), buffer(1, "&local"), buffer(1, "bob"), buffer(1, "=bob")))
+        fun menu(s: ChatState, target: String) = BufferListModel.rowMenu(s, s.buffer(BufferKey(1, target)))!!
+        assertEquals(NotifyLadder.Scope.Channel(1, "#a"), menu(base, "#a").notifyScope)
+        assertEquals(NotifyRung.Highlights, menu(base, "#a").notifyRung)
+        // Every sigil is a channel, with the channel's ladder.
+        assertEquals(NotifyLadder.Scope.Channel(1, "&local"), menu(base, "&local").notifyScope)
+        assertEquals(NotifyLadder.Scope.Dm(1, "bob"), menu(base, "bob").notifyScope)
+        assertEquals(NotifyRung.All, menu(base, "bob").notifyRung)
+        assertEquals(NotifyLadder.Scope.Dm(1, "=bob"), menu(base, "=bob").notifyScope)
+
+        val loud = base.copy(notifyAlways = setOf(BufferKey(1, "#a").id))
+        assertEquals(NotifyRung.All, menu(loud, "#a").notifyRung)
+        assertEquals(NotifyRung.Highlights, menu(loud, "&local").notifyRung)
+        val muted = base.copy(
+            ignores = IgnoreSet(byNetwork = mapOf(1 to listOf(IgnoreRule(id = 5, channels = listOf("#a"), levels = listOf("NOUNREAD", "NONOTIFY"))))),
+        )
+        assertEquals(NotifyRung.Muted, menu(muted, "#a").notifyRung)
+        assertEquals(NotifyRung.All, menu(muted, "bob").notifyRung)
+    }
+
     @Test
     fun theSystemBufferAndServerLogsHaveNoMenu() {
         val s = state(buffers = listOf(server(1)))
@@ -672,6 +697,8 @@ class BufferListModelTest {
             base.copy(buffers = mapOf(BufferKey(1, "#a").id to buffer(1, "#a", unread = 1))),
             // Equal rules, a different set: compared by identity, so it redraws.
             base.copy(ignores = IgnoreSet()),
+            // "All messages" is a flag, not a rule: its frame moves nothing else a menu reads.
+            base.copy(notifyAlways = setOf(BufferKey(1, "#a").id)),
         )
         for ((index, next) in changed.withIndex()) {
             assertFalse("change #$index", BufferListInputs.same(a, BufferListInputs.of(next)))

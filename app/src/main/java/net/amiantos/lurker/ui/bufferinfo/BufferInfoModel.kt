@@ -18,9 +18,12 @@ import net.amiantos.lurkerkit.model.Member
 import net.amiantos.lurkerkit.model.Network
 import net.amiantos.lurkerkit.model.NetworkAction
 import net.amiantos.lurkerkit.model.NetworkRow
+import net.amiantos.lurkerkit.model.NotifyLadder
+import net.amiantos.lurkerkit.model.NotifyRung
 import net.amiantos.lurkerkit.model.SearchQuery
 import net.amiantos.lurkerkit.model.StatusLight
 import net.amiantos.lurkerkit.model.channelAccess
+import net.amiantos.lurkerkit.model.notifyRung
 import net.amiantos.lurkerkit.rendering.IRCFormatting
 import net.amiantos.lurkerkit.store.ChatState
 import net.amiantos.lurkerkit.store.SocketStatus
@@ -63,6 +66,18 @@ data class BufferInfoInputs(
      * network's name, which only the roster has.
      */
     val searchScope: String? = null,
+    /** The buffer's notification ladder (lurker#1087), or null for the system buffer, which has none. */
+    val notifyScope: NotifyLadder.Scope? = null,
+    /**
+     * The rung it is on — from the channel's notify-always flag and the ignore rules, whichever
+     * device changed them. Null exactly when [notifyScope] is.
+     */
+    val notifyRung: NotifyRung? = null,
+    /**
+     * Whether Lurker's own socket can carry a write. Not drawn: its coming back is what retires a
+     * "not connected" under the ladder, and it can come back with everything else here as it was.
+     */
+    val socketWritable: Boolean = false,
 ) {
     companion object {
         fun of(state: ChatState, opened: Buffer): BufferInfoInputs {
@@ -70,6 +85,7 @@ data class BufferInfoInputs(
             val live = state.buffers[key.id] ?: opened
             val networkId = key.networkId
             val network = networkId?.let { state.networks[it] }
+            val notifyScope = NotifyLadder.Scope.of(key)
             return BufferInfoInputs(
                 kind = opened.kind,
                 topic = live.topic,
@@ -85,6 +101,9 @@ data class BufferInfoInputs(
                 connection = network?.let { NetworkRow(connection = it.state, isBlocked = it.blocked) },
                 dccLive = if (opened.kind == BufferKind.Dcc) state.dccChatSession(key) else null,
                 searchScope = SearchQuery.scope(live, network?.name),
+                notifyScope = notifyScope,
+                notifyRung = notifyScope?.let { state.notifyRung(it) },
+                socketWritable = state.socketWritable,
             )
         }
     }
@@ -101,10 +120,15 @@ data class BufferInfoInputs(
  * ignore set only when a rule does, so identity is exactly "something the count reads moved". The
  * buffer is narrowed to the two fields the page reads (topic, joined) — its unread counts move on every
  * message in it, and nothing here draws them.
+ *
+ * The notification ladder reads the ignore set, already here, and the channel's notify-always flag —
+ * narrowed to this one buffer's, since another channel's moves nothing on this page.
  */
 internal class BufferInfoSource private constructor(
     private val key: BufferKey,
     private val connection: SocketStatus,
+    private val reachable: Boolean,
+    private val socketOpening: Boolean,
     private val snapshotSinceOpen: Boolean,
     private val present: Boolean,
     private val topic: String?,
@@ -114,12 +138,15 @@ internal class BufferInfoSource private constructor(
     private val modes: ChannelModeState?,
     private val ignores: IgnoreSet,
     private val dccChats: List<String>?,
+    private val notifiesAlways: Boolean,
 ) {
     /** The page's inputs, from exactly what was compared — the kit's own helpers over a narrowed state. */
     fun inputs(opened: Buffer): BufferInfoInputs {
         val networkId = key.networkId
         val narrowed = ChatState(
             connection = connection,
+            reachable = reachable,
+            socketOpening = socketOpening,
             snapshotSinceOpen = snapshotSinceOpen,
             networks = network?.let { mapOf(it.id to it) }.orEmpty(),
             buffers = if (present) mapOf(key.id to opened.copy(topic = topic, joined = joined)) else emptyMap(),
@@ -127,6 +154,7 @@ internal class BufferInfoSource private constructor(
             channelModes = modes?.let { mapOf(key.id to it) }.orEmpty(),
             ignores = ignores,
             dccChats = if (networkId != null && dccChats != null) mapOf(networkId to dccChats) else emptyMap(),
+            notifyAlways = if (notifiesAlways) setOf(key.id) else emptySet(),
         )
         return BufferInfoInputs.of(narrowed, opened)
     }
@@ -138,6 +166,8 @@ internal class BufferInfoSource private constructor(
             return BufferInfoSource(
                 key = key,
                 connection = state.connection,
+                reachable = state.reachable,
+                socketOpening = state.socketOpening,
                 snapshotSinceOpen = state.snapshotSinceOpen,
                 present = live != null,
                 topic = live?.topic,
@@ -147,6 +177,7 @@ internal class BufferInfoSource private constructor(
                 modes = state.channelModes[key.id],
                 ignores = state.ignores,
                 dccChats = networkId?.let { state.dccChats[it] },
+                notifiesAlways = networkId != null && state.notifiesAlways(networkId = networkId, target = key.target),
             )
         }
 
@@ -154,13 +185,16 @@ internal class BufferInfoSource private constructor(
             old.members === new.members &&
                 old.ignores === new.ignores &&
                 old.connection == new.connection &&
+                old.reachable == new.reachable &&
+                old.socketOpening == new.socketOpening &&
                 old.snapshotSinceOpen == new.snapshotSinceOpen &&
                 old.present == new.present &&
                 old.topic == new.topic &&
                 old.joined == new.joined &&
                 old.network == new.network &&
                 old.modes == new.modes &&
-                old.dccChats == new.dccChats
+                old.dccChats == new.dccChats &&
+                old.notifiesAlways == new.notifiesAlways
     }
 }
 
@@ -188,8 +222,8 @@ sealed interface InfoRow {
      */
     data class Search(val scope: String) : InfoRow
 
-    /** A placeholder that says it is one — see [BufferInfoModel.notifications]. */
-    data class NotifyPlaceholder(val title: String) : InfoRow
+    /** One rung of the notification ladder, and whether the buffer is on it — see [BufferInfoModel.notifications]. */
+    data class Notify(val rung: NotifyRung, val selected: Boolean) : InfoRow
 
     /** The network's connection as a status line, with the networks screen's light. */
     data class Connection(val label: String, val light: StatusLight) : InfoRow
@@ -227,9 +261,10 @@ data class InfoSection(
 /**
  * What a buffer *is*, rather than what's been said in it — lurker-ios's `BufferInfoViewController`,
  * pure. A channel gets its topic, its settings and lists, a count of who's here, and how it notifies;
- * a DM gets the person and how it notifies; a server log gets the connection behind it and the verbs
- * that change it (lurker-ios#152); a DCC chat gets its session and the verb that ends or restarts it,
- * then the person (lurker#270); the system buffer gets a sentence saying there's nothing here.
+ * a DM gets the person and how it notifies; a server log gets the connection behind it, the verbs
+ * that change it (lurker-ios#152), and how its whole network notifies; a DCC chat gets its session and
+ * the verb that ends or restarts it, then the person and how it notifies (lurker#270); the system
+ * buffer gets a sentence saying there's nothing here.
  *
  * The info button means the same thing on every buffer: "about this one". That's why a DM lands here
  * and not straight in a whois — whois is about a *person*, and a person is one of the things a DM is
@@ -252,12 +287,15 @@ object BufferInfoModel {
      * @param actionError the latest refusal of a connection or DCC verb, pinned under its section.
      * @param dateTime medium date, short time — the topic setter's line.
      * @param longDate a long date alone — the channel's creation.
+     * @param notifyError the refusal of a notification pick, pinned under that section. Its own slot
+     *   because a server log has both sections, and a refusal belongs under the one that was tapped.
      */
     fun sections(
         inputs: BufferInfoInputs,
         actionError: String?,
         dateTime: (Instant) -> String,
         longDate: (Instant) -> String,
+        notifyError: String? = null,
     ): List<InfoSection> =
         when (inputs.kind) {
             BufferKind.Channel -> {
@@ -289,10 +327,9 @@ object BufferInfoModel {
                         rows = listOf(InfoRow.ChannelSettings(held?.modes?.takeIf { it.isNotEmpty() }?.let { "+$it" })) + lists,
                     ),
                     InfoSection(rows = listOf(InfoRow.Members(inputs.memberCount)) + searchRows(inputs)),
-                    notifications,
-                )
+                ) + notifications(inputs, notifyError)
             }
-            BufferKind.Dm -> listOf(InfoSection(rows = listOf(InfoRow.Whois) + searchRows(inputs)), notifications)
+            BufferKind.Dm -> listOf(InfoSection(rows = listOf(InfoRow.Whois) + searchRows(inputs))) + notifications(inputs, notifyError)
             BufferKind.Dcc -> {
                 // The session first: whether a line typed here will arrive is the thing about this
                 // buffer most worth knowing, and its verbs live nowhere else a thumb can reach.
@@ -317,13 +354,17 @@ object BufferInfoModel {
                     ),
                     // The Whois row is the peer's — the profile peels the `=` off.
                     InfoSection(rows = listOf(InfoRow.Whois) + searchRows(inputs)),
-                    notifications,
-                )
+                ) + notifications(inputs, notifyError)
             }
             // A server log has no topic or members; the one thing it is *about* is the connection
             // behind it, so this is where that connection is managed (lurker-ios#152) — the networks
             // screen's verbs, minus Delete, which belongs with the roster.
-            BufferKind.Server -> listOfNotNull(connectionSection(inputs.connection, actionError))
+            //
+            // Its ladder is the network's: a rule covering every buffer on it. Offered only beside the
+            // connection, so a network the store can't describe yet still gets the empty sentence
+            // rather than a lone list of rungs.
+            BufferKind.Server ->
+                connectionSection(inputs.connection, actionError)?.let { listOf(it) + notifications(inputs, notifyError) }.orEmpty()
             // Nothing here is a setting: the app's own buffer has no topic, no members, no connection
             // of its own, and nothing to notify about.
             BufferKind.System -> emptyList()
@@ -354,15 +395,35 @@ object BufferInfoModel {
     }
 
     /**
-     * Placeholders, and they say so. The per-channel flag they'll drive (`notify_always`) exists
-     * server-side and rides the snapshot, but the client doesn't parse it yet — so there's no honest
-     * state to render, and a switch that silently does nothing is worse than one that admits it.
+     * The buffer's notification ladder (lurker#359, Mobile lurker#1087): its rungs in order, the
+     * current one checked. One list, not a set of switches — which rungs a buffer offers and which it
+     * is on are `NotifyLadder`'s, so this page and the buffer list's menu can't disagree. Nothing is
+     * checked optimistically: the mark moves when the server's echo folds into state.
+     *
+     * The footer says what the checked rung does, since "Nothing" and "Muted" differ only in the
+     * unread badge and the labels alone don't say so. A refusal takes its place.
      */
-    val notifications = InfoSection(
-        header = "Notifications",
-        footer = "Not wired up yet — these don't change anything.",
-        rows = listOf(InfoRow.NotifyPlaceholder("Notify me about every message")),
-    )
+    fun notifications(inputs: BufferInfoInputs, notifyError: String?): List<InfoSection> {
+        val scope = inputs.notifyScope ?: return emptyList()
+        val current = inputs.notifyRung ?: return emptyList()
+        return listOf(
+            InfoSection(
+                header = "Notifications",
+                footer = notifyError ?: explanation(current),
+                rows = scope.rungs.map { InfoRow.Notify(it, selected = it == current) },
+                holdsRefusals = true,
+                announcesFooter = notifyError != null,
+            ),
+        )
+    }
+
+    fun explanation(rung: NotifyRung): String =
+        when (rung) {
+            NotifyRung.All -> "Every message notifies you."
+            NotifyRung.Highlights -> "Only highlights notify you."
+            NotifyRung.Nothing -> "No notifications. Unread still shows."
+            NotifyRung.Muted -> "No notifications, and unread is hidden."
+        }
 
     /**
      * Whether a refusal on screen is still about the connection (or DCC session) it was sent against.

@@ -12,12 +12,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -46,6 +45,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.amiantos.lurker.platform.MomentText
+import net.amiantos.lurker.ui.list.BufferListModel
 import net.amiantos.lurker.ui.networks.DialogPage
 import net.amiantos.lurker.ui.networks.FormInset
 import net.amiantos.lurker.ui.networks.FormRefusalFooter
@@ -64,8 +64,11 @@ import net.amiantos.lurkerkit.model.ChannelModeState
 import net.amiantos.lurkerkit.model.ConnectionState
 import net.amiantos.lurkerkit.model.NetworkAction
 import net.amiantos.lurkerkit.model.NetworkRow
+import net.amiantos.lurkerkit.model.NotifyLadder
+import net.amiantos.lurkerkit.model.NotifyRung
 import net.amiantos.lurkerkit.model.StatusLight
 import net.amiantos.lurkerkit.model.channelAccess
+import net.amiantos.lurkerkit.model.notifyRung
 import net.amiantos.lurkerkit.session.ChatViewModel
 import net.amiantos.lurkerkit.store.ChatState
 import java.time.Instant
@@ -73,7 +76,8 @@ import java.time.Instant
 /**
  * The buffer info page's state — what `BufferInfoViewController` keeps beside its table: the live
  * inputs, and the most recent refusal of a connection or DCC verb, with the bookkeeping that keeps a
- * slow, stale answer from landing under rows it no longer describes.
+ * slow, stale answer from landing under rows it no longer describes. And the refusal of a notification
+ * pick, which has its own.
  */
 class BufferInfoState(private val model: ChatViewModel, val buffer: Buffer, private val scope: CoroutineScope) {
     private val inputsFlow = MutableStateFlow(BufferInfoInputs.of(model.state, buffer))
@@ -97,6 +101,22 @@ class BufferInfoState(private val model: ChatViewModel, val buffer: Buffer, priv
     /** The connection and session as last drawn — see `BufferInfoModel.Subject`. */
     private var shown = BufferInfoModel.Subject.of(inputsFlow.value)
 
+    /**
+     * Set when picking a rung went nowhere, and shown under the Notifications section the way
+     * [actionError] is shown under Connection. Its own slot because a server log has both sections,
+     * and a refusal belongs under the one that was tapped.
+     */
+    var notifyError by mutableStateOf<String?>(null)
+        private set
+
+    private val notifyScope: NotifyLadder.Scope? = NotifyLadder.Scope.of(buffer.key)
+
+    /** The rung as last seen, so the echo that moves it retires a refusal from before. */
+    private var shownRung: NotifyRung? = inputsFlow.value.notifyRung
+
+    /** Whether the socket could carry a write as last seen, for the same reason. */
+    private var shownWritable = inputsFlow.value.socketWritable
+
     init {
         scope.launch {
             // Narrowed and compared first — cheaply, the member list and the ignore set by identity — and
@@ -116,7 +136,9 @@ class BufferInfoState(private val model: ChatViewModel, val buffer: Buffer, priv
                         // the footer would contradict the rows above it.
                         shown = subject
                         actionError = null
+                        notifyError = null
                     }
+                    retireNotifyError()
                     inputsFlow.value = next
                 }
         }
@@ -155,6 +177,47 @@ class BufferInfoState(private val model: ChatViewModel, val buffer: Buffer, priv
         }
     }
 
+    /**
+     * Ask for a rung. Nothing moves here: the mark follows state, and state follows the server's echo —
+     * so a tap that went nowhere leaves the list as it was and says why underneath, and one that went
+     * out is answered by the row changing. ⚠ WRITES, for every device.
+     *
+     * The view model plans against the state at this moment, not the one this list was drawn from, so
+     * a change that landed from another device in between is reconciled rather than fought (web
+     * lurker#1136).
+     */
+    fun pick(rung: NotifyRung) {
+        val scope = notifyScope ?: return
+        // Catch up first. State reaches this page a hop late, and a rung that has moved retires a
+        // refusal — so a move still on its way here would otherwise be taken for the answer to this
+        // tap and clear the refusal set just below.
+        retireNotifyError()
+        notifyError = if (model.setNotifyRung(rung, scope)) null else BufferListModel.NOT_CONNECTED
+    }
+
+    /**
+     * Drop a refusal the state has since answered. A rung that moved is the server answering — this
+     * tap's echo, or another device's — and "not connected" under a list that just changed would
+     * contradict it. And "not connected" is about Lurker's own socket, which can come back with the
+     * network's connection and the rung exactly as they were.
+     *
+     * Read from the view model's state, not from the inputs being delivered: those are a hop behind,
+     * and [pick] compares against the same thing.
+     */
+    private fun retireNotifyError() {
+        val state = model.state
+        val rung = notifyScope?.let { state.notifyRung(it) }
+        if (rung != shownRung) {
+            shownRung = rung
+            notifyError = null
+        }
+        val writable = state.socketWritable
+        if (writable != shownWritable) {
+            shownWritable = writable
+            if (writable) notifyError = null
+        }
+    }
+
     private fun attempt(verb: suspend () -> String?) {
         // Whatever the last attempt said is now stale. The counter keeps a SLOW earlier attempt from
         // answering for this one: tap Disconnect, watch the row flip to Connect, tap that, and the first
@@ -183,6 +246,8 @@ internal class BufferInfoActions(
     val onModeList: (letter: String, name: String) -> Unit,
     val onNetworkVerb: (NetworkAction) -> Unit,
     val onDccVerb: (DccChatAction) -> Unit,
+    /** Put the buffer on a rung of its notification ladder (lurker#1087). */
+    val onNotifyRung: (NotifyRung) -> Unit = {},
     /** Search this buffer: the dialog closes and search opens, seeded with [InfoRow.Search.scope] (U7). */
     val onSearch: (scope: String) -> Unit = {},
 )
@@ -203,7 +268,7 @@ internal fun BufferInfoPage(state: BufferInfoState, exit: PageExit, onExit: () -
     val moments = remember(context) { MomentText(context) }
     BufferInfoContent(
         title = BufferInfoModel.title(state.buffer, inputs),
-        sections = BufferInfoModel.sections(inputs, state.actionError, moments::dateTime, moments::longDate),
+        sections = BufferInfoModel.sections(inputs, state.actionError, moments::dateTime, moments::longDate, state.notifyError),
         exit = exit,
         onExit = onExit,
         actions = actions,
@@ -273,12 +338,17 @@ private fun InfoRowView(row: InfoRow, actions: BufferInfoActions, reveals: Prose
         InfoRow.Whois -> NavRow(LurkerIcons.AccountCircle, "Whois", null, actions.onWhois)
         // Named for the buffer rather than "Search in Buffer": the title already says which one.
         is InfoRow.Search -> NavRow(LurkerIcons.Search, "Search This Conversation", null) { actions.onSearch(row.scope) }
-        // Announced as the switch it draws — off, and disabled — since the row carries the semantics.
-        is InfoRow.NotifyPlaceholder -> ListItem(
-            modifier = Modifier.toggleable(value = false, enabled = false, role = Role.Switch, onValueChange = {}),
+        // One of a list, and the row says which: a check is a picture, `selectable` is what TalkBack
+        // reads as "selected".
+        is InfoRow.Notify -> ListItem(
+            modifier = Modifier.selectable(selected = row.selected, role = Role.RadioButton) { actions.onNotifyRung(row.rung) },
             colors = clear,
-            headlineContent = { Text(row.title, color = LurkerTheme.colors.fgFaint) },
-            trailingContent = { Switch(checked = false, onCheckedChange = null, enabled = false) },
+            headlineContent = { Text(row.rung.label) },
+            trailingContent = if (row.selected) {
+                { Icon(LurkerIcons.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary) }
+            } else {
+                null
+            },
         )
         // The networks screen's row in miniature, and the light the title behind this dialog shows.
         is InfoRow.Connection -> StatusRow(row.label, row.light)
@@ -338,8 +408,14 @@ private fun VerbRow(title: String, onClick: () -> Unit) {
 
 // MARK: - Previews
 
-private fun previewInputs(kind: BufferKind, topic: String? = null, connection: NetworkRow? = null, dccLive: Boolean? = null) =
-    BufferInfoInputs(
+private fun previewInputs(kind: BufferKind, topic: String? = null, connection: NetworkRow? = null, dccLive: Boolean? = null): BufferInfoInputs {
+    val notifyScope = when (kind) {
+        BufferKind.Channel -> NotifyLadder.Scope.Channel(networkId = 1, target = "#lurker")
+        BufferKind.Dm, BufferKind.Dcc -> NotifyLadder.Scope.Dm(networkId = 1, target = "bob")
+        BufferKind.Server -> NotifyLadder.Scope.Network(networkId = 1)
+        BufferKind.System -> null
+    }
+    return BufferInfoInputs(
         kind = kind,
         topic = topic,
         networkName = "Libera",
@@ -348,7 +424,10 @@ private fun previewInputs(kind: BufferKind, topic: String? = null, connection: N
         access = ChatState().channelAccess(Buffer(networkId = 1, target = "#lurker", kind = BufferKind.Channel).key),
         connection = connection,
         dccLive = dccLive,
+        notifyScope = notifyScope,
+        notifyRung = notifyScope?.base,
     )
+}
 
 private val previewActions = BufferInfoActions({}, {}, {}, { _, _ -> }, {}, {})
 
