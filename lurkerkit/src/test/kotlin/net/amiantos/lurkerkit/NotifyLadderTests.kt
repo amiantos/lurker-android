@@ -551,6 +551,22 @@ class NotifyLadderTests {
         assertTrue(store.state.notifiesAlways(networkId = 1, target = "#other"))
     }
 
+    /** A closed channel keeps its flag with no row, and `rekeyBuffer` only moves what has one. */
+    @Test
+    fun testARenameCarriesTheFlagOfAChannelWithNoRow() {
+        val store = LurkerStore()
+        store.apply(snapshot(listOf("#chan")))
+        store.apply(ServerFrame.BufferClosed(networkId = 1, target = "#chan"))
+        store.apply(
+            ServerFrame.BufferRenamed(
+                networkId = 1, from = "#chan", to = "#renamed", bufferId = null, merged = false,
+                mergedFromBufferId = null,
+            ),
+        )
+        assertFalse(store.state.notifiesAlways(networkId = 1, target = "#chan"))
+        assertTrue(store.state.notifiesAlways(networkId = 1, target = "#renamed"))
+    }
+
     @Test
     fun testARenamedBufferCarriesItsFlag() {
         val store = LurkerStore()
@@ -743,6 +759,45 @@ class NotifyLadderTests {
         assertTrue(model.setNotifyRung(NotifyRung.All, scope, now = late))
         assertEquals(
             NotifyLadder.Step.SetNotifyAlways(networkId = 1, target = "#chan", notifyAlways = true), sent().lastOrNull(),
+        )
+    }
+
+    /**
+     * A kept pick has already been answered "true", so one that could not go out is refused
+     * at the tap instead.
+     */
+    @Test
+    fun testAPickBehindAnotherIsRefusedWhenTheSocketHasGone() {
+        val model = viewModel()
+        val sent = recording(model)
+        val scope = NotifyLadder.Scope.Channel(networkId = 1, target = "#chan")
+        val start = Instant.now()
+        assertTrue(model.setNotifyRung(NotifyRung.Muted, scope, now = start))
+        model.setReachable(false)
+        assertFalse(model.setNotifyRung(NotifyRung.All, scope, now = start))
+        assertEquals(1, sent().size)
+    }
+
+    /**
+     * Sent on reconnect, a kept pick would be planned from state the snapshot is about to
+     * replace, and could add a second rule beside one the dead socket did deliver.
+     */
+    @Test
+    fun testAClosedSocketDropsTheKeptPick() {
+        val model = viewModel()
+        val sent = recording(model)
+        val scope = NotifyLadder.Scope.Channel(networkId = 1, target = "#chan")
+        assertTrue(model.setNotifyRung(NotifyRung.Muted, scope))
+        assertTrue(model.setNotifyRung(NotifyRung.Nothing, scope))
+        model.handle(ServerFrame.SocketClosed(reason = null, code = null))
+        model.handle(ServerFrame.SocketOpen)
+        model.handle(snapshot(emptyList(), channels = listOf("#chan")))
+        assertEquals(1, sent().size, "the kept pick was not replayed")
+        // And the ladder is free again at once, not after the window.
+        assertTrue(model.setNotifyRung(NotifyRung.All, scope))
+        assertEquals(
+            NotifyLadder.Step.SetNotifyAlways(networkId = 1, target = "#chan", notifyAlways = true),
+            sent().last(),
         )
     }
 

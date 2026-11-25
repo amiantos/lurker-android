@@ -401,8 +401,8 @@ data class ChatState(
      *
      * Only the channels that have it: absent is off, which mirrors the server deleting the row
      * when the flag is cleared. Keyed by buffer key so a target is compared the way every other
-     * per-buffer map here compares it, and so it rides the same lifecycle they do — dropped
-     * with its buffer, moved by a rename, gone with its network.
+     * per-buffer map here compares it. It is moved by a rename and gone with its network, but
+     * a closed buffer KEEPS it: the server does, so a rejoined channel still reads right.
      *
      * Server-authoritative: picking a rung *asks*, and this changes when the echo lands.
      * **Read through `notifiesAlways(networkId, target)`.**
@@ -2138,6 +2138,11 @@ internal class LurkerStore(private val clock: () -> Instant = Instant::now) {
             }
             if (next.drafts[toKey] == null && absorbedDraft != null) {
                 next = next.copy(drafts = next.drafts + (toKey to absorbedDraft))
+            }
+            // The notify-always flag is held without a row too (a closed channel keeps it), and
+            // follows the rename the same way. A no-op when `rekeyBuffer` already moved it.
+            if (toKey != fromKey && next.notifyAlways.contains(fromKey)) {
+                next = next.copy(notifyAlways = next.notifyAlways - fromKey + toKey)
             }
             // The favorites list carries target strings too, and the server only
             // republishes favorites-changed after MERGES — a plain nick-follow
