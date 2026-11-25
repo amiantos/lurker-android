@@ -3,6 +3,7 @@
 
 package net.amiantos.lurker.ui.media
 
+import android.animation.ValueAnimator
 import android.graphics.drawable.Animatable
 import android.graphics.drawable.Drawable
 import android.os.Handler
@@ -18,6 +19,7 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -75,6 +77,33 @@ internal fun rememberPreviewStill(
             }
         }
     }
+}
+
+/**
+ * The animation behind [still], playing, for a box measured at [box] pixels — or null, and the
+ * still is what's drawn: until it has decoded, for a still that doesn't move, and always while the
+ * system's animations are off (Settings › Accessibility › Remove animations sets the animator
+ * duration scale to 0, which [ValueAnimator.areAnimatorsEnabled] reports).
+ *
+ * Avatars only — the metadata avatar in the column and on the profile, as the web's `<img>` plays
+ * them. A preview stays a still inline (`PreviewImageLoader.decodeStill`). Started when it lands,
+ * stopped when the tile leaves composition (`DrawablePainter`), so only rows on screen play.
+ */
+@Composable
+internal fun rememberAnimatedPicture(
+    still: PreviewImageLoader.Still?,
+    path: String?,
+    media: MediaSource,
+    box: IntSize,
+    mode: DecodeSize.Mode,
+): Painter? {
+    val bucket = DecodeSize.bucket(box.width, box.height)
+    val wanted = path.takeIf { still?.animated == true && bucket != null && ValueAnimator.areAnimatorsEnabled() }
+    val drawable by produceState<Drawable?>(null, wanted, media, mode, bucket) {
+        value = null
+        if (wanted != null && bucket != null) value = PreviewImageLoader.loadAnimation(wanted, media, mode, bucket)
+    }
+    return remember(drawable) { drawable?.let(::DrawablePainter) }
 }
 
 /** The exact decode for this box, or the latest for any box until there is one. */
