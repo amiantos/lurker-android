@@ -171,6 +171,20 @@ internal data class LayoutFacts(
          * screen and iOS's thresholds are distances, not counts.
          */
         /**
+         * How far the newest row is from the bottom edge, in px — iOS's distance from the maximum
+         * content offset. Measured from the LOWEST laid-out item, which in a reverse layout with a
+         * start padding (the composer's reservation) can be a row the list composed UNDER the
+         * composer: on screen, hidden, and not the list's "first visible item", which skips items
+         * that lie wholly in the padding (lurker#1387). Rows below the lowest laid-out one count at
+         * the laid-out average.
+         */
+        fun fromBottom(items: List<VisibleItem>): Int {
+            val lowest = items.minBy { it.index }
+            val average = maxOf(1, items.sumOf { it.size } / items.size)
+            return maxOf(0, -lowest.offset) + lowest.index * average
+        }
+
+        /**
          * Whether a measured layout is of [built] — every laid-out item carries the key [built]
          * puts at its index. False for an empty layout, and for one the list measured from an
          * earlier build: a new build is published a frame before the pass that lays it out, and
@@ -196,10 +210,9 @@ internal data class LayoutFacts(
         ): LayoutFacts? {
             if (!describes(items, built)) return null
             val total = built.rows.size
-            val lowest = items.minBy { it.index }
             val highest = items.maxBy { it.index }
             val average = maxOf(1, items.sumOf { it.size } / items.size)
-            val fromBottom = maxOf(0, -lowest.offset) + lowest.index * average
+            val fromBottom = fromBottom(items)
             val fromTop = maxOf(0, highest.offset + highest.size - contentEnd) + (total - 1 - highest.index) * average
 
             var dividerVisible = false
@@ -1181,17 +1194,34 @@ internal class ConversationScroll(private val kind: BufferKind, memory: Memory =
          * `wasNearBottom` — read from the layout only if it's a layout OF [drawn] (see
          * [LayoutFacts.describes]); otherwise the last answer a measured layout gave, [lastKnown].
          * A layout of an earlier build would answer for rows the reader isn't looking at.
+         *
+         * ⚠ By DISTANCE ([LayoutFacts.fromBottom]), the same answer [LayoutFacts.nearBottom] gives the
+         * pills — never by the list's first visible index (lurker#1387). Rows the list lays out under
+         * the composer aren't its "first visible item", so once one new line landed there (a follow
+         * whose one-shot `requestScrollToItem` a measure of the previous rows spent), the index read
+         * 1 at what looks like the bottom: every later line was "not near the bottom" and didn't
+         * follow, while the pills, reading distance, said it was and showed nothing. The buffer
+         * stopped following for good, with the newest lines hidden under the composer.
+         *
+         * ⚠ And never from a layout that is still carrying out a follow ([followPending]: one asked
+         * for and not yet seen to land, nor cancelled by the reader's drag). That layout shows the
+         * list part-way through our own move, not where the reader is: the reader was at the bottom
+         * when the follow was asked for. A device trace caught it: a 434px line's follow was spent by
+         * a measure of the previous rows, and 60ms later a rebuild of the same rows read the line
+         * sitting past the slop as "reading history". It didn't follow, which cancelled the follow
+         * still waiting to be retried, held the list where it was, and every line after counted as
+         * history.
          */
         fun nearBottomBefore(
             visible: List<VisibleItem>,
             drawn: BuiltRows,
-            firstVisibleIndex: Int,
-            firstVisibleOffset: Int,
             slopPx: Int,
             lastKnown: Boolean,
+            followPending: Boolean = false,
         ): Boolean {
+            if (followPending) return true
             if (!LayoutFacts.describes(visible, drawn)) return lastKnown
-            return ConversationModel.followsTail(firstVisibleIndex, firstVisibleOffset, slopPx)
+            return LayoutFacts.fromBottom(visible) < slopPx
         }
 
         /**

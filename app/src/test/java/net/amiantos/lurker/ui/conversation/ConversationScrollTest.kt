@@ -1320,10 +1320,63 @@ class ConversationScrollTest {
         val older = build(scroll, state(messages = msgs(1L..40L)))
         val drawn = build(scroll, state(messages = msgs(1L..50L)))
         // Measured: read off the layout.
-        assertTrue(ConversationScroll.nearBottomBefore(laidOut(drawn, 20, 200, 0), drawn, 0, 0, 80, lastKnown = false))
-        assertFalse(ConversationScroll.nearBottomBefore(laidOut(drawn, 20, 200, 400), drawn, 20, 0, 80, lastKnown = true))
+        assertTrue(ConversationScroll.nearBottomBefore(laidOut(drawn, 20, 200, 0), drawn, 80, lastKnown = false))
+        assertFalse(ConversationScroll.nearBottomBefore(laidOut(drawn, 20, 200, 400), drawn, 80, lastKnown = true))
         // A layout of other rows: the last answer stands.
-        assertFalse(ConversationScroll.nearBottomBefore(laidOut(older, 20, 200, 0), drawn, 0, 0, 80, lastKnown = false))
-        assertTrue(ConversationScroll.nearBottomBefore(emptyList(), drawn, 0, 0, 80, lastKnown = true))
+        assertFalse(ConversationScroll.nearBottomBefore(laidOut(older, 20, 200, 0), drawn, 80, lastKnown = false))
+        assertTrue(ConversationScroll.nearBottomBefore(emptyList(), drawn, 80, lastKnown = true))
+    }
+
+    /**
+     * The layout lurker#1387 gets stuck in: a follow was missed, so the list kept the previous newest
+     * row (item 1) at the bottom edge by key, and composed the new line (item 0) into the start
+     * padding: under the composer, laid out, hidden. The list's first visible index is then 1, which
+     * the old index-based test read as "not at the bottom" for every line after.
+     */
+    private fun underTheComposer(built: BuiltRows, heights: Int, viewport: Int): List<VisibleItem> =
+        listOf(VisibleItem(built.keys[built.itemIndex(0)], 0, -heights, heights)) +
+            laidOut(built, heights, viewport, scrolled = heights).filter { it.index > 0 }
+
+    @Test
+    fun `a new line hidden under the composer still reads as the bottom, so the next one follows (lurker#1387)`() {
+        val scroll = machine()
+        build(scroll, state(messages = msgs(1L..49L))).also { scroll.onRows(it, wasNearBottom = true) }
+        val drawn = build(scroll, state(messages = msgs(1L..50L)))
+        scroll.onRows(drawn, wasNearBottom = true)
+        val stuck = underTheComposer(drawn, heights = 20, viewport = 200)
+        assertEquals(1, stuck.filter { it.offset >= 0 }.minOf { it.index })
+        // The follow decision and the pills read the same layout the same way.
+        assertTrue(LayoutFacts.of(stuck, drawn, contentEnd = 200, nearBottomPx = 80, pagingPx = 300)!!.nearBottom)
+        val wasNearBottom = ConversationScroll.nearBottomBefore(stuck, drawn, 80, lastKnown = false)
+        assertTrue(wasNearBottom)
+        val next = build(scroll, state(messages = msgs(1L..51L)))
+        assertTrue(scroll.onRows(next, wasNearBottom).follow)
+    }
+
+    @Test
+    fun `a rebuild before a missed follow is retried still follows (lurker#1387)`() {
+        val scroll = machine()
+        build(scroll, state(messages = msgs(1L..49L))).also { scroll.onRows(it, wasNearBottom = true) }
+        val drawn = build(scroll, state(messages = msgs(1L..50L)))
+        assertTrue(scroll.onRows(drawn, wasNearBottom = true).follow)
+        // The follow was spent: the new 120px line sits wholly below the edge, past the 80px slop.
+        val missed = underTheComposer(drawn, heights = 120, viewport = 600)
+        // Without the pending follow, that reads as history (the device trace's 08:53:21 rebuild)...
+        assertFalse(ConversationScroll.nearBottomBefore(missed, drawn, 80, lastKnown = true))
+        // ...but the reader never left: the move is ours, part-way done, and the rebuild follows.
+        val wasNearBottom = ConversationScroll.nearBottomBefore(missed, drawn, 80, lastKnown = true, followPending = true)
+        assertTrue(wasNearBottom)
+        val rebuilt = build(scroll, state(messages = msgs(1L..50L)))
+        assertTrue(scroll.onRows(rebuilt, wasNearBottom).follow)
+    }
+
+    @Test
+    fun `rows hidden under the composer past the slop are history, not the bottom`() {
+        val scroll = machine()
+        val drawn = build(scroll, state(messages = msgs(1L..50L)))
+        // Five 20px rows below the edge: 100px from the bottom, past the 80px slop.
+        val items = (0 until 5).map { VisibleItem(drawn.keys[drawn.itemIndex(it)], it, -(5 - it) * 20, 20) } +
+            laidOut(drawn, 20, 200, scrolled = 100).filter { it.index >= 5 }
+        assertFalse(ConversationScroll.nearBottomBefore(items, drawn, 80, lastKnown = true))
     }
 }
